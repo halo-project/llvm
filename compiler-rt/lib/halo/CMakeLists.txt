@@ -18,9 +18,6 @@ include_directories(.. ${Boost_INCLUDE_DIR} ${LLVM_INCLUDE_DIRS})
 add_definitions(${LLVM_DEFINITIONS})
 llvm_map_components_to_libnames(LLVM_LIBS all) # TODO: make this list shorter?
 
-# setup arguments to compiler_rt_runtime target creator
-set(HALO_CFLAGS ${SANITIZER_COMMON_CFLAGS})
-
 set(HALO_HEADERS
       Error.h
       MonitorState.h
@@ -37,8 +34,11 @@ set(HALO_SOURCES
 add_compiler_rt_runtime(clang_rt.halo
   SHARED
   ARCHS ${HALO_SUPPORTED_ARCH}
-  CFLAGS ${HALO_CFLAGS}
+  CFLAGS ${SANITIZER_COMMON_CFLAGS}
   SOURCES ${HALO_SOURCES}
   ADDITIONAL_HEADERS ${HALO_HEADERS}
   LINK_LIBS ${LLVM_LIBS} ${Boost_LIBRARIES} ${LIBPFM}
+  OBJECT_LIBS RTSanitizerCommon
+              RTSanitizerCommonLibc
+              RTSanitizerCommonSymbolizer
   PARENT_TARGET halo)

@@ -1,11 +1,12 @@
 
 #include "halo/Profiler.h"
 
-// #include "clang/9.0.0/"
-
 #include <iostream>
 
+#include "sanitizer_common/sanitizer_procmaps.h"
+
 namespace object = llvm::object;
+namespace san = __sanitizer;
 
 namespace halo {
 
@@ -13,15 +14,19 @@ void Profiler::recordData1(IDType ID, DataKind DK, uint64_t Val) {
   switch (DK) {
     case DataKind::InstrPtr: {
 
-      // TODO: use compiler-rt's symbolizer.
+      // NOTE: this interval should be cached.
+      uint64_t start, end;
+      san::GetCodeRangeForFile(BinaryPath.data(), &start, &end);
 
+      uint64_t PCRaw = Val; // for non-PIE
+      uint64_t PCOffset = Val - start; // for PIE
 
-      /*
-      // TODO: this needs to be relative to the start of code section, not a VMA.
-      uint64_t Offset = Val;
-
+      // when PIE is ON, then the PCOffset should be passed in.
+      // Otherwise when it is OFF, then you pass the raw PC in.
+      // We can cheat and detect this by seeing if the returned function
+      // name is <invalid>.
       auto ResOrErr = Symbolizer->symbolizeCode(
-          BinaryPath, {Offset, object::SectionedAddress::UndefSection});
+          BinaryPath, {PCOffset, object::SectionedAddress::UndefSection});
 
       if (!ResOrErr) {
         std::cerr << "Error in symbolization\n";
@@ -30,8 +35,12 @@ void Profiler::recordData1(IDType ID, DataKind DK, uint64_t Val) {
 
       auto DILineInfo = ResOrErr.get();
 
-      std::cerr << "IP = " << std::hex << Val << " --> " << DILineInfo.FunctionName << "\n";
-      */
+      std::cerr << "IP = " << std::hex << "0x" << Val
+                << ", region_start " << start
+                << ", region_end " << end
+                << ", offset 0x" << PCOffset
+                << ", function " << DILineInfo.FunctionName
+                << "\n";
 
     } break;
 
