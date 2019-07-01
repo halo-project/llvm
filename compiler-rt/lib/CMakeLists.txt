@@ -59,3 +59,7 @@ endif()
 if(COMPILER_RT_BUILD_LIBFUZZER)
   compiler_rt_build_runtime(fuzzer)
 endif()
+
+if(COMPILER_RT_BUILD_HALO AND COMPILER_RT_HAS_HALO)
+  compiler_rt_build_runtime(halo)
+endif()

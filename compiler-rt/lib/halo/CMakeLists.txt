@@ -1,16 +1,25 @@
+add_compiler_rt_component(halo)
 
 #####################
 # find dependencies
 
-# find_library(PFM_LIB pfm)  # http://perfmon2.sourceforge.net/
-#
-# find_package(Boost 1.65 COMPONENTS system REQUIRED)
-# include_directories(${Boost_INCLUDE_DIR})
+include(FindLibpfm)
+if(HAVE_LIBPFM)
+  set(LIBPFM pfm)
+else()
+  message(FATAL_ERROR "libpfm is required but not found for Halo!")
+endif()
 
-# include the rest of the compiler-rt header dirs
-include_directories(..)
+find_package(Boost 1.65 COMPONENTS system REQUIRED)
 
-add_compiler_rt_component(halo)
+include_directories(.. ${Boost_INCLUDE_DIR} ${LLVM_INCLUDE_DIRS})
+
+# include LLVM itself
+add_definitions(${LLVM_DEFINITIONS})
+llvm_map_components_to_libnames(LLVM_LIBS all) # TODO: make this list shorter?
+
+# setup arguments to compiler_rt_runtime target creator
+set(HALO_CFLAGS ${SANITIZER_COMMON_CFLAGS})
 
 set(HALO_HEADERS
       Error.h
@@ -28,30 +37,8 @@ set(HALO_SOURCES
 add_compiler_rt_runtime(clang_rt.halo
   SHARED
   ARCHS ${HALO_SUPPORTED_ARCH}
-  CFLAGS ${EXTRA_FLAGS}
+  CFLAGS ${HALO_CFLAGS}
   SOURCES ${HALO_SOURCES}
   ADDITIONAL_HEADERS ${HALO_HEADERS}
+  LINK_LIBS ${LLVM_LIBS} ${Boost_LIBRARIES} ${LIBPFM}
   PARENT_TARGET halo)
-
-# setup to use LLVM
-# include_directories(${LLVM_INCLUDE_DIRS})
-# add_definitions(${LLVM_DEFINITIONS})
-# llvm_map_components_to_libnames(LLVM_LIBS all)
-
-
-# #####################
-# # create the halomon shared library
-# add_library(halomon SHARED
-#             Monitor.cpp
-#             Error.cpp
-#             Profiler.cpp
-#             LinuxPerfEvents.cpp
-#            )
-#
-# #####################
-# # link in dependencies
-# target_link_libraries(halomon PRIVATE ${LLVM_LIBS} ${PFM_LIB} ${Boost_LIBRARIES})
-#
-# #####################
-# # install it
-# install(TARGETS halomon DESTINATION lib)

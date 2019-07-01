@@ -325,7 +325,7 @@ bool setup_perf_events(int &PerfFD, uint8_t* &EventBuf, size_t &EventBufSz, size
   // rely on that for good samples.
 
   std::string EventName = "instructions";
-  uint64_t EventPeriod = 67'867'967;
+  uint64_t EventPeriod = 67867967;
 
   PerfFD = get_perf_events_fd(EventName, EventPeriod,
                                   MyPID, -1, NumBufPages, PageSz);
