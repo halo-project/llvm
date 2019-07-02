@@ -1,13 +1,16 @@
 
 #include "halo/Profiler.h"
+#include "halo/Error.h"
 
 #include <iostream>
 #include <cassert>
 
+#include "llvm/Object/ObjectFile.h"
+
 #include "sanitizer_common/sanitizer_procmaps.h"
 
-namespace object = llvm::object;
 namespace san = __sanitizer;
+namespace object = llvm::object;
 
 namespace halo {
 
@@ -41,6 +44,32 @@ CodeRegion::CodeRegion(std::string BinPath, std::string& BinTriple)
   Symbolizer = new sym::LLVMSymbolizer(Opts);
 
   san::GetCodeRangeForFile(BinaryPath.data(), &VMAStart, &VMAEnd);
+
+  auto ResOrErr = object::ObjectFile::createObjectFile(BinaryPath);
+  if (!ResOrErr) halo::fatal_error("error opening object file!");
+
+  // Gather function ranges.
+  object::OwningBinary<object::ObjectFile> OB = std::move(ResOrErr.get());
+  object::ObjectFile *Obj = OB.getBinary();
+
+  for (const object::SymbolRef &Symb : Obj->symbols()) {
+    auto MaybeType = Symb.getType();
+
+    if (!MaybeType || MaybeType.get() != object::SymbolRef::Type::ST_Function)
+      continue;
+
+    auto MaybeName = Symb.getName();
+    auto MaybeAddr = Symb.getAddress();
+    uint64_t Size = Symb.getCommonSize();
+    if (MaybeName && MaybeAddr && Size > 0)
+      std::cerr << MaybeName.get().data()
+                << std::hex
+                << " at 0x" << MaybeAddr.get()
+                << " of size 0x" << Size
+                << "\n";
+
+  }
+
 }
 
 
