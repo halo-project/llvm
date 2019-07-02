@@ -21,9 +21,12 @@ void Profiler::recordData1(IDType ID, DataKind DK, uint64_t Val) {
   switch (DK) {
     case DataKind::InstrPtr: {
 
-      auto Info = CRI.lookup(Val);
-      if (Info)
-        std::cerr << Info.getValue().data() << "\n";
+      auto MaybeInfo = CRI.lookup(Val);
+      if (!MaybeInfo) halo::fatal_error("unknown IP encountered");
+
+      FunctionInfo *FI = MaybeInfo.getValue();
+      std::cerr << FI->name << ", hits = " << FI->hits << "\n";
+      FI->hits++;
 
     } break;
 
@@ -61,7 +64,7 @@ bool CodeRegionInfo::loadObjFile(std::string ObjPath) {
     // https://stackoverflow.com/questions/30426383/what-does-pie-do-exactly#30426603
     if (ELF->getEType() == ET_EXEC) {
       CodeDelta = 0; // This is a non-PIE executable.
-      halo::fatal_error("Please recompile with PIE."); // see FIXME in lookup.
+      halo::fatal_error("Please recompile with PIE enabled."); // see FIXME in lookup.
     }
   }
 
@@ -69,7 +72,7 @@ bool CodeRegionInfo::loadObjFile(std::string ObjPath) {
   //           << "VMAStart = 0x" << VMAStart << ", VMAEnd = 0x" << VMAEnd << "\n";
 
   auto VMARange =
-      icl::discrete_interval<uint64_t>::right_open(VMAStart, VMAEnd);
+      icl::right_open_interval<uint64_t>(VMAStart, VMAEnd);
   VMAResolver.insert(std::make_pair(VMARange, // -->
                                     std::make_pair(Index, CodeDelta)));
 
@@ -92,10 +95,10 @@ bool CodeRegionInfo::loadObjFile(std::string ObjPath) {
 
       uint64_t Start = MaybeAddr.get();
       uint64_t End = Start + Size;
-      auto FuncRange = icl::discrete_interval<uint64_t>::right_open(Start, End);
+      auto FuncRange = icl::right_open_interval<uint64_t>(Start, End);
 
       CodeMap.insert(std::make_pair(FuncRange, // -->
-                                    std::string(MaybeName.get().data())));
+                                    new FunctionInfo(MaybeName.get())));
     }
   }
 
@@ -103,10 +106,10 @@ bool CodeRegionInfo::loadObjFile(std::string ObjPath) {
 }
 
 
-llvm::Optional<FunctionInfo> CodeRegionInfo::lookup(uint64_t IP) {
+llvm::Optional<FunctionInfo*> CodeRegionInfo::lookup(uint64_t IP) {
   // FIXME: why does a non-PIE IP fail a lookup in the VMAResolver?
   // the range looks correct to me!?
-  // std::cerr << std::hex << "lookup 0x" << IP << "\n";
+  std::cerr << std::hex << "lookup 0x" << IP << "\n";
 
   auto VMMap = VMAResolver.find(IP);
   if (VMMap == VMAResolver.end())

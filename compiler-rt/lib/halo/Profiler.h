@@ -6,6 +6,7 @@
 #include "llvm/ADT/Optional.h"
 
 // https://www.boost.org/doc/libs/1_65_0/libs/icl/doc/html/boost_icl/interface/function_synopsis.html
+#define BOOST_ICL_USE_STATIC_BOUNDED_INTERVALS
 #include "boost/icl/interval_map.hpp"
 
 namespace sym = llvm::symbolize;
@@ -21,22 +22,33 @@ enum DataKind {
 };
 
 
-using FunctionInfo = std::string;
+struct FunctionInfo {
+  uint64_t hits;
+  std::string name;
+
+  FunctionInfo() : hits(0), name("<unknown>") {}
+  FunctionInfo(llvm::StringRef label) : hits(0), name(label.data()) {}
+
+  bool operator == (const FunctionInfo &FI) const {
+    return hits == FI.hits && name == FI.name;
+  }
+};
 
 
 class CodeRegionInfo {
 public:
-  // interval map FROM code address offset TO function information
-  using CodeMap = icl::interval_map<uint64_t, FunctionInfo>;
 
   CodeRegionInfo() {}
 
   ~CodeRegionInfo() {}
 
-  llvm::Optional<FunctionInfo> lookup(uint64_t IP);
+  llvm::Optional<FunctionInfo*> lookup(uint64_t IP);
   bool loadObjFile(std::string Path);
 
 private:
+  // interval map FROM code address offset TO function information
+  using CodeMap = icl::interval_map<uint64_t, FunctionInfo*>; // TODO: use unique_ptr
+
   // map FROM object filename TO code-section vector.
   std::map<std::string, uint64_t> ObjFiles;
 
