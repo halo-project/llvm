@@ -15,38 +15,50 @@ enum DataKind {
   TimeStamp
 };
 
+
+class CodeInfo {
+
+};
+
+
+class CodeRegion {
+private:
+  std::string BinaryPath;
+  uint64_t VMAStart, VMAEnd; // start and end addresses of the code region.
+  sym::LLVMSymbolizer *Symbolizer;
+
+public:
+  CodeRegion(std::string BinPath, std::string& BinTriple);
+
+  ~CodeRegion() {
+    delete Symbolizer;
+  }
+
+  void lookupInfo(uint64_t IP);
+
+};
+
+
 class Profiler {
 private:
   uint64_t FreeID = 0;
 
-  std::string BinaryPath;
   std::string ProcessTriple;
   std::string HostCPUName;
 
-  sym::LLVMSymbolizer *Symbolizer;
+  CodeRegion CR;
 
 public:
 
   IDType newSample() { return FreeID++; }
 
-  Profiler(std::string BinPath)
-             : BinaryPath(BinPath),
-               ProcessTriple(llvm::sys::getProcessTriple()),
-               HostCPUName(llvm::sys::getHostCPUName()) {
-
-    sym::LLVMSymbolizer::Options Opts;
-    Opts.UseSymbolTable = true;
-    Opts.Demangle = true;
-    Opts.RelativeAddresses = true;
-    Opts.DefaultArch = llvm::Triple(ProcessTriple).getArchName().str();
-
-    // there are no copy / assign / move constructors.
-    Symbolizer = new sym::LLVMSymbolizer(Opts);
+  Profiler(std::string SelfBinPath)
+             : ProcessTriple(llvm::sys::getProcessTriple()),
+               HostCPUName(llvm::sys::getHostCPUName()),
+               CR(SelfBinPath, ProcessTriple) {
   }
 
-  ~Profiler() {
-    delete Symbolizer;
-  }
+  ~Profiler() {}
 
   void recordData1(IDType, DataKind, uint64_t);
   void recordData2(IDType, DataKind, uint64_t, uint64_t);
