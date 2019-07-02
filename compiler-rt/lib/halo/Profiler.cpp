@@ -6,6 +6,9 @@
 #include <cassert>
 
 #include "llvm/Object/ObjectFile.h"
+#include "llvm/Object/ELFObjectFile.h"
+
+#include <elf.h>
 
 #include "sanitizer_common/sanitizer_procmaps.h"
 
@@ -18,9 +21,9 @@ void Profiler::recordData1(IDType ID, DataKind DK, uint64_t Val) {
   switch (DK) {
     case DataKind::InstrPtr: {
 
-      CR.lookupInfo(Val);
-
-
+      auto Info = CRI.lookup(Val);
+      if (Info)
+        std::cerr << Info.getValue().data() << "\n";
 
     } break;
 
@@ -32,26 +35,45 @@ void Profiler::recordData1(IDType ID, DataKind DK, uint64_t Val) {
 // }
 
 
-CodeRegion::CodeRegion(std::string BinPath, std::string& BinTriple)
-                                              : BinaryPath(BinPath) {
-  sym::LLVMSymbolizer::Options Opts;
-  Opts.UseSymbolTable = true;
-  Opts.Demangle = true;
-  Opts.RelativeAddresses = true;
-  Opts.DefaultArch = llvm::Triple(BinTriple).getArchName().str();
+bool CodeRegionInfo::loadObjFile(std::string ObjPath) {
 
-  // there are no copy / assign / move constructors.
-  Symbolizer = new sym::LLVMSymbolizer(Opts);
+  // create new function-offset map
+  Data.emplace_back();
+  auto &CodeMap = Data.back();
+  auto Index = Data.size() - 1;
+  ObjFiles[ObjPath] = Index;
 
-  san::GetCodeRangeForFile(BinaryPath.data(), &VMAStart, &VMAEnd);
+  ///////////
+  // initialize the code map
 
-  auto ResOrErr = object::ObjectFile::createObjectFile(BinaryPath);
+  auto ResOrErr = object::ObjectFile::createObjectFile(ObjPath);
   if (!ResOrErr) halo::fatal_error("error opening object file!");
 
-  // Gather function ranges.
   object::OwningBinary<object::ObjectFile> OB = std::move(ResOrErr.get());
   object::ObjectFile *Obj = OB.getBinary();
 
+  // find the range of this object file in the process.
+  uint64_t VMAStart, VMAEnd;
+  san::GetCodeRangeForFile(ObjPath.data(), &VMAStart, &VMAEnd);
+
+  uint64_t CodeDelta = VMAStart; // Assume PIE is enabled.
+  if (auto *ELF = llvm::dyn_cast<object::ELFObjectFileBase>(Obj)) {
+    // https://stackoverflow.com/questions/30426383/what-does-pie-do-exactly#30426603
+    if (ELF->getEType() == ET_EXEC) {
+      CodeDelta = 0; // This is a non-PIE executable.
+      halo::fatal_error("Please recompile with PIE."); // see FIXME in lookup.
+    }
+  }
+
+  // std::cerr << std::hex
+  //           << "VMAStart = 0x" << VMAStart << ", VMAEnd = 0x" << VMAEnd << "\n";
+
+  auto VMARange =
+      icl::discrete_interval<uint64_t>::right_open(VMAStart, VMAEnd);
+  VMAResolver.insert(std::make_pair(VMARange, // -->
+                                    std::make_pair(Index, CodeDelta)));
+
+  // Gather function information and place it into the code map.
   for (const object::SymbolRef &Symb : Obj->symbols()) {
     auto MaybeType = Symb.getType();
 
@@ -61,44 +83,46 @@ CodeRegion::CodeRegion(std::string BinPath, std::string& BinTriple)
     auto MaybeName = Symb.getName();
     auto MaybeAddr = Symb.getAddress();
     uint64_t Size = Symb.getCommonSize();
-    if (MaybeName && MaybeAddr && Size > 0)
-      std::cerr << MaybeName.get().data()
-                << std::hex
-                << " at 0x" << MaybeAddr.get()
-                << " of size 0x" << Size
-                << "\n";
+    if (MaybeName && MaybeAddr && Size > 0) {
+      // std::cerr << std::hex
+      //           << MaybeName.get().data()
+      //           << " at 0x" << MaybeAddr.get()
+      //           << " of size 0x" << Size
+      //           << "\n";
 
+      uint64_t Start = MaybeAddr.get();
+      uint64_t End = Start + Size;
+      auto FuncRange = icl::discrete_interval<uint64_t>::right_open(Start, End);
+
+      CodeMap.insert(std::make_pair(FuncRange, // -->
+                                    std::string(MaybeName.get().data())));
+    }
   }
 
+  return true;
 }
 
 
-void CodeRegion::lookupInfo(uint64_t IP) {
-  assert(VMAStart <= IP && IP <= VMAEnd && "Invalid IP.");
+llvm::Optional<FunctionInfo> CodeRegionInfo::lookup(uint64_t IP) {
+  // FIXME: why does a non-PIE IP fail a lookup in the VMAResolver?
+  // the range looks correct to me!?
+  // std::cerr << std::hex << "lookup 0x" << IP << "\n";
 
-  uint64_t PCRaw = IP; // for non-PIE
-  uint64_t PCOffset = IP - VMAStart; // for PIE
+  auto VMMap = VMAResolver.find(IP);
+  if (VMMap == VMAResolver.end())
+    return llvm::None;
 
-  // when PIE is ON, then the PCOffset should be passed in.
-  // Otherwise when it is OFF, then you pass the raw PC in.
-  // We can cheat and detect this by seeing if the returned function
-  // name is <invalid>.
-  auto ResOrErr = Symbolizer->symbolizeCode(
-      BinaryPath, {PCOffset, object::SectionedAddress::UndefSection});
+  size_t Idx = VMMap->second.first;
+  auto Delta = VMMap->second.second;
 
-  if (!ResOrErr) {
-    std::cerr << "Error in symbolization\n";
-    return;
-  }
+  auto &CodeMap = Data[Idx];
+  IP -= Delta;
 
-  auto DILineInfo = ResOrErr.get();
+  auto FI = CodeMap.find(IP);
+  if (FI == CodeMap.end())
+    return llvm::None;
 
-  std::cerr << "IP = " << std::hex << "0x" << IP
-            << ", region_start " << VMAStart
-            << ", region_end " << VMAEnd
-            << ", offset 0x" << PCOffset
-            << ", function " << DILineInfo.FunctionName
-            << "\n";
+  return FI->second;
 }
 
 }
