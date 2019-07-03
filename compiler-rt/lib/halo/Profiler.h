@@ -34,10 +34,6 @@ struct FunctionInfo {
 
   FunctionInfo() : hits(0), name("<unknown>") {}
   FunctionInfo(llvm::StringRef label) : hits(0), name(label.data()) {}
-
-  bool operator == (const FunctionInfo &FI) const {
-    return hits == FI.hits && name == FI.name;
-  }
 };
 
 
