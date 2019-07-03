@@ -42,7 +42,9 @@ bool CodeRegionInfo::loadObjFile(std::string ObjPath) {
 
   // create new function-offset map
   Data.emplace_back();
-  auto &CodeMap = Data.back();
+  auto &Info = Data.back();
+  auto &CodeMap = Info.first;
+  uint64_t &Delta = Info.second;
   auto Index = Data.size() - 1;
   ObjFiles[ObjPath] = Index;
 
@@ -59,22 +61,17 @@ bool CodeRegionInfo::loadObjFile(std::string ObjPath) {
   uint64_t VMAStart, VMAEnd;
   san::GetCodeRangeForFile(ObjPath.data(), &VMAStart, &VMAEnd);
 
-  uint64_t CodeDelta = VMAStart; // Assume PIE is enabled.
+  Delta = VMAStart; // Assume PIE is enabled.
   if (auto *ELF = llvm::dyn_cast<object::ELFObjectFileBase>(Obj)) {
     // https://stackoverflow.com/questions/30426383/what-does-pie-do-exactly#30426603
     if (ELF->getEType() == ET_EXEC) {
-      CodeDelta = 0; // This is a non-PIE executable.
-      halo::fatal_error("Please recompile with PIE enabled."); // see FIXME in lookup.
+      Delta = 0; // This is a non-PIE executable.
     }
   }
 
-  // std::cerr << std::hex
-  //           << "VMAStart = 0x" << VMAStart << ", VMAEnd = 0x" << VMAEnd << "\n";
-
   auto VMARange =
       icl::right_open_interval<uint64_t>(VMAStart, VMAEnd);
-  VMAResolver.insert(std::make_pair(VMARange, // -->
-                                    std::make_pair(Index, CodeDelta)));
+  VMAResolver.insert(std::make_pair(VMARange, Index));
 
   // Gather function information and place it into the code map.
   for (const object::SymbolRef &Symb : Obj->symbols()) {
@@ -97,8 +94,9 @@ bool CodeRegionInfo::loadObjFile(std::string ObjPath) {
       uint64_t End = Start + Size;
       auto FuncRange = icl::right_open_interval<uint64_t>(Start, End);
 
-      CodeMap.insert(std::make_pair(FuncRange, // -->
-                                    new FunctionInfo(MaybeName.get())));
+      auto FI = std::shared_ptr<FunctionInfo>(new FunctionInfo(MaybeName.get()));
+
+      CodeMap.insert(std::make_pair(FuncRange, std::move(FI)));
     }
   }
 
@@ -107,25 +105,27 @@ bool CodeRegionInfo::loadObjFile(std::string ObjPath) {
 
 
 llvm::Optional<FunctionInfo*> CodeRegionInfo::lookup(uint64_t IP) {
-  // FIXME: why does a non-PIE IP fail a lookup in the VMAResolver?
-  // the range looks correct to me!?
-  std::cerr << std::hex << "lookup 0x" << IP << "\n";
+  size_t Idx = 0;
 
-  auto VMMap = VMAResolver.find(IP);
-  if (VMMap == VMAResolver.end())
-    return llvm::None;
+  // Typically we only have one VMA range that we're tracking,
+  // so we avoid the resolver lookup in that case.
+  if (Data.size() != 1) {
+    auto VMMap = VMAResolver.find(IP);
+    if (VMMap == VMAResolver.end())
+      return llvm::None;
+    Idx = VMMap->second;
+  }
 
-  size_t Idx = VMMap->second.first;
-  auto Delta = VMMap->second.second;
-
-  auto &CodeMap = Data[Idx];
+  auto &Info = Data[Idx];
+  auto &CodeMap = Info.first;
+  uint64_t Delta = Info.second;
   IP -= Delta;
 
   auto FI = CodeMap.find(IP);
   if (FI == CodeMap.end())
     return llvm::None;
 
-  return FI->second;
+  return FI->second.get();
 }
 
 }

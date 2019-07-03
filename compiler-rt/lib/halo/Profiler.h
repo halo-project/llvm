@@ -1,11 +1,17 @@
 #pragma once
 
 #include <cinttypes>
+#include <memory>
 
 #include "llvm/DebugInfo/Symbolize/Symbolize.h"
 #include "llvm/ADT/Optional.h"
 
+// Function interface reference:
 // https://www.boost.org/doc/libs/1_65_0/libs/icl/doc/html/boost_icl/interface/function_synopsis.html
+
+// [NOTE identity element]
+// https://www.boost.org/doc/libs/1_65_0/libs/icl/doc/html/boost_icl/concepts/map_traits.html#boost_icl.concepts.map_traits.definedness_and_storage_of_identity_elements
+
 #define BOOST_ICL_USE_STATIC_BOUNDED_INTERVALS
 #include "boost/icl/interval_map.hpp"
 
@@ -47,17 +53,26 @@ public:
 
 private:
   // interval map FROM code address offset TO function information
-  using CodeMap = icl::interval_map<uint64_t, FunctionInfo*>; // TODO: use unique_ptr
+
+  // NOTE:
+  // 1. it seems impossible to use a unique_ptr here because
+  //    of the interface of interval_map's find().
+  // 2. partial_enricher ensures that the map doesn't stupidly ignore
+  //    inserts of the identity elem in co-domain, e.g., the pair {0,0}.
+  //    see [NOTE identity element] link.
+  using CodeMap = icl::interval_map<uint64_t, std::shared_ptr<FunctionInfo>,
+                                    icl::partial_enricher>;
 
   // map FROM object filename TO code-section vector.
   std::map<std::string, uint64_t> ObjFiles;
 
   // interval map FROM this process's virtual-memory code addresses
-  //              TO <an index of the code-section vector, VMA adjustment>.
-  icl::interval_map<uint64_t, std::pair<size_t, uint64_t>> VMAResolver;
+  //              TO <an index of the code-section vector>.
+  icl::interval_map<uint64_t, size_t, icl::partial_enricher> VMAResolver;
 
-  // the code-section vector.
-  std::vector<CodeMap> Data;
+  // the code-section vector, which is paired with the offset to apply
+  // to the raw IP to index into it.
+  std::vector<std::pair<CodeMap, uint64_t>> Data;
 
 };
 
