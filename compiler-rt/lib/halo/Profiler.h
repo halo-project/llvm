@@ -23,8 +23,10 @@ namespace halo {
 using IDType = uint64_t;
 
 enum DataKind {
-  InstrPtr,
-  TimeStamp
+  InstrPtr,  // the IP may have some skid.
+  InstrPtrExact, // indicates that the IP "points to the actual instruction that triggered the event."
+  TimeStamp,
+  CallChain
 };
 
 
@@ -96,6 +98,7 @@ public:
 
   void recordData1(IDType, DataKind, uint64_t);
   void recordData2(IDType, DataKind, uint64_t, uint64_t);
+  void recordDataN(IDType, DataKind, uint64_t, uint64_t*);
 
 };
 

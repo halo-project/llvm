@@ -76,8 +76,14 @@ void handle_perf_event(Profiler *Prof, perf_event_header *EvtHeader) {
 
     auto SampleID = Prof->newSample();
 
-    Prof->recordData1(SampleID, DataKind::InstrPtr, SI->ip);
+    // find out whether this IP is exact or not.
+    auto IPSample = SI->header.misc & PERF_RECORD_MISC_EXACT_IP ?
+                    DataKind::InstrPtrExact : DataKind::InstrPtr;
+
+    Prof->recordData1(SampleID, IPSample, SI->ip);
     Prof->recordData1(SampleID, DataKind::TimeStamp, SI->time);
+
+    Prof->recordDataN(SampleID, DataKind::CallChain, SI->nr, (uint64_t*)&(SI->ips));
 
   } else {
     // std::cout << "some other perf event was encountered.\n";
@@ -283,6 +289,17 @@ int get_perf_events_fd(const std::string &Name,
   // FIXME: For Intel hardware at least, we could also include
   // PERF_SAMPLE_BRANCH_ANY_RETURN along with the calls. For newer Intel
   // hardware, we can use PERF_SAMPLE_BRANCH_CALL_STACK.
+
+  // NOTE: we have to disable this because the libpfm attr field and
+  // the system's kernel can be mismatched. on my system pfm is too old for this.
+  // #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,8,0)
+    // NOTE: this specifies the maximum depth of the call chain to sample,
+    // when asking for the CALLCHAIN.
+    // Must be <= /proc/sys/kernel/perf_event_max_stack
+    // and it seems that on systems that do not have this field, the kernel
+    // traces the whole stack.
+    // Attr.sample_max_stack = 10;
+  // #endif
 
 
   int NewPerfFD = syscall(__NR_perf_event_open, &Attr, TID, CPU, -1, 0);
