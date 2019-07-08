@@ -16,12 +16,13 @@ void monitor_loop(MonitorState &M, std::atomic<bool> &ShutdownRequested) {
 
     M.poll_for_perf_data();
 
-    // TODO: If there is new profile data, process it.
+    M.Prof->processSamples();
 
     // TODO: communicate with optimization server and perform code replacement
     // experiments as needed.
 
 
+    // TODO: this should probably be a random interval.
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
   } // end of event loop

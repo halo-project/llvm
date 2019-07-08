@@ -1,12 +1,12 @@
 
-#include "halo/Profiler.h"
 #include "halo/Error.h"
+#include "halo/Profiler.h"
 
 #include <iostream>
 #include <cassert>
 
-#include "llvm/Object/ObjectFile.h"
 #include "llvm/Object/ELFObjectFile.h"
+#include "llvm/Object/ObjectFile.h"
 
 #include <elf.h>
 
@@ -17,65 +17,21 @@ namespace object = llvm::object;
 
 namespace halo {
 
-void Profiler::recordData1(IDType ID, DataKind DK, uint64_t Val) {
-  switch (DK) {
-    case DataKind::InstrPtr:
-    case DataKind::InstrPtrExact: {
+void Profiler::processSamples() {
+  for (RawSample &Sample : RawSamples) {
+    auto MaybeInfo = CRI.lookup(Sample.IP);
+    if (!MaybeInfo)
+      continue;
 
-      std::string Exactness = DK == DataKind::InstrPtrExact ? "" : "~";
-
-      auto MaybeInfo = CRI.lookup(Val);
-
-      if (MaybeInfo) {
-        FunctionInfo *FI = MaybeInfo.getValue();
-        std::cerr << std::dec
-          << "sample (" << ID << "): "
-          << std::hex << Exactness << " 0x" << Val << " in "
-          << FI->name << ", hits = "
-          << std::dec << FI->hits << "\n";
-
-        FI->hits++;
-      } else {
-        std::cerr << std::dec << "sample (" << ID << "): unknown IP "
-                  << Exactness << " 0x" << std::hex << Val << "\n";
-      }
-
-    } break;
-
+    FunctionInfo *FI = MaybeInfo.getValue();
+    std::cout << "tid " << Sample.TID
+              << ", " << FI->name
+              << ", time " << Sample.Time
+              << "\n";
   }
+
+  RawSamples.clear();
 }
-
-void Profiler::recordDataN(IDType ID, DataKind DK, uint64_t Num, uint64_t* Vals) {
-  switch (DK) {
-    case DataKind::CallChain: {
-
-        std::cerr << std::dec
-          << "sample (" << ID << "): " << "length " << Num << " call stack:\n";
-
-        for (uint64_t i = 0; i < Num; i++) {
-          uint64_t addr = Vals[i];
-          auto MaybeInfo = CRI.lookup(addr);
-
-          std::string Name;
-          if (MaybeInfo)
-            Name = MaybeInfo.getValue()->name;
-          else
-            Name = "???";
-
-          std::cerr << "\t\tframe "
-                    << std::dec << i
-                    << std::hex << ", 0x" << addr
-                    << " --> " << Name << "\n";
-        }
-
-    }; break;
-  }
-}
-
-// void Profiler::recordData2(IDType ID, uint64_t Val1, uint64_t Val2) {
-//   // todo.
-// }
-
 
 bool CodeRegionInfo::loadObjFile(std::string ObjPath) {
 

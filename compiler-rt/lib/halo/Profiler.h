@@ -3,8 +3,8 @@
 #include <cinttypes>
 #include <memory>
 
-#include "llvm/DebugInfo/Symbolize/Symbolize.h"
 #include "llvm/ADT/Optional.h"
+#include "llvm/DebugInfo/Symbolize/Symbolize.h"
 
 // Function interface reference:
 // https://www.boost.org/doc/libs/1_65_0/libs/icl/doc/html/boost_icl/interface/function_synopsis.html
@@ -20,13 +20,24 @@ namespace icl = boost::icl;
 
 namespace halo {
 
-using IDType = uint64_t;
+struct BranchInfo {
+  uint64_t From; // This indicates the source instruction (may not be a branch).
+  uint64_t To;   // The branch target.
 
-enum DataKind {
-  InstrPtr,  // the IP may have some skid.
-  InstrPtrExact, // indicates that the IP "points to the actual instruction that triggered the event."
-  TimeStamp,
-  CallChain
+  // These fields may all be false, indicating that we don't have any info.
+  bool Mispred;     // The branch target was mispredicted.
+  bool Predicted;   // The branch target was predicted.
+
+  BranchInfo(uint64_t from, uint64_t to, bool mispred, bool predicted) :
+             From(from), To(to), Mispred(mispred), Predicted(predicted) {}
+};
+
+struct RawSample {
+  uint64_t IP;
+  uint32_t TID;
+  uint64_t Time;
+  std::vector<uint64_t> CallStack; // order is from latest -> oldest call. vals are IPs.
+  std::vector<BranchInfo> LastBranch;
 };
 
 
@@ -76,17 +87,14 @@ private:
 
 
 class Profiler {
-private:
-  uint64_t FreeID = 0;
-
-  std::string ProcessTriple;
-  std::string HostCPUName;
-
-  CodeRegionInfo CRI;
-
 public:
 
-  IDType newSample() { return FreeID++; }
+  RawSample& newSample() {
+    RawSamples.emplace_back();
+    return RawSamples.back();
+  }
+
+  void processSamples();
 
   Profiler(std::string SelfBinPath)
              : ProcessTriple(llvm::sys::getProcessTriple()),
@@ -96,9 +104,14 @@ public:
 
   ~Profiler() {}
 
-  void recordData1(IDType, DataKind, uint64_t);
-  void recordData2(IDType, DataKind, uint64_t, uint64_t);
-  void recordDataN(IDType, DataKind, uint64_t, uint64_t*);
+private:
+
+  std::string ProcessTriple;
+  std::string HostCPUName;
+
+  std::vector<RawSample> RawSamples;
+
+  CodeRegionInfo CRI;
 
 };
 

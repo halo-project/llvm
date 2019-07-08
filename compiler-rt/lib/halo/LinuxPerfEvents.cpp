@@ -70,20 +70,38 @@ void handle_perf_event(Profiler *Prof, perf_event_header *EvtHeader) {
     // };
 
     SInfo *SI = (SInfo *) EvtHeader;
-
-    // SInfo2 *SI2 = (SInfo2 *) &SI->ips[SI->nr];
+    SInfo2 *SI2 = (SInfo2 *) &SI->ips[SI->nr];
     // SInfo3 *SI3 = (SInfo3 *) &SI2->lbr[SI2->bnr];
 
-    auto SampleID = Prof->newSample();
+    RawSample &Sample = Prof->newSample();
 
     // find out whether this IP is exact or not.
-    auto IPSample = SI->header.misc & PERF_RECORD_MISC_EXACT_IP ?
-                    DataKind::InstrPtrExact : DataKind::InstrPtr;
+    // auto IPSample = SI->header.misc & PERF_RECORD_MISC_EXACT_IP ?
+    //                 DataKind::InstrPtrExact : DataKind::InstrPtr;
 
-    Prof->recordData1(SampleID, IPSample, SI->ip);
-    Prof->recordData1(SampleID, DataKind::TimeStamp, SI->time);
+    Sample.IP = SI->ip;
+    Sample.TID = SI->tid;
+    Sample.Time = SI->time;
 
-    Prof->recordDataN(SampleID, DataKind::CallChain, SI->nr, (uint64_t*)&(SI->ips));
+    // record the call chain.
+    uint64_t ChainLen = SI->nr;
+    uint64_t* CallChain = (uint64_t*)&(SI->ips);
+    Sample.CallStack.reserve(ChainLen);
+    for (uint64_t i = 0; i < ChainLen; ++i) {
+      Sample.CallStack.push_back(CallChain[i]);
+    }
+
+    uint64_t LBRLen = SI2->bnr;
+    perf_branch_entry* LBR = (perf_branch_entry*)&(SI2->lbr);
+    Sample.LastBranch.reserve(LBRLen);
+    for (uint64_t i = 0; i < LBRLen; ++i) {
+      // look in source code of linux kernel for sizes of these fields.
+      // in particular, everything other than from/to are part of a bitfield
+      // of varying sizes.
+      perf_branch_entry* BR = LBR + i;
+      Sample.LastBranch.emplace_back(BR->from, BR->to,
+                                      (bool)BR->mispred, (bool)BR->predicted);
+    }
 
   } else {
     // std::cout << "some other perf event was encountered.\n";
@@ -136,8 +154,14 @@ void process_new_samples(Profiler *Prof, uint8_t *EventBuf, size_t EventBufSz, c
     if (EvtSz == 0)
         break;
 
-    // we copy the data out whether it wraps around or not.
+    // We copy the data out whether it wraps around or not.
+
     // TODO: an optimization would be to only copy if wrapping happened.
+    // Note that I've tried to do this and it's not as simple as it should be.
+    // There seem to be special restrictions on accessing the ring buffer's
+    // contents which are being avoided / simplified by always copying it
+    // out immediately before processing. Perhaps we cannot access the contents
+    // out-of-order? - kavon
     TmpBuffer.resize(EvtSz);
 
     // copy this event's data, stopping at the end of the ring buffer if needed.
