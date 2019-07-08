@@ -2,9 +2,11 @@
 
 #include <cinttypes>
 #include <memory>
+#include <vector>
 
 #include "llvm/ADT/Optional.h"
-#include "llvm/DebugInfo/Symbolize/Symbolize.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/Support/Host.h" // for getProcessTriple
 
 // Function interface reference:
 // https://www.boost.org/doc/libs/1_65_0/libs/icl/doc/html/boost_icl/interface/function_synopsis.html
@@ -15,7 +17,6 @@
 #define BOOST_ICL_USE_STATIC_BOUNDED_INTERVALS
 #include "boost/icl/interval_map.hpp"
 
-namespace sym = llvm::symbolize;
 namespace icl = boost::icl;
 
 namespace halo {
@@ -46,7 +47,7 @@ struct FunctionInfo {
   std::string Name;
   uint64_t VMStart;
   uint64_t Size;
-  
+
   FunctionInfo(llvm::StringRef label, uint64_t vm_start, uint64_t size)
               : Name(label.data()), VMStart(vm_start), Size(size) {}
 };
