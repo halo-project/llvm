@@ -17,17 +17,45 @@ namespace object = llvm::object;
 
 namespace halo {
 
+std::string getFunc(CodeRegionInfo &CRI, uint64_t Addr) {
+  auto MaybeInfo = CRI.lookup(Addr);
+  if (MaybeInfo)
+    return MaybeInfo.getValue()->Name;
+  return "???";
+}
+
 void Profiler::processSamples() {
   for (RawSample &Sample : RawSamples) {
-    auto MaybeInfo = CRI.lookup(Sample.IP);
-    if (!MaybeInfo)
-      continue;
-
-    FunctionInfo *FI = MaybeInfo.getValue();
     std::cout << "tid " << Sample.TID
-              << ", " << FI->name
               << ", time " << Sample.Time
+              << ", " << getFunc(CRI, Sample.IP)
               << "\n";
+
+    std::cout << "CallChain sample len: " << Sample.CallStack.size() << "\n";
+    for (auto RetAddr : Sample.CallStack) {
+      std::cout << "\t\t " << getFunc(CRI, RetAddr) << " @ 0x"
+                << std::hex << RetAddr << std::dec << "\n";
+    }
+
+    std::cout << "LBR sample len: " << Sample.LastBranch.size() << "\n";
+    uint64_t Missed = 0, Predicted = 0, Total = 0;
+    for (auto &BR : Sample.LastBranch) {
+      Total++;
+      if (BR.Mispred) Missed++;
+      if (BR.Predicted) Predicted++;
+
+      std::cout << std::hex << "\t\t"
+        << getFunc(CRI, BR.From) << " @ 0x" << BR.From << " --> "
+        << getFunc(CRI, BR.To)   << " @ 0x" << BR.To
+        << ", mispred = " << BR.Mispred
+        << ", pred = " << BR.Predicted
+        << std::dec << "\n";
+    }
+
+    std::cout << "miss rate: " << Missed / ((double) Total)
+              << ", predict rate: " << Predicted / ((double) Total)
+              << "\n";
+
   }
 
   RawSamples.clear();
@@ -89,7 +117,9 @@ bool CodeRegionInfo::loadObjFile(std::string ObjPath) {
       uint64_t End = Start + Size;
       auto FuncRange = icl::right_open_interval<uint64_t>(Start, End);
 
-      auto FI = std::shared_ptr<FunctionInfo>(new FunctionInfo(MaybeName.get()));
+      auto FI = std::shared_ptr<FunctionInfo>(
+        new FunctionInfo(MaybeName.get(), Start, Size)
+      );
 
       CodeMap.insert(std::make_pair(FuncRange, std::move(FI)));
     }

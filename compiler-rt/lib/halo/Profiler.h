@@ -41,12 +41,14 @@ struct RawSample {
 };
 
 
+// Ideally this would also contain information about blocks in the function.
 struct FunctionInfo {
-  uint64_t hits;
-  std::string name;
-
-  FunctionInfo() : hits(0), name("<unknown>") {}
-  FunctionInfo(llvm::StringRef label) : hits(0), name(label.data()) {}
+  std::string Name;
+  uint64_t VMStart;
+  uint64_t Size;
+  
+  FunctionInfo(llvm::StringRef label, uint64_t vm_start, uint64_t size)
+              : Name(label.data()), VMStart(vm_start), Size(size) {}
 };
 
 
