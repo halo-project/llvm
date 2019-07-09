@@ -81,7 +81,7 @@ bool CodeRegionInfo::loadObjFile(std::string ObjPath) {
   object::ObjectFile *Obj = OB.getBinary();
 
   // find the range of this object file in the process.
-  uint64_t VMAStart, VMAEnd;
+  san::uptr VMAStart, VMAEnd;
   san::GetCodeRangeForFile(ObjPath.data(), &VMAStart, &VMAEnd);
 
   Delta = VMAStart; // Assume PIE is enabled.
