@@ -4207,7 +4207,10 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
                   options::OPT_finstrument_function_entry_bare);
 
 
-  Args.AddLastArg(CmdArgs, options::OPT_fhalo, options::OPT_fno_halo);
+  if (Args.hasFlag(options::OPT_fhalo, options::OPT_fno_halo, false)) {
+    CmdArgs.push_back("-fhalo");
+    CmdArgs.push_back("-fembed-bitcode=all");
+  }
 
   // NVPTX doesn't support PGO or coverage. There's no runtime support for
   // sampling, overhead of call arc collection is way too high and there's no
