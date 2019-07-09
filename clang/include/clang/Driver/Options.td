@@ -1246,6 +1246,13 @@ def fxray_instrumentation_bundle :
   Group<f_Group>, Flags<[CC1Option]>,
   HelpText<"Select which XRay instrumentation points to emit. Options: all, none, function, custom. Default is 'all'.">;
 
+def fhalo : Flag<["-"], "fhalo">, Group<f_clang_Group>,
+  Flags<[CC1Option]>,
+  HelpText<"Use the Halo optimization system.">;
+def fno_halo : Flag<["-"], "fno-halo">, Group<f_clang_Group>,
+  Flags<[CC1Option]>,
+  HelpText<"Do not use the Halo optimization system.">;
+
 def ffine_grained_bitfield_accesses : Flag<["-"],
   "ffine-grained-bitfield-accesses">, Group<f_clang_Group>, Flags<[CC1Option]>,
   HelpText<"Use separate accesses for consecutive bitfield runs with legal widths and alignments.">;

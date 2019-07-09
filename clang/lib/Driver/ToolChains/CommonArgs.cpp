@@ -774,6 +774,25 @@ void tools::linkXRayRuntimeDeps(const ToolChain &TC, ArgStringList &CmdArgs) {
     CmdArgs.push_back("-ldl");
 }
 
+void tools::addHaloRuntime(const ToolChain &TC, const llvm::opt::ArgList &Args,
+                    llvm::opt::ArgStringList &CmdArgs) {
+    if (!Args.hasArg(options::OPT_fhalo))
+      return;
+
+    // force linking of this library.
+    CmdArgs.push_back("--whole-archive");
+    CmdArgs.push_back(TC.getCompilerRTArgString(Args, "halo",
+                                                      ToolChain::FT_Shared));
+    CmdArgs.push_back("--no-whole-archive");
+
+    // NOTE: it's *not* the arch path, since the arch is part of the file name.
+    std::string CandidateRPath = TC.getCompilerRTPath();
+    if (TC.getVFS().exists(CandidateRPath)) {
+      CmdArgs.push_back("-rpath");
+      CmdArgs.push_back(Args.MakeArgString(CandidateRPath.c_str()));
+    }
+}
+
 bool tools::areOptimizationsEnabled(const ArgList &Args) {
   // Find the last -O arg and see if it is non-zero.
   if (Arg *A = Args.getLastArg(options::OPT_O_Group))

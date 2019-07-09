@@ -2072,6 +2072,10 @@ List of modes to link in by default into XRay instrumented binaries.
 
 DEPRECATED: Filename defining the whitelist for imbuing the 'never instrument' XRay attribute.
 
+.. option:: -fhalo, -fno-halo
+
+Tells clang whether to use the Halo optimization system.
+
 .. option:: -fzero-initialized-in-bss, -fno-zero-initialized-in-bss
 
 .. option:: -fzvector, -fno-zvector, -mzvector
@@ -3106,4 +3110,3 @@ undef all system defines
 .. option:: -z <arg>
 
 Pass -z <arg> to the linker
-
