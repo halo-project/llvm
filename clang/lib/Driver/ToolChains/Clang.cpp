@@ -594,7 +594,7 @@ static bool shouldUseFramePointer(const ArgList &Args,
     return A->getOption().matches(options::OPT_fno_omit_frame_pointer) ||
            mustUseNonLeafFramePointerForTarget(Triple);
 
-  if (Args.hasArg(options::OPT_pg))
+  if (Args.hasArg(options::OPT_pg) || Args.hasArg(options::OPT_fhalo))
     return true;
 
   return useFramePointerForTargetByDefault(Args, Triple);
