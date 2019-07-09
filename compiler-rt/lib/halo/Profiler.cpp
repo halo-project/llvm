@@ -82,7 +82,8 @@ bool CodeRegionInfo::loadObjFile(std::string ObjPath) {
 
   // find the range of this object file in the process.
   san::uptr VMAStart, VMAEnd;
-  san::GetCodeRangeForFile(ObjPath.data(), &VMAStart, &VMAEnd);
+  bool res = san::GetCodeRangeForFile(ObjPath.data(), &VMAStart, &VMAEnd);
+  if (!res) halo::fatal_error("unable to read proc map for VMA range");
 
   Delta = VMAStart; // Assume PIE is enabled.
   if (auto *ELF = llvm::dyn_cast<object::ELFObjectFileBase>(Obj)) {
