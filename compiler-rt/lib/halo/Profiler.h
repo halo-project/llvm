@@ -6,6 +6,7 @@
 
 #include "llvm/ADT/Optional.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/IR/Module.h"
 #include "llvm/Support/Host.h" // for getProcessTriple
 
 // Function interface reference:
@@ -53,6 +54,24 @@ struct FunctionInfo {
 };
 
 
+struct CodeSectionInfo {
+private:
+  using CodeMap = icl::interval_map<uint64_t, std::shared_ptr<FunctionInfo>,
+                                    icl::partial_enricher>;
+public:
+  CodeMap AddrMap;
+  uint64_t VMABase;
+
+  // NOTE: possible double-free if Context outlives Module.
+  std::unique_ptr<llvm::LLVMContext> Cxt;
+  std::unique_ptr<llvm::Module> Module;
+
+  CodeSectionInfo () : Cxt(new llvm::LLVMContext()) {}
+
+  void dumpModule() const { Module->print(llvm::errs(), nullptr); }
+};
+
+
 class CodeRegionInfo {
 public:
 
@@ -61,7 +80,12 @@ public:
   ~CodeRegionInfo() {}
 
   llvm::Optional<FunctionInfo*> lookup(uint64_t IP);
-  bool loadObjFile(std::string Path);
+  void loadObjFile(std::string Path);
+
+  void dumpModules() const {
+    for (const auto &CSI : Data)
+      CSI.dumpModule();
+  }
 
 private:
   // interval map FROM code address offset TO function information
@@ -72,8 +96,7 @@ private:
   // 2. partial_enricher ensures that the map doesn't stupidly ignore
   //    inserts of the identity elem in co-domain, e.g., the pair {0,0}.
   //    see [NOTE identity element] link.
-  using CodeMap = icl::interval_map<uint64_t, std::shared_ptr<FunctionInfo>,
-                                    icl::partial_enricher>;
+
 
   // map FROM object filename TO code-section vector.
   std::map<std::string, uint64_t> ObjFiles;
@@ -84,7 +107,7 @@ private:
 
   // the code-section vector, which is paired with the offset to apply
   // to the raw IP to index into it.
-  std::vector<std::pair<CodeMap, uint64_t>> Data;
+  std::vector<CodeSectionInfo> Data;
 
 };
 
@@ -103,6 +126,8 @@ public:
              : ProcessTriple(llvm::sys::getProcessTriple()),
                HostCPUName(llvm::sys::getHostCPUName()) {
     CRI.loadObjFile(SelfBinPath);
+
+    CRI.dumpModules();
   }
 
   ~Profiler() {}

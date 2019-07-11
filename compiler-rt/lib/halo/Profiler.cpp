@@ -5,8 +5,12 @@
 #include <iostream>
 #include <cassert>
 
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IRReader/IRReader.h"
 #include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Object/ObjectFile.h"
+#include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/SourceMgr.h"
 
 #include <elf.h>
 
@@ -25,6 +29,11 @@ std::string getFunc(CodeRegionInfo &CRI, uint64_t Addr) {
 }
 
 void Profiler::processSamples() {
+  const bool ShouldPrint = false;
+
+  if (!ShouldPrint)
+    goto cleanup;
+
   for (RawSample &Sample : RawSamples) {
     std::cout << "tid " << Sample.TID
               << ", time " << Sample.Time
@@ -58,16 +67,18 @@ void Profiler::processSamples() {
 
   }
 
+cleanup:
   RawSamples.clear();
+
 }
 
-bool CodeRegionInfo::loadObjFile(std::string ObjPath) {
+void CodeRegionInfo::loadObjFile(std::string ObjPath) {
 
   // create new function-offset map
   Data.emplace_back();
   auto &Info = Data.back();
-  auto &CodeMap = Info.first;
-  uint64_t &Delta = Info.second;
+  auto &AddrMap = Info.AddrMap;
+  uint64_t &Delta = Info.VMABase;
   auto Index = Data.size() - 1;
   ObjFiles[ObjPath] = Index;
 
@@ -122,11 +133,31 @@ bool CodeRegionInfo::loadObjFile(std::string ObjPath) {
         new FunctionInfo(MaybeName.get(), Start, Size)
       );
 
-      CodeMap.insert(std::make_pair(FuncRange, std::move(FI)));
+      AddrMap.insert(std::make_pair(FuncRange, std::move(FI)));
     }
   }
 
-  return true;
+  // Look for the embedded bitcode
+  for (const object::SectionRef &Sec : Obj->sections()) {
+    if (!Sec.isBitcode())
+      continue;
+
+    auto MaybeData = Sec.getContents();
+    if (!MaybeData) halo::fatal_error("unable get bitcode section contents.");
+
+    llvm::SMDiagnostic Err;
+    auto MemBuf = llvm::MemoryBuffer::getMemBuffer(MaybeData.get());
+    auto Module = llvm::parseIR(*MemBuf, Err, *Info.Cxt);
+
+    if (Module.get() == nullptr) {
+      Err.print(ObjPath.c_str(), llvm::errs());
+      halo::fatal_error("invalid bitcode.");
+    }
+
+    Info.Module = std::move(Module);
+
+    break; // should only be on bitcode section per object file.
+  }
 }
 
 
@@ -143,12 +174,11 @@ llvm::Optional<FunctionInfo*> CodeRegionInfo::lookup(uint64_t IP) {
   }
 
   auto &Info = Data[Idx];
-  auto &CodeMap = Info.first;
-  uint64_t Delta = Info.second;
-  IP -= Delta;
+  auto &AddrMap = Info.AddrMap;
+  IP -= Info.VMABase;
 
-  auto FI = CodeMap.find(IP);
-  if (FI == CodeMap.end())
+  auto FI = AddrMap.find(IP);
+  if (FI == AddrMap.end())
     return llvm::None;
 
   return FI->second.get();
