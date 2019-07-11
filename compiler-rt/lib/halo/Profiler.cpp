@@ -12,16 +12,19 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/SourceMgr.h"
 
+#include "google/protobuf/util/json_util.h"
+
 #include <elf.h>
 
 #include "sanitizer_common/sanitizer_procmaps.h"
 
 namespace san = __sanitizer;
 namespace object = llvm::object;
+namespace proto = google::protobuf;
 
 namespace halo {
 
-std::string getFunc(CodeRegionInfo &CRI, uint64_t Addr) {
+std::string getFunc(const CodeRegionInfo &CRI, uint64_t Addr) {
   auto MaybeInfo = CRI.lookup(Addr);
   if (MaybeInfo)
     return MaybeInfo.getValue()->Name;
@@ -29,47 +32,40 @@ std::string getFunc(CodeRegionInfo &CRI, uint64_t Addr) {
 }
 
 void Profiler::processSamples() {
-  const bool ShouldPrint = false;
+  // TODO: send the samples to the server
+  RawSamples.clear();
+}
 
-  if (!ShouldPrint)
-    goto cleanup;
+void Profiler::dumpSamples() const {
+  auto &out = std::cerr;
+  for (const RawSample &Sample : RawSamples) {
+    std::string AsJSON;
+    proto::util::JsonPrintOptions Opts;
+    Opts.add_whitespace = true;
+    proto::util::MessageToJsonString(Sample, &AsJSON, Opts);
+    out << AsJSON << "\n---\n";
 
-  for (RawSample &Sample : RawSamples) {
-    std::cout << "tid " << Sample.TID
-              << ", time " << Sample.Time
-              << ", " << getFunc(CRI, Sample.IP)
-              << "\n";
-
-    std::cout << "CallChain sample len: " << Sample.CallStack.size() << "\n";
-    for (auto RetAddr : Sample.CallStack) {
-      std::cout << "\t\t " << getFunc(CRI, RetAddr) << " @ 0x"
+    out << "CallChain sample len: " << Sample.call_context_size() << "\n";
+    for (const auto &RetAddr : Sample.call_context()) {
+      out << "\t\t " << getFunc(CRI, RetAddr) << " @ 0x"
                 << std::hex << RetAddr << std::dec << "\n";
     }
 
-    std::cout << "LBR sample len: " << Sample.LastBranch.size() << "\n";
+    out << "LBR sample len: " << Sample.branch_size() << "\n";
     uint64_t Missed = 0, Predicted = 0, Total = 0;
-    for (auto &BR : Sample.LastBranch) {
+    for (const auto &BR : Sample.branch()) {
       Total++;
-      if (BR.Mispred) Missed++;
-      if (BR.Predicted) Predicted++;
+      if (BR.mispred()) Missed++;
+      if (BR.predicted()) Predicted++;
 
-      std::cout << std::hex << "\t\t"
-        << getFunc(CRI, BR.From) << " @ 0x" << BR.From << " --> "
-        << getFunc(CRI, BR.To)   << " @ 0x" << BR.To
-        << ", mispred = " << BR.Mispred
-        << ", pred = " << BR.Predicted
+      out << std::hex << "\t\t"
+        << getFunc(CRI, BR.from()) << " @ 0x" << BR.from() << " --> "
+        << getFunc(CRI, BR.to())   << " @ 0x" << BR.to()
+        << ", mispred = " << BR.mispred()
+        << ", pred = " << BR.predicted()
         << std::dec << "\n";
     }
-
-    std::cout << "miss rate: " << Missed / ((double) Total)
-              << ", predict rate: " << Predicted / ((double) Total)
-              << "\n";
-
   }
-
-cleanup:
-  RawSamples.clear();
-
 }
 
 void CodeRegionInfo::loadObjFile(std::string ObjPath) {
@@ -161,7 +157,7 @@ void CodeRegionInfo::loadObjFile(std::string ObjPath) {
 }
 
 
-llvm::Optional<FunctionInfo*> CodeRegionInfo::lookup(uint64_t IP) {
+llvm::Optional<FunctionInfo*> CodeRegionInfo::lookup(uint64_t IP) const {
   size_t Idx = 0;
 
   // Typically we only have one VMA range that we're tracking,

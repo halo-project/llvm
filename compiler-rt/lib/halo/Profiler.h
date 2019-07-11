@@ -18,30 +18,11 @@
 #define BOOST_ICL_USE_STATIC_BOUNDED_INTERVALS
 #include "boost/icl/interval_map.hpp"
 
+#include "RawSample.pb.h"
+
 namespace icl = boost::icl;
 
 namespace halo {
-
-struct BranchInfo {
-  uint64_t From; // This indicates the source instruction (may not be a branch).
-  uint64_t To;   // The branch target.
-
-  // These fields may all be false, indicating that we don't have any info.
-  bool Mispred;     // The branch target was mispredicted.
-  bool Predicted;   // The branch target was predicted.
-
-  BranchInfo(uint64_t from, uint64_t to, bool mispred, bool predicted) :
-             From(from), To(to), Mispred(mispred), Predicted(predicted) {}
-};
-
-struct RawSample {
-  uint64_t IP;
-  uint32_t TID;
-  uint64_t Time;
-  std::vector<uint64_t> CallStack; // order is from latest -> oldest call. vals are IPs.
-  std::vector<BranchInfo> LastBranch;
-};
-
 
 // Ideally this would also contain information about blocks in the function.
 struct FunctionInfo {
@@ -79,7 +60,7 @@ public:
 
   ~CodeRegionInfo() {}
 
-  llvm::Optional<FunctionInfo*> lookup(uint64_t IP);
+  llvm::Optional<FunctionInfo*> lookup(uint64_t IP) const;
   void loadObjFile(std::string Path);
 
   void dumpModules() const {
@@ -121,13 +102,14 @@ public:
   }
 
   void processSamples();
+  void dumpSamples() const;
 
   Profiler(std::string SelfBinPath)
              : ProcessTriple(llvm::sys::getProcessTriple()),
                HostCPUName(llvm::sys::getHostCPUName()) {
     CRI.loadObjFile(SelfBinPath);
 
-    CRI.dumpModules();
+    // CRI.dumpModules();
   }
 
   ~Profiler() {}

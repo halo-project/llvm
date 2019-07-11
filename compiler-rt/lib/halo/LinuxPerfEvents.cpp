@@ -79,28 +79,29 @@ void handle_perf_event(Profiler *Prof, perf_event_header *EvtHeader) {
     // auto IPSample = SI->header.misc & PERF_RECORD_MISC_EXACT_IP ?
     //                 DataKind::InstrPtrExact : DataKind::InstrPtr;
 
-    Sample.IP = SI->ip;
-    Sample.TID = SI->tid;
-    Sample.Time = SI->time;
+    Sample.set_instr_ptr(SI->ip);
+    Sample.set_thread_id(SI->tid);
+    Sample.set_time(SI->time);
 
     // record the call chain.
     uint64_t ChainLen = SI->nr;
     uint64_t* CallChain = (uint64_t*)&(SI->ips);
-    Sample.CallStack.reserve(ChainLen);
     for (uint64_t i = 0; i < ChainLen; ++i) {
-      Sample.CallStack.push_back(CallChain[i]);
+      Sample.add_call_context(CallChain[i]);
     }
 
     uint64_t LBRLen = SI2->bnr;
     perf_branch_entry* LBR = (perf_branch_entry*)&(SI2->lbr);
-    Sample.LastBranch.reserve(LBRLen);
     for (uint64_t i = 0; i < LBRLen; ++i) {
       // look in source code of linux kernel for sizes of these fields.
       // in particular, everything other than from/to are part of a bitfield
       // of varying sizes.
       perf_branch_entry* BR = LBR + i;
-      Sample.LastBranch.emplace_back(BR->from, BR->to,
-                                      (bool)BR->mispred, (bool)BR->predicted);
+      BranchInfo *BI = Sample.add_branch();
+      BI->set_from(BR->from);
+      BI->set_to(BR->to);
+      BI->set_mispred((bool)BR->mispred);
+      BI->set_predicted((bool)BR->predicted);
     }
 
   } else {

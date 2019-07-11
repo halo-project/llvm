@@ -11,8 +11,9 @@ else()
 endif()
 
 find_package(Boost 1.65 COMPONENTS system REQUIRED)
+find_package(Protobuf 3 REQUIRED)
 
-include_directories(.. ${Boost_INCLUDE_DIR} ${LLVM_INCLUDE_DIRS})
+include_directories(.. ${Boost_INCLUDE_DIR} ${Protobuf_INCLUDE_DIR} ${LLVM_INCLUDE_DIRS})
 
 set(MAX_ERRORS "1")
 
@@ -28,10 +29,16 @@ endif()
 add_definitions(${LLVM_DEFINITIONS})
 llvm_map_components_to_libnames(LLVM_LIBS all) # TODO: make this list shorter?
 
+# find protobuf files and generate C++ code for them.
+file(GLOB ProtoFiles "${CMAKE_CURRENT_SOURCE_DIR}/*.proto")
+protobuf_generate_cpp(ProtoSources ProtoHeaders ${ProtoFiles})
+
 set(HALO_HEADERS
       Error.h
       MonitorState.h
       Profiler.h
+      RawSample.h
+      ${ProtoHeaders}
     )
 
 set(HALO_SOURCES
@@ -39,6 +46,7 @@ set(HALO_SOURCES
       LinuxPerfEvents.cpp
       Monitor.cpp
       Profiler.cpp
+      ${ProtoSources}
     )
 
 add_compiler_rt_runtime(clang_rt.halo
@@ -47,7 +55,7 @@ add_compiler_rt_runtime(clang_rt.halo
   CFLAGS ${HALO_CFLAGS} ${SANITIZER_COMMON_CFLAGS}
   SOURCES ${HALO_SOURCES}
   ADDITIONAL_HEADERS ${HALO_HEADERS}
-  LINK_LIBS ${LLVM_LIBS} ${Boost_LIBRARIES} ${LIBPFM}
+  LINK_LIBS ${LLVM_LIBS} ${Protobuf_LIBRARIES} ${Boost_LIBRARIES} ${LIBPFM}
   OBJECT_LIBS RTSanitizerCommon
               RTSanitizerCommonLibc
               RTSanitizerCommonSymbolizer
