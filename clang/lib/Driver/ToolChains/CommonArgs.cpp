@@ -781,7 +781,7 @@ void tools::addHaloRuntime(const ToolChain &TC, const llvm::opt::ArgList &Args,
 
     // force linking of this library.
     CmdArgs.push_back("--whole-archive");
-    CmdArgs.push_back(TC.getCompilerRTArgString(Args, "halo",
+    CmdArgs.push_back(TC.getCompilerRTArgString(Args, "halomon",
                                                       ToolChain::FT_Shared));
     CmdArgs.push_back("--no-whole-archive");
 

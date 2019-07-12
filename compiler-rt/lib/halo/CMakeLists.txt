@@ -1,4 +1,4 @@
-add_compiler_rt_component(halo)
+add_compiler_rt_component(halomon)
 
 #####################
 # find dependencies
@@ -7,7 +7,7 @@ include(FindLibpfm)
 if(HAVE_LIBPFM)
   set(LIBPFM pfm)
 else()
-  message(FATAL_ERROR "libpfm is required but not found for Halo!")
+  message(FATAL_ERROR "libpfm is required but not found for halomon!")
 endif()
 
 find_package(Boost 1.65 COMPONENTS system REQUIRED)
@@ -18,11 +18,11 @@ include_directories(.. ${Boost_INCLUDE_DIR} ${Protobuf_INCLUDE_DIR} ${LLVM_INCLU
 set(MAX_ERRORS "1")
 
 if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang")
-  set(HALO_CFLAGS "-ferror-limit=${MAX_ERRORS}")
+  set(HALOMON_CFLAGS "-ferror-limit=${MAX_ERRORS}")
 elseif ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")
-  set(HALO_CFLAGS "-fmax-errors=${MAX_ERRORS}")
+  set(HALOMON_CFLAGS "-fmax-errors=${MAX_ERRORS}")
 else()
-  set(HALO_CFLAGS)
+  set(HALOMON_CFLAGS)
 endif()
 
 # include LLVM itself
@@ -33,7 +33,7 @@ llvm_map_components_to_libnames(LLVM_LIBS all) # TODO: make this list shorter?
 file(GLOB ProtoFiles "${CMAKE_CURRENT_SOURCE_DIR}/*.proto")
 protobuf_generate_cpp(ProtoSources ProtoHeaders ${ProtoFiles})
 
-set(HALO_HEADERS
+set(HALOMON_HEADERS
       Error.h
       MonitorState.h
       Profiler.h
@@ -41,7 +41,7 @@ set(HALO_HEADERS
       ${ProtoHeaders}
     )
 
-set(HALO_SOURCES
+set(HALOMON_SOURCES
       Error.cpp
       LinuxPerfEvents.cpp
       Monitor.cpp
@@ -49,14 +49,14 @@ set(HALO_SOURCES
       ${ProtoSources}
     )
 
-add_compiler_rt_runtime(clang_rt.halo
+add_compiler_rt_runtime(clang_rt.halomon
   SHARED
-  ARCHS ${HALO_SUPPORTED_ARCH}
-  CFLAGS ${HALO_CFLAGS} ${SANITIZER_COMMON_CFLAGS}
-  SOURCES ${HALO_SOURCES}
-  ADDITIONAL_HEADERS ${HALO_HEADERS}
+  ARCHS ${HALOMON_SUPPORTED_ARCH}
+  CFLAGS ${HALOMON_CFLAGS} ${SANITIZER_COMMON_CFLAGS}
+  SOURCES ${HALOMON_SOURCES}
+  ADDITIONAL_HEADERS ${HALOMON_HEADERS}
   LINK_LIBS ${LLVM_LIBS} ${Protobuf_LIBRARIES} ${Boost_LIBRARIES} ${LIBPFM}
   OBJECT_LIBS RTSanitizerCommon
               RTSanitizerCommonLibc
               RTSanitizerCommonSymbolizer
-  PARENT_TARGET halo)
+  PARENT_TARGET halomon)
