@@ -8,7 +8,7 @@
 
 #include <sys/signalfd.h>
 
-#include "halo/Profiler.h"
+#include "halomon/Profiler.h"
 
 // NOTE: we are Linux only right now, but the public interface
 // will try to remain OS independent.

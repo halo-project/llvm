@@ -2,7 +2,7 @@
 #include <atomic>
 #include <iostream>
 
-#include "halo/MonitorState.h"
+#include "halomon/MonitorState.h"
 
 namespace halo {
 

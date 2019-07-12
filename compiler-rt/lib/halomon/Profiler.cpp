@@ -1,6 +1,6 @@
 
-#include "halo/Error.h"
-#include "halo/Profiler.h"
+#include "halomon/Error.h"
+#include "halomon/Profiler.h"
 
 #include <iostream>
 #include <cassert>

@@ -26,8 +26,8 @@
 
 #include <linux/version.h>
 
-#include "halo/MonitorState.h"
-#include "halo/Error.h"
+#include "halomon/MonitorState.h"
+#include "halomon/Error.h"
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(3,4,0)
   #error "Kernel versions older than 3.4 are incompatible."
