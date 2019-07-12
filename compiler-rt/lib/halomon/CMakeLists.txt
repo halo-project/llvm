@@ -30,15 +30,12 @@ add_definitions(${LLVM_DEFINITIONS})
 llvm_map_components_to_libnames(LLVM_LIBS all) # TODO: make this list shorter?
 
 # find protobuf files and generate C++ code for them.
-file(GLOB ProtoFiles "${CMAKE_CURRENT_SOURCE_DIR}/*.proto")
-protobuf_generate_cpp(ProtoSources ProtoHeaders ${ProtoFiles})
+protobuf_generate_cpp(PROTO_SRCS PROTO_HDRS ${HALO_PROTO_FILES})
 
 set(HALOMON_HEADERS
       Error.h
       MonitorState.h
       Profiler.h
-      RawSample.h
-      ${ProtoHeaders}
     )
 
 set(HALOMON_SOURCES
@@ -46,15 +43,14 @@ set(HALOMON_SOURCES
       LinuxPerfEvents.cpp
       Monitor.cpp
       Profiler.cpp
-      ${ProtoSources}
     )
 
 add_compiler_rt_runtime(clang_rt.halomon
   SHARED
   ARCHS ${HALOMON_SUPPORTED_ARCH}
   CFLAGS ${HALOMON_CFLAGS} ${SANITIZER_COMMON_CFLAGS}
-  SOURCES ${HALOMON_SOURCES}
-  ADDITIONAL_HEADERS ${HALOMON_HEADERS}
+  SOURCES ${HALOMON_SOURCES} ${PROTO_SRCS}
+  ADDITIONAL_HEADERS ${HALOMON_HEADERS} ${PROTO_HDRS}
   LINK_LIBS ${LLVM_LIBS} ${Protobuf_LIBRARIES} ${Boost_LIBRARIES} ${LIBPFM}
   OBJECT_LIBS RTSanitizerCommon
               RTSanitizerCommonLibc
