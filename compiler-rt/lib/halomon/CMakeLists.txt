@@ -29,12 +29,12 @@ endif()
 add_definitions(${LLVM_DEFINITIONS})
 llvm_map_components_to_libnames(LLVM_LIBS all) # TODO: make this list shorter?
 
-if (NOT HALO_PROTO_DIR)
-  message( FATAL_ERROR "Please set HALO_PROTO_DIR to a directory containing protobuf files." )
+if (NOT HALO_NET_DIR)
+  message( FATAL_ERROR "Please set HALO_NET_DIR to a directory containing networking files." )
 endif()
 
 # find protobuf files and generate C++ code for them.
-file(GLOB PROTO_FILES ${HALO_PROTO_DIR}/*.proto)
+file(GLOB PROTO_FILES ${HALO_NET_DIR}/*.proto)
 protobuf_generate_cpp(PROTO_SRCS PROTO_HDRS ${PROTO_FILES})
 
 set(HALOMON_HEADERS
