@@ -16,9 +16,9 @@ void monitor_loop(MonitorState &M, std::atomic<bool> &ShutdownRequested) {
 
     M.poll_for_perf_data();
 
-    M.Prof->dumpSamples();
+    // M.Prof->dumpSamples();
 
-    M.Prof->processSamples();
+    M.Prof->processSamples(M.Conn);
 
     // TODO: communicate with optimization server and perform code replacement
     // experiments as needed.

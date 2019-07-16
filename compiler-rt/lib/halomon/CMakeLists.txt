@@ -13,8 +13,6 @@ endif()
 find_package(Boost 1.65 COMPONENTS system REQUIRED)
 find_package(Protobuf 3 REQUIRED)
 
-include_directories(.. ${Boost_INCLUDE_DIR} ${Protobuf_INCLUDE_DIR} ${LLVM_INCLUDE_DIRS})
-
 set(MAX_ERRORS "1")
 
 if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang")
@@ -37,10 +35,13 @@ endif()
 file(GLOB PROTO_FILES ${HALO_NET_DIR}/*.proto)
 protobuf_generate_cpp(PROTO_SRCS PROTO_HDRS ${PROTO_FILES})
 
+include_directories(.. ${HALO_NET_DIR} ${Boost_INCLUDE_DIR} ${Protobuf_INCLUDE_DIR} ${LLVM_INCLUDE_DIRS})
+
 set(HALOMON_HEADERS
       Error.h
       MonitorState.h
       Profiler.h
+      Client.h
     )
 
 set(HALOMON_SOURCES

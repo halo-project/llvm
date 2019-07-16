@@ -4,6 +4,8 @@
 #include <memory>
 #include <vector>
 
+#include "halomon/Client.h"
+
 #include "llvm/ADT/Optional.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/IR/Module.h"
@@ -101,7 +103,7 @@ public:
     return RawSamples.back();
   }
 
-  void processSamples();
+  void processSamples(Client*);
   void dumpSamples() const;
 
   Profiler(std::string SelfBinPath)

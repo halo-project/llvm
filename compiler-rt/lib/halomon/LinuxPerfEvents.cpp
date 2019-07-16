@@ -442,6 +442,11 @@ MonitorState::MonitorState() : SigSD(PerfSignalService) {
   buf[len] = '\0'; // null terminate
 
   Prof = new Profiler(buf.data());
+  Conn = new Client("localhost", "29000"); // TODO: get these from an env variable
+
+  if (!(Conn->connect())) {
+    exit(EXIT_FAILURE);
+  }
 
   // setup the monitor's initial state.
   if (!setup_perf_events(PerfFD, EventBuf, EventBufSz, PageSz) ||
@@ -461,6 +466,7 @@ MonitorState::MonitorState() : SigSD(PerfSignalService) {
 MonitorState::~MonitorState() {
   // clean-up
   delete Prof;
+  delete Conn;
 
   int ret = munmap(EventBuf, EventBufSz);
   if (ret) {

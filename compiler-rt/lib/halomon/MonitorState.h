@@ -9,9 +9,12 @@
 #include <sys/signalfd.h>
 
 #include "halomon/Profiler.h"
+#include "halomon/Client.h"
 
 // NOTE: we are Linux only right now, but the public interface
 // will try to remain OS independent.
+
+namespace asio = boost::asio;
 
 namespace halo {
 
@@ -26,8 +29,8 @@ private:
   size_t PageSz;
 
   // members related to reading from perf events FD
-  boost::asio::io_service PerfSignalService;
-  boost::asio::posix::stream_descriptor SigSD;
+  asio::io_service PerfSignalService;
+  asio::posix::stream_descriptor SigSD;
   int SigFD; // TODO: do we need to close this, or will SigFD's destructor do that for us?
   signalfd_siginfo SigFDInfo;
 
@@ -36,7 +39,10 @@ private:
 
 public:
   Profiler *Prof;
+  Client *Conn;
 
+  // Implementations for these members are Linux specific, so look under
+  // LinuxPerfEvents.cpp
   MonitorState();
   ~MonitorState();
 

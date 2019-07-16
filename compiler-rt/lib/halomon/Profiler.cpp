@@ -11,12 +11,10 @@
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/SourceMgr.h"
-
 #include "google/protobuf/util/json_util.h"
+#include "sanitizer_common/sanitizer_procmaps.h"
 
 #include <elf.h>
-
-#include "sanitizer_common/sanitizer_procmaps.h"
 
 namespace san = __sanitizer;
 namespace object = llvm::object;
@@ -31,8 +29,12 @@ std::string getFunc(const CodeRegionInfo &CRI, uint64_t Addr) {
   return "???";
 }
 
-void Profiler::processSamples() {
-  // TODO: send the samples to the server
+void Profiler::processSamples(Client *Conn) {
+
+  for (const RawSample &Sample : RawSamples) {
+    Conn->Chan.send_proto(msg::RawSample, Sample);
+  }
+
   RawSamples.clear();
 }
 
