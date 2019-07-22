@@ -3,12 +3,17 @@
 #include "halomon/LinuxPerfEvents.h"
 #include "halomon/Error.h"
 
+#include "llvm/Support/Host.h"
+
 
 namespace asio = boost::asio;
 
 namespace halo {
 
-MonitorState::MonitorState() : SigSD(PerfSignalService) {
+MonitorState::MonitorState() : SigSD(PerfSignalService),
+                               ProcessTriple(llvm::sys::getProcessTriple()),
+                               HostCPUName(llvm::sys::getHostCPUName()),
+                               SamplingEnabled(false) {
 
   // get the path to this process's executable.
   std::vector<char> buf(PATH_MAX);
@@ -18,6 +23,7 @@ MonitorState::MonitorState() : SigSD(PerfSignalService) {
     fatal_error("path to process's executable not found.");
   }
   buf[len] = '\0'; // null terminate
+  ExePath = std::string(buf.data());
 
   Prof = new Profiler(buf.data());
 
@@ -39,8 +45,6 @@ MonitorState::MonitorState() : SigSD(PerfSignalService) {
   if (!(Conn->connect())) {
     exit(EXIT_FAILURE);
   }
-
-  linux::start_sampling(PerfFD);
 }
 
 MonitorState::~MonitorState() {
@@ -49,8 +53,29 @@ MonitorState::~MonitorState() {
   delete Conn;
 
   linux::close_perf_events(PerfFD, EventBuf, EventBufSz);
+}
 
+void MonitorState::start_sampling() {
+  if (!SamplingEnabled) {
+    linux::reset_sampling_counters(PerfFD);
+    linux::start_sampling(PerfFD);
+    SamplingEnabled = true;
+  }
+}
 
+void MonitorState::stop_sampling() {
+  if (SamplingEnabled) {
+    linux::stop_sampling(PerfFD);
+    SamplingEnabled = false;
+  }
+}
+
+void MonitorState::reset_sampling_counters() {
+  linux::reset_sampling_counters(PerfFD);
+}
+
+void MonitorState::set_sampling_period(uint64_t period) {
+    linux::set_sampling_period(PerfFD, period);
 }
 
 void MonitorState::handle_signalfd_read(const boost::system::error_code &Error, size_t BytesTransferred) {
@@ -107,7 +132,7 @@ void MonitorState::handle_signalfd_read(const boost::system::error_code &Error, 
     return;
   }
 
-  linux::process_new_samples(Prof, EventBuf, EventBufSz, PageSz);
+  linux::process_new_samples(this, EventBuf, EventBufSz, PageSz);
 
   // schedule another read.
   schedule_signalfd_read();
@@ -121,8 +146,9 @@ void MonitorState::schedule_signalfd_read() {
     });
 }
 
-void MonitorState::poll_for_perf_data() {
-  PerfSignalService.poll(); // check for new data
+void MonitorState::poll_for_sample_data() {
+  if (SamplingEnabled)
+    PerfSignalService.poll(); // check for new data
 }
 
 } // end namespace halo

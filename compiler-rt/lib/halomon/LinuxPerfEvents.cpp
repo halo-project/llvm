@@ -41,7 +41,7 @@ namespace asio = boost::asio;
 namespace halo {
 namespace linux {
 
-void handle_perf_event(Profiler *Prof, perf_event_header *EvtHeader) {
+void handle_perf_event(MonitorState *MS, perf_event_header *EvtHeader) {
 
   if (EvtHeader->type == PERF_RECORD_SAMPLE) {
     struct SInfo {
@@ -73,7 +73,7 @@ void handle_perf_event(Profiler *Prof, perf_event_header *EvtHeader) {
     SInfo2 *SI2 = (SInfo2 *) &SI->ips[SI->nr];
     // SInfo3 *SI3 = (SInfo3 *) &SI2->lbr[SI2->bnr];
 
-    RawSample &Sample = Prof->newSample();
+    RawSample &Sample = MS->newSample();
 
     // find out whether this IP is exact or not.
     // auto IPSample = SI->header.misc & PERF_RECORD_MISC_EXACT_IP ?
@@ -111,7 +111,7 @@ void handle_perf_event(Profiler *Prof, perf_event_header *EvtHeader) {
 }
 
 // reads the ring-buffer of perf data from perf_events.
-void process_new_samples(Profiler *Prof, uint8_t *EventBuf, size_t EventBufSz, const size_t PageSz) {
+void process_new_samples(MonitorState *MS, uint8_t *EventBuf, size_t EventBufSz, const size_t PageSz) {
   perf_event_mmap_page *Header = (perf_event_mmap_page *) EventBuf;
   uint8_t *DataPtr = EventBuf + PageSz;
   const size_t NumEventBufPages = EventBufSz / PageSz;
@@ -178,7 +178,7 @@ void process_new_samples(Profiler *Prof, uint8_t *EventBuf, size_t EventBufSz, c
                 TmpBuffer.begin() + (DataPagesSize - Offset));
     }
 
-    handle_perf_event(Prof, (perf_event_header*) TmpBuffer.data());
+    handle_perf_event(MS, (perf_event_header*) TmpBuffer.data());
 
     TailProgress += EvtSz;
 
@@ -424,8 +424,20 @@ bool setup_sigio_fd(asio::io_service &PerfSignalService, asio::posix::stream_des
 }
 
 void start_sampling(int PerfFD) {
-  ioctl(PerfFD, PERF_EVENT_IOC_RESET, PERF_IOC_FLAG_GROUP);
-  ioctl(PerfFD, PERF_EVENT_IOC_ENABLE, PERF_IOC_FLAG_GROUP);
+  ioctl(PerfFD, PERF_EVENT_IOC_ENABLE);
+}
+
+void reset_sampling_counters(int PerfFD) {
+  ioctl(PerfFD, PERF_EVENT_IOC_RESET);
+}
+
+void stop_sampling(int PerfFD) {
+  ioctl(PerfFD, PERF_EVENT_IOC_DISABLE);
+}
+
+void set_sampling_period(int PerfFD, uint64_t Period) {
+  uint64_t NewPeriod = Period;
+  ioctl(PerfFD, PERF_EVENT_IOC_PERIOD, &NewPeriod);
 }
 
 // returns true if there was an error.

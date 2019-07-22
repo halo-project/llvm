@@ -14,7 +14,7 @@ void monitor_loop(MonitorState &M, std::atomic<bool> &ShutdownRequested) {
 
   while (!ShutdownRequested) {
 
-    M.poll_for_perf_data();
+    M.poll_for_sample_data();
 
     // M.Prof->dumpSamples();
 

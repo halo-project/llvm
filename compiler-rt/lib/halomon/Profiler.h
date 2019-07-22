@@ -98,17 +98,10 @@ private:
 class Profiler {
 public:
 
-  RawSample& newSample() {
-    RawSamples.emplace_back();
-    return RawSamples.back();
-  }
-
   void processSamples(Client*);
   void dumpSamples() const;
 
-  Profiler(std::string SelfBinPath)
-             : ProcessTriple(llvm::sys::getProcessTriple()),
-               HostCPUName(llvm::sys::getHostCPUName()) {
+  Profiler(std::string SelfBinPath) {
     CRI.loadObjFile(SelfBinPath);
 
     // CRI.dumpModules();
@@ -117,9 +110,6 @@ public:
   ~Profiler() {}
 
 private:
-
-  std::string ProcessTriple;
-  std::string HostCPUName;
 
   std::vector<RawSample> RawSamples;
 

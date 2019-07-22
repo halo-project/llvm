@@ -33,19 +33,37 @@ private:
   int SigFD; // TODO: do we need to close this, or will SigFD's destructor do that for us?
   signalfd_siginfo SigFDInfo;
 
+  // Boost.Asio methods to enqueue async reads etc.
   void handle_signalfd_read(const boost::system::error_code &Error, size_t BytesTransferred);
   void schedule_signalfd_read();
+
+  // information about this process
+  std::string ProcessTriple;
+  std::string HostCPUName;
+  std::string ExePath;
+
+  // profiling state
+  bool SamplingEnabled;
+  std::vector<RawSample> RawSamples;
 
 public:
   Profiler *Prof;
   Client *Conn;
 
-  // Implementations for these members are Linux specific, so look under
-  // LinuxPerfEvents.cpp
   MonitorState();
   ~MonitorState();
 
-  void poll_for_perf_data();
+  // methods related to sampling
+  void start_sampling();
+  void reset_sampling_counters();
+  void poll_for_sample_data(); // populates the RawSamples with new data.
+  void set_sampling_period(uint64_t period);
+  void stop_sampling();
+
+  RawSample& newSample() {
+    RawSamples.emplace_back();
+    return RawSamples.back();
+  }
 
 };
 
