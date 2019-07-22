@@ -73,7 +73,7 @@ void handle_perf_event(MonitorState *MS, perf_event_header *EvtHeader) {
     SInfo2 *SI2 = (SInfo2 *) &SI->ips[SI->nr];
     // SInfo3 *SI3 = (SInfo3 *) &SI2->lbr[SI2->bnr];
 
-    RawSample &Sample = MS->newSample();
+    pb::RawSample &Sample = MS->newSample();
 
     // find out whether this IP is exact or not.
     // auto IPSample = SI->header.misc & PERF_RECORD_MISC_EXACT_IP ?
@@ -97,7 +97,7 @@ void handle_perf_event(MonitorState *MS, perf_event_header *EvtHeader) {
       // in particular, everything other than from/to are part of a bitfield
       // of varying sizes.
       perf_branch_entry* BR = LBR + i;
-      BranchInfo *BI = Sample.add_branch();
+      pb::BranchInfo *BI = Sample.add_branch();
       BI->set_from(BR->from);
       BI->set_to(BR->to);
       BI->set_mispred((bool)BR->mispred);

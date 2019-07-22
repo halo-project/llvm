@@ -2,7 +2,7 @@
 
 #include "boost/asio.hpp"
 
-#include "RawSample.pb.h"
+#include "Messages.pb.h"
 #include "MessageKind.h"
 #include "Channel.h"
 

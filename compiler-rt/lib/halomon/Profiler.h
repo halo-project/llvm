@@ -20,26 +20,16 @@
 #define BOOST_ICL_USE_STATIC_BOUNDED_INTERVALS
 #include "boost/icl/interval_map.hpp"
 
-#include "RawSample.pb.h"
+#include "Messages.pb.h"
 
 namespace icl = boost::icl;
 
 namespace halo {
 
-// Ideally this would also contain information about blocks in the function.
-struct FunctionInfo {
-  std::string Name;
-  uint64_t VMStart;
-  uint64_t Size;
-
-  FunctionInfo(llvm::StringRef label, uint64_t vm_start, uint64_t size)
-              : Name(label.data()), VMStart(vm_start), Size(size) {}
-};
-
 
 struct CodeSectionInfo {
 private:
-  using CodeMap = icl::interval_map<uint64_t, std::shared_ptr<FunctionInfo>,
+  using CodeMap = icl::interval_map<uint64_t, std::shared_ptr<pb::FunctionInfo>,
                                     icl::partial_enricher>;
 public:
   CodeMap AddrMap;
@@ -62,7 +52,7 @@ public:
 
   ~CodeRegionInfo() {}
 
-  llvm::Optional<FunctionInfo*> lookup(uint64_t IP) const;
+  llvm::Optional<pb::FunctionInfo*> lookup(uint64_t IP) const;
   void loadObjFile(std::string Path);
 
   void dumpModules() const {
@@ -111,7 +101,7 @@ public:
 
 private:
 
-  std::vector<RawSample> RawSamples;
+  std::vector<pb::RawSample> RawSamples;
 
   CodeRegionInfo CRI;
 

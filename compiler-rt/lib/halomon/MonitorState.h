@@ -44,7 +44,7 @@ private:
 
   // profiling state
   bool SamplingEnabled;
-  std::vector<RawSample> RawSamples;
+  std::vector<pb::RawSample> RawSamples;
 
 public:
   Profiler *Prof;
@@ -60,7 +60,7 @@ public:
   void set_sampling_period(uint64_t period);
   void stop_sampling();
 
-  RawSample& newSample() {
+  pb::RawSample& newSample() {
     RawSamples.emplace_back();
     return RawSamples.back();
   }

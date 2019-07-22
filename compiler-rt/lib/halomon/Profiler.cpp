@@ -25,13 +25,13 @@ namespace halo {
 std::string getFunc(const CodeRegionInfo &CRI, uint64_t Addr) {
   auto MaybeInfo = CRI.lookup(Addr);
   if (MaybeInfo)
-    return MaybeInfo.getValue()->Name;
+    return MaybeInfo.getValue()->label();
   return "???";
 }
 
 void Profiler::processSamples(Client *Conn) {
 
-  for (const RawSample &Sample : RawSamples) {
+  for (const pb::RawSample &Sample : RawSamples) {
     Conn->Chan.send_proto(msg::RawSample, Sample);
   }
 
@@ -40,7 +40,7 @@ void Profiler::processSamples(Client *Conn) {
 
 void Profiler::dumpSamples() const {
   auto &out = std::cerr;
-  for (const RawSample &Sample : RawSamples) {
+  for (const pb::RawSample &Sample : RawSamples) {
     std::string AsJSON;
     proto::util::JsonPrintOptions Opts;
     Opts.add_whitespace = true;
@@ -127,9 +127,11 @@ void CodeRegionInfo::loadObjFile(std::string ObjPath) {
       uint64_t End = Start + Size;
       auto FuncRange = icl::right_open_interval<uint64_t>(Start, End);
 
-      auto FI = std::shared_ptr<FunctionInfo>(
-        new FunctionInfo(MaybeName.get(), Start, Size)
-      );
+      pb::FunctionInfo *newFI = new pb::FunctionInfo();
+      newFI->set_label(MaybeName.get());
+      newFI->set_start(Start);
+      newFI->set_size(Size);
+      auto FI = std::shared_ptr<pb::FunctionInfo>(newFI);
 
       AddrMap.insert(std::make_pair(FuncRange, std::move(FI)));
     }
@@ -159,7 +161,7 @@ void CodeRegionInfo::loadObjFile(std::string ObjPath) {
 }
 
 
-llvm::Optional<FunctionInfo*> CodeRegionInfo::lookup(uint64_t IP) const {
+llvm::Optional<pb::FunctionInfo*> CodeRegionInfo::lookup(uint64_t IP) const {
   size_t Idx = 0;
 
   // Typically we only have one VMA range that we're tracking,
