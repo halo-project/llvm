@@ -1,12 +1,11 @@
 #pragma once
 
 #include <boost/asio.hpp>
+#include <sys/signalfd.h>
 
 #ifndef BOOST_ASIO_HAS_POSIX_STREAM_DESCRIPTOR
   #error "Boost ASIO POSIX support required"
 #endif
-
-#include <sys/signalfd.h>
 
 #include "halomon/Profiler.h"
 #include "halomon/Client.h"

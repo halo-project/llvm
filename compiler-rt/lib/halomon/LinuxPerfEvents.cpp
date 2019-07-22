@@ -26,12 +26,11 @@
 
 #include <linux/version.h>
 
-#include "halomon/MonitorState.h"
-#include "halomon/Error.h"
-
 #if LINUX_VERSION_CODE < KERNEL_VERSION(3,4,0)
   #error "Kernel versions older than 3.4 are incompatible."
 #endif
+
+#include "halomon/LinuxPerfEvents.h"
 
 #define IS_POW_TWO(num)  (num) != 0 && (((num) & ((num) - 1)) == 0)
 
@@ -40,6 +39,7 @@ namespace asio = boost::asio;
 
 
 namespace halo {
+namespace linux {
 
 void handle_perf_event(Profiler *Prof, perf_event_header *EvtHeader) {
 
@@ -349,7 +349,7 @@ bool setup_perf_events(int &PerfFD, uint8_t* &EventBuf, size_t &EventBufSz, size
   int Ret = pfm_initialize();
   if (Ret != PFM_SUCCESS) {
     std::cerr << "Failed to initialize PFM library: " << pfm_strerror(Ret) << "\n";
-    return false;
+    return true;
   }
 
   //////////////
@@ -372,7 +372,7 @@ bool setup_perf_events(int &PerfFD, uint8_t* &EventBuf, size_t &EventBufSz, size
   PerfFD = get_perf_events_fd(EventName, EventPeriod,
                                   MyPID, -1, NumBufPages, PageSz);
   if (PerfFD == -1)
-    return false;
+    return true;
 
   // The mmap size should be 1+2^n pages, where the first page is a metadata
   // page (struct perf_event_mmap_page) that contains various bits of infor‐
@@ -385,7 +385,7 @@ bool setup_perf_events(int &PerfFD, uint8_t* &EventBuf, size_t &EventBufSz, size
       std::cerr << "Consider increasing /proc/sys/kernel/perf_event_mlock_kb or "
                    "allocating less memory for events buffer.\n";
     std::cerr << "Unable to map perf events pages: " << strerror(errno) << "\n";
-    return false;
+    return true;
   }
 
   // configure the file descriptor
@@ -393,7 +393,7 @@ bool setup_perf_events(int &PerfFD, uint8_t* &EventBuf, size_t &EventBufSz, size
   (void) fcntl(PerfFD, F_SETSIG, SIGIO);
   (void) fcntl(PerfFD, F_SETOWN, MyPID);
 
-  return true;
+  return false;
 }
 
 
@@ -409,148 +409,41 @@ bool setup_sigio_fd(asio::io_service &PerfSignalService, asio::posix::stream_des
 
   if (sigprocmask(SIG_BLOCK, &SigMask, NULL) == -1) {
     std::cerr << "Unable to block signals: " << strerror(errno) << "\n";
-    return false;
+    return true;
   }
 
   SigFD = signalfd(-1, &SigMask, 0);
   if (SigFD == -1) {
     std::cerr << "Unable create signal file handle: " << strerror(errno) << "\n";
-    return false;
+    return true;
   }
 
   // setup to read from the fd.
   SigSD = asio::posix::stream_descriptor(PerfSignalService, SigFD);
-  return true;
+  return false;
 }
 
-
-
-////////////////////////
-// Implementation of MonitorState members.
-
-
-
-MonitorState::MonitorState() : SigSD(PerfSignalService) {
-
-  // get the path to this process's executable.
-  std::vector<char> buf(PATH_MAX);
-  ssize_t len = readlink("/proc/self/exe", buf.data(), buf.size()-1);
-  if (len == -1) {
-    std::cerr << strerror(errno) << "\n";
-    fatal_error("path to process's executable not found.");
-  }
-  buf[len] = '\0'; // null terminate
-
-  Prof = new Profiler(buf.data());
-  Conn = new Client("localhost", "29000"); // TODO: get these from an env variable
-
-  if (!(Conn->connect())) {
-    exit(EXIT_FAILURE);
-  }
-
-  // setup the monitor's initial state.
-  if (!setup_perf_events(PerfFD, EventBuf, EventBufSz, PageSz) ||
-      !setup_sigio_fd(PerfSignalService, SigSD, SigFD) ) {
-    exit(EXIT_FAILURE);
-  }
-
-  ////////////////////
-  // finally, send commands to perf_event system to enable sampling
+void start_sampling(int PerfFD) {
   ioctl(PerfFD, PERF_EVENT_IOC_RESET, PERF_IOC_FLAG_GROUP);
   ioctl(PerfFD, PERF_EVENT_IOC_ENABLE, PERF_IOC_FLAG_GROUP);
-
-  // kick-off the chain of async read jobs for the signal file descriptor.
-  schedule_signalfd_read();
 }
 
-MonitorState::~MonitorState() {
-  // clean-up
-  delete Prof;
-  delete Conn;
-
+// returns true if there was an error.
+bool close_perf_events(int PerfFD, uint8_t* EventBuf, size_t EventBufSz) {
   int ret = munmap(EventBuf, EventBufSz);
   if (ret) {
     std::cerr << "Failed to unmap event buffer: " << strerror(errno) << "\n";
-    exit(EXIT_FAILURE);
+    return true;
   }
 
   ret = close(PerfFD);
   if (ret) {
     std::cerr << "Failed to close perf_event file descriptor: " << strerror(errno) << "\n";
-    exit(EXIT_FAILURE);
+    return true;
   }
+
+  return false;
 }
 
-void MonitorState::handle_signalfd_read(const boost::system::error_code &Error, size_t BytesTransferred) {
-  bool IOError = false;
-  if (Error) {
-    std::cerr << "Error reading from signal file handle: " << Error.message() << "\n";
-    IOError = true;
-  }
-
-  if (BytesTransferred != sizeof(SigFDInfo)) {
-    std::cerr << "Read the wrong the number of bytes from the signal file handle: "
-                 "read " << BytesTransferred << " bytes\n";
-    IOError = true;
-  }
-
-  // TODO: convert this into a debug-mode assert.
-  if (SigFDInfo.ssi_signo != SIGIO) {
-    std::cerr << "Unexpected signal recieved on signal file handle: "
-              << SigFDInfo.ssi_signo << "\n";
-    IOError = true;
-  }
-
-
-  // SIGIO/SIGPOLL  (the two names are synonyms on Linux) fills in si_band
-  //  and si_fd.  The si_band event is a bit mask containing the same  val‐
-  //  ues  as  are filled in the revents field by poll(2).  The si_fd field
-  //  indicates the file descriptor for which the I/O event  occurred;  for
-  //  further details, see the description of F_SETSIG in fcntl(2).
-  //
-  //  See 'sigaction' man page for more information.
-
-
-
-  // TODO: is it actually an error if we get a SIGIO for a different FD?
-  // What if the process is doing IO? How do we forward the interrupt to
-  // the right place? What should we do?
-  if (SigFDInfo.ssi_fd != PerfFD) {
-    std::cerr << "Unexpected file descriptor associated with SIGIO interrupt.\n";
-    IOError = true;
-  }
-
-  // TODO: it's possibly worth checking ssi_code field to find out what in particular
-  // is going on in this SIGIO.
-  //  The following values can be placed in si_code for a SIGIO/SIGPOLL  signal:
-  //
-  // POLL_IN
-  //        Data input available.
-  // .....
-  // see 'sigaction' man page
-
-  if (IOError) {
-    // stop the service and don't enqueue another read.
-    PerfSignalService.stop(); // TODO: is a stop command right if we only poll?
-    return;
-  }
-
-  process_new_samples(Prof, EventBuf, EventBufSz, PageSz);
-
-  // schedule another read.
-  schedule_signalfd_read();
-}
-
-void MonitorState::schedule_signalfd_read() {
-  // read a signalfd_siginfo from the file descriptor
-  asio::async_read(SigSD, asio::buffer(&SigFDInfo, sizeof(SigFDInfo)),
-    [&](const boost::system::error_code &Error, size_t BytesTransferred) {
-      handle_signalfd_read(Error, BytesTransferred);
-    });
-}
-
-void MonitorState::poll_for_perf_data() {
-  PerfSignalService.poll(); // check for new data
-}
-
+} // end namespace linux
 } // end namespace halo

@@ -35,21 +35,11 @@ endif()
 file(GLOB PROTO_FILES ${HALO_NET_DIR}/*.proto)
 protobuf_generate_cpp(PROTO_SRCS PROTO_HDRS ${PROTO_FILES})
 
+# enumerate files in our local dir
+file(GLOB HALOMON_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/*.h)
+file(GLOB HALOMON_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/*.cpp)
+
 include_directories(.. ${HALO_NET_DIR} ${Boost_INCLUDE_DIR} ${Protobuf_INCLUDE_DIR} ${LLVM_INCLUDE_DIRS})
-
-set(HALOMON_HEADERS
-      Error.h
-      MonitorState.h
-      Profiler.h
-      Client.h
-    )
-
-set(HALOMON_SOURCES
-      Error.cpp
-      LinuxPerfEvents.cpp
-      Monitor.cpp
-      Profiler.cpp
-    )
 
 add_compiler_rt_runtime(clang_rt.halomon
   SHARED
