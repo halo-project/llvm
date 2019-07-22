@@ -37,11 +37,6 @@ private:
   void handle_signalfd_read(const boost::system::error_code &Error, size_t BytesTransferred);
   void schedule_signalfd_read();
 
-  // information about this process
-  std::string ProcessTriple;
-  std::string HostCPUName;
-  std::string ExePath;
-
   // profiling state
   bool SamplingEnabled;
   std::vector<pb::RawSample> RawSamples;
@@ -49,6 +44,9 @@ private:
 public:
   Profiler *Prof;
   Client *Conn;
+
+  // information about this process
+  std::string ExePath;
 
   MonitorState();
   ~MonitorState();

@@ -3,16 +3,12 @@
 #include "halomon/LinuxPerfEvents.h"
 #include "halomon/Error.h"
 
-#include "llvm/Support/Host.h"
-
 
 namespace asio = boost::asio;
 
 namespace halo {
 
 MonitorState::MonitorState() : SigSD(PerfSignalService),
-                               ProcessTriple(llvm::sys::getProcessTriple()),
-                               HostCPUName(llvm::sys::getHostCPUName()),
                                SamplingEnabled(false) {
 
   // get the path to this process's executable.
@@ -39,12 +35,7 @@ MonitorState::MonitorState() : SigSD(PerfSignalService),
   // kick-off the chain of async read jobs for the signal file descriptor.
   schedule_signalfd_read();
 
-  // Connect to the optimization server.
   Conn = new Client("localhost", "29000"); // TODO: get these from an env variable
-
-  if (!(Conn->connect())) {
-    exit(EXIT_FAILURE);
-  }
 }
 
 MonitorState::~MonitorState() {

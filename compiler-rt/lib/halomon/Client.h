@@ -32,7 +32,7 @@ public:
     Chan(Socket) { }
 
   // returns true if connection established.
-  bool connect() {
+  bool connect(pb::ClientEnroll &CE) {
     boost::system::error_code Err;
     ip::tcp::resolver::iterator I =
         asio::connect(Socket, Resolver.resolve(Query), Err);
@@ -44,6 +44,9 @@ public:
       std::cerr << "Connected to: " << I->endpoint() << "\n";
       return true;
     }
+
+    // enroll the client.
+    Chan.send_proto(msg::ClientEnroll, CE);
   }
 
 };

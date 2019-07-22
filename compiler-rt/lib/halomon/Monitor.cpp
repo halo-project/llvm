@@ -3,6 +3,7 @@
 #include <iostream>
 
 #include "halomon/MonitorState.h"
+#include "llvm/Support/Host.h"
 
 namespace halo {
 
@@ -11,6 +12,22 @@ namespace halo {
 void monitor_loop(MonitorState &M, std::atomic<bool> &ShutdownRequested) {
   /////////
   // Setup
+
+  {
+    pb::ClientEnroll CE;
+    CE.set_exe_path(M.ExePath);
+    CE.set_process_triple(llvm::sys::getProcessTriple());
+    CE.set_host_cpu(llvm::sys::getHostCPUName());
+    CE.set_build_cmd("Hello!");
+
+    // try to establish a connection with the optimization server.
+    while (!ShutdownRequested && !M.Conn->connect(CE)) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    }
+  }
+
+  //////////////////
+  // Event Loop
 
   while (!ShutdownRequested) {
 
