@@ -8,6 +8,38 @@ namespace asio = boost::asio;
 
 namespace halo {
 
+void MonitorState::server_listen_loop() {
+  Conn->Chan.async_recv([this](msg::Kind Kind, std::vector<char>& Body) {
+    std::cerr << "got msg ID " << (uint32_t) Kind << "\n";
+
+    switch (Kind) {
+      case msg::StartSampling: {
+        start_sampling();
+      } break;
+
+      case msg::StopSampling: {
+        stop_sampling();
+      } break;
+
+      default: {
+        std::cerr << "recieved unknown message from server: #"
+                  << (uint32_t) Kind << "\n";
+      } break;
+    };
+
+    server_listen_loop();
+  });
+}
+
+void MonitorState::send_samples() {
+  if (SamplingEnabled) {
+    for (const pb::RawSample &Sample : RawSamples) {
+      Conn->Chan.send_proto(msg::RawSample, Sample);
+    }
+    RawSamples.clear();
+  }
+}
+
 MonitorState::MonitorState() : SigSD(PerfSignalService),
                                SamplingEnabled(false) {
 
@@ -140,6 +172,10 @@ void MonitorState::schedule_signalfd_read() {
 void MonitorState::poll_for_sample_data() {
   if (SamplingEnabled)
     PerfSignalService.poll(); // check for new data
+}
+
+void MonitorState::check_msgs() {
+  Conn->poll();
 }
 
 } // end namespace halo

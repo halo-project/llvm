@@ -10,32 +10,49 @@ namespace halo {
 ////////////////////////////////////////////////
 // Main loop of the Halo Monitor
 void monitor_loop(MonitorState &M, std::atomic<bool> &ShutdownRequested) {
-  /////////
+  /////////////////
   // Setup
 
+  Client* C = M.Conn;
+
   {
+    // try to establish a connection with the optimization server.
+    while (!C->connect()) {
+      if (ShutdownRequested)
+        return;
+
+      std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    }
+
+    // start listening for messages
+    M.server_listen_loop();
+
+    // enroll ourselves with the server.
     pb::ClientEnroll CE;
     CE.set_exe_path(M.ExePath);
     CE.set_process_triple(llvm::sys::getProcessTriple());
     CE.set_host_cpu(llvm::sys::getHostCPUName());
     CE.set_build_cmd("Hello!");
 
-    // try to establish a connection with the optimization server.
-    while (!ShutdownRequested && !M.Conn->connect(CE)) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    }
+    C->Chan.send_proto(msg::ClientEnroll, CE);
   }
+
 
   //////////////////
   // Event Loop
 
   while (!ShutdownRequested) {
 
+    M.check_msgs();
+
     M.poll_for_sample_data();
+    M.send_samples();
 
     // M.Prof->dumpSamples();
 
-    M.Prof->processSamples(M.Conn);
+    // M.Prof->processSamples(M.Conn);
+
+
 
     // TODO: communicate with optimization server and perform code replacement
     // experiments as needed.

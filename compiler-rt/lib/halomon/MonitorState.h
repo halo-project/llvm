@@ -55,8 +55,13 @@ public:
   void start_sampling();
   void reset_sampling_counters();
   void poll_for_sample_data(); // populates the RawSamples with new data.
+  void send_samples();
   void set_sampling_period(uint64_t period);
   void stop_sampling();
+
+  // methods related to client-server communication
+  void server_listen_loop();
+  void check_msgs();
 
   pb::RawSample& newSample() {
     RawSamples.emplace_back();

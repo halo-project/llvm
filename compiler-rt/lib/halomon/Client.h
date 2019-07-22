@@ -20,6 +20,7 @@ private:
   ip::tcp::resolver Resolver;
   ip::tcp::socket Socket;
   ip::tcp::resolver::query Query;
+  ip::tcp::endpoint Endpoint;
 
 public:
   Channel Chan;
@@ -29,24 +30,31 @@ public:
     Resolver(IOService),
     Socket(IOService),
     Query(server_hostname, port),
-    Chan(Socket) { }
+    Endpoint(*Resolver.resolve(Query)),
+    Chan(Socket) {}
+
+  // returns number of handlers that were run
+  size_t poll() {
+    return IOService.poll();
+  }
 
   // returns true if connection established.
-  bool connect(pb::ClientEnroll &CE) {
+  bool connect() {
     boost::system::error_code Err;
-    ip::tcp::resolver::iterator I =
-        asio::connect(Socket, Resolver.resolve(Query), Err);
+    Socket.connect(Endpoint, Err);
 
     if (Err) {
       std::cerr << "Failed to connect: " << Err.message() << "\n";
+      // we have to close the socket manually
+      Socket.close();
       return false;
     } else {
-      std::cerr << "Connected to: " << I->endpoint() << "\n";
+      std::cerr << "Connected to: " << Endpoint << "\n";
       return true;
     }
 
-    // enroll the client.
-    Chan.send_proto(msg::ClientEnroll, CE);
+    asio::socket_base::keep_alive option(true);
+    Socket.set_option(option);
   }
 
 };

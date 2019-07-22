@@ -31,11 +31,7 @@ std::string getFunc(const CodeRegionInfo &CRI, uint64_t Addr) {
 
 void Profiler::processSamples(Client *Conn) {
 
-  for (const pb::RawSample &Sample : RawSamples) {
-    Conn->Chan.send_proto(msg::RawSample, Sample);
-  }
-
-  RawSamples.clear();
+  
 }
 
 void Profiler::dumpSamples() const {

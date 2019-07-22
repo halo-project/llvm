@@ -424,15 +424,15 @@ bool setup_sigio_fd(asio::io_service &PerfSignalService, asio::posix::stream_des
 }
 
 void start_sampling(int PerfFD) {
-  ioctl(PerfFD, PERF_EVENT_IOC_ENABLE);
+  ioctl(PerfFD, PERF_EVENT_IOC_ENABLE, PERF_IOC_FLAG_GROUP);
 }
 
 void reset_sampling_counters(int PerfFD) {
-  ioctl(PerfFD, PERF_EVENT_IOC_RESET);
+  ioctl(PerfFD, PERF_EVENT_IOC_RESET, PERF_IOC_FLAG_GROUP);
 }
 
 void stop_sampling(int PerfFD) {
-  ioctl(PerfFD, PERF_EVENT_IOC_DISABLE);
+  ioctl(PerfFD, PERF_EVENT_IOC_DISABLE, PERF_IOC_FLAG_GROUP);
 }
 
 void set_sampling_period(int PerfFD, uint64_t Period) {
