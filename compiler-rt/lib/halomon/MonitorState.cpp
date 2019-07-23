@@ -27,6 +27,10 @@ void MonitorState::server_listen_loop() {
     std::cerr << "got msg ID " << (uint32_t) Kind << "\n";
 
     switch (Kind) {
+      case msg::Shutdown: {
+        std::cerr << "server session terminated.\n";
+      } return; // NOTE: the return.
+
       case msg::StartSampling: {
         start_sampling();
       } break;
