@@ -31,6 +31,7 @@
 #endif
 
 #include "halomon/LinuxPerfEvents.h"
+#include "halomon/Error.h"
 
 #define IS_POW_TWO(num)  (num) != 0 && (((num) & ((num) - 1)) == 0)
 
@@ -463,7 +464,7 @@ std::string get_self_exe() {
   ssize_t len = readlink("/proc/self/exe", buf.data(), buf.size()-1);
   if (len == -1) {
     std::cerr << strerror(errno) << "\n";
-    fatal_error("path to process's executable not found.");
+    halo::fatal_error("path to process's executable not found.");
   }
   buf[len] = '\0'; // null terminate
   return std::string(buf.data());
