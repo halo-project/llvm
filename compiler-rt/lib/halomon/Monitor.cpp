@@ -29,10 +29,9 @@ void monitor_loop(MonitorState &M, std::atomic<bool> &ShutdownRequested) {
 
     // enroll ourselves with the server.
     pb::ClientEnroll CE;
-    CE.set_exe_path(M.ExePath);
     CE.set_process_triple(llvm::sys::getProcessTriple());
     CE.set_host_cpu(llvm::sys::getHostCPUName());
-    CE.set_build_cmd("Hello!");
+    M.gather_module_info(M.ExePath, CE.mutable_module());
 
     C->Chan.send_proto(msg::ClientEnroll, CE);
   }

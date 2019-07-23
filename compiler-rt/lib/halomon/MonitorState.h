@@ -22,7 +22,7 @@ namespace halo {
 // This is effectively the global state of the client-side Halo system.
 class MonitorState {
 private:
-  int PerfFD;       // a file descriptor
+  int PerfFD;       // a file descriptor used to control the sampling system
   uint8_t* EventBuf;   // from mmapping the perf file descriptor.
   size_t EventBufSz;
   size_t PageSz;
@@ -33,11 +33,11 @@ private:
   int SigFD; // TODO: do we need to close this, or will SigFD's destructor do that for us?
   signalfd_siginfo SigFDInfo;
 
-  // Boost.Asio methods to enqueue async reads etc.
+  // Boost.Asio methods to enqueue async reads etc, for reading sampling info.
   void handle_signalfd_read(const boost::system::error_code &Error, size_t BytesTransferred);
   void schedule_signalfd_read();
 
-  // profiling state
+  // data members related to sampling state
   bool SamplingEnabled;
   std::vector<pb::RawSample> RawSamples;
 
@@ -58,6 +58,8 @@ public:
   void send_samples();
   void set_sampling_period(uint64_t period);
   void stop_sampling();
+
+  void gather_module_info(std::string ObjPath, pb::ModuleInfo*);
 
   // methods related to client-server communication
   void server_listen_loop();

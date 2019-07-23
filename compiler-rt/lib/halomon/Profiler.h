@@ -87,8 +87,6 @@ private:
 
 class Profiler {
 public:
-
-  void processSamples(Client*);
   void dumpSamples() const;
 
   Profiler(std::string SelfBinPath) {

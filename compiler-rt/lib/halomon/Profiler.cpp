@@ -29,43 +29,6 @@ std::string getFunc(const CodeRegionInfo &CRI, uint64_t Addr) {
   return "???";
 }
 
-void Profiler::processSamples(Client *Conn) {
-
-  
-}
-
-void Profiler::dumpSamples() const {
-  auto &out = std::cerr;
-  for (const pb::RawSample &Sample : RawSamples) {
-    std::string AsJSON;
-    proto::util::JsonPrintOptions Opts;
-    Opts.add_whitespace = true;
-    proto::util::MessageToJsonString(Sample, &AsJSON, Opts);
-    out << AsJSON << "\n---\n";
-
-    out << "CallChain sample len: " << Sample.call_context_size() << "\n";
-    for (const auto &RetAddr : Sample.call_context()) {
-      out << "\t\t " << getFunc(CRI, RetAddr) << " @ 0x"
-                << std::hex << RetAddr << std::dec << "\n";
-    }
-
-    out << "LBR sample len: " << Sample.branch_size() << "\n";
-    uint64_t Missed = 0, Predicted = 0, Total = 0;
-    for (const auto &BR : Sample.branch()) {
-      Total++;
-      if (BR.mispred()) Missed++;
-      if (BR.predicted()) Predicted++;
-
-      out << std::hex << "\t\t"
-        << getFunc(CRI, BR.from()) << " @ 0x" << BR.from() << " --> "
-        << getFunc(CRI, BR.to())   << " @ 0x" << BR.to()
-        << ", mispred = " << BR.mispred()
-        << ", pred = " << BR.predicted()
-        << std::dec << "\n";
-    }
-  }
-}
-
 void CodeRegionInfo::loadObjFile(std::string ObjPath) {
 
   // create new function-offset map

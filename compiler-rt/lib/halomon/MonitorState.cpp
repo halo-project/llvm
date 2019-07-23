@@ -3,8 +3,22 @@
 #include "halomon/LinuxPerfEvents.h"
 #include "halomon/Error.h"
 
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IRReader/IRReader.h"
+#include "llvm/Object/ELFObjectFile.h"
+#include "llvm/Object/ObjectFile.h"
+#include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/SourceMgr.h"
+#include "sanitizer_common/sanitizer_procmaps.h"
+
+#include <cassert>
+#include <elf.h>
+
 
 namespace asio = boost::asio;
+namespace san = __sanitizer;
+namespace object = llvm::object;
 
 namespace halo {
 
@@ -31,6 +45,91 @@ void MonitorState::server_listen_loop() {
   });
 }
 
+void MonitorState::gather_module_info(std::string ObjPath, pb::ModuleInfo *MI) {
+  MI->set_obj_path(ObjPath);
+
+  ///////////
+  // initialize the code map
+
+  auto ResOrErr = object::ObjectFile::createObjectFile(ObjPath);
+  if (!ResOrErr) halo::fatal_error("error opening object file!");
+
+  object::OwningBinary<object::ObjectFile> OB = std::move(ResOrErr.get());
+  object::ObjectFile *Obj = OB.getBinary();
+
+  // find the range of this object file in the process.
+  san::uptr VMAStart, VMAEnd;
+  bool res = san::GetCodeRangeForFile(ObjPath.data(), &VMAStart, &VMAEnd);
+  if (!res) halo::fatal_error("unable to read proc map for VMA range");
+
+  uint64_t Delta = VMAStart; // Assume PIE is enabled.
+  if (auto *ELF = llvm::dyn_cast<object::ELFObjectFileBase>(Obj)) {
+    // https://stackoverflow.com/questions/30426383/what-does-pie-do-exactly#30426603
+    if (ELF->getEType() == ET_EXEC) {
+      Delta = 0; // This is a non-PIE executable.
+    }
+  }
+
+  MI->set_vma_start(VMAStart);
+  MI->set_vma_end(VMAEnd);
+  MI->set_vma_delta(Delta);
+
+  // Gather function information from the object file
+  for (const object::SymbolRef &Symb : Obj->symbols()) {
+    auto MaybeType = Symb.getType();
+
+    if (!MaybeType || MaybeType.get() != object::SymbolRef::Type::ST_Function)
+      continue;
+
+    auto MaybeName = Symb.getName();
+    auto MaybeAddr = Symb.getAddress();
+    uint64_t Size = Symb.getCommonSize();
+    if (MaybeName && MaybeAddr && Size > 0) {
+      uint64_t Start = MaybeAddr.get();
+      assert(Size > 0 && "size 0 function in object file?");
+
+      pb::FunctionInfo *FI = MI->add_funcs();
+      FI->set_label(MaybeName.get());
+      FI->set_start(Start);
+      FI->set_size(Size);
+    }
+  }
+
+  // Look for various sections in the object file
+  for (const object::SectionRef &Sec : Obj->sections()) {
+
+    if (Sec.isBitcode()) {
+      llvm::Expected<llvm::StringRef> MaybeData = Sec.getContents();
+      if (!MaybeData) halo::fatal_error("unable get bitcode section contents.");
+
+      llvm::SMDiagnostic Err;
+      auto MemBuf = llvm::MemoryBuffer::getMemBuffer(MaybeData.get());
+
+      // TODO: add bitcode to the module info.
+
+      continue;
+    }
+
+    llvm::StringRef Name;
+    Sec.getName(Name);
+
+    if (Name == ".llvmcmd") {
+      llvm::Expected<llvm::StringRef> MaybeData = Sec.getContents();
+      if (!MaybeData) halo::fatal_error("unable get cmd section contents.");
+
+      // each space is represented by a NULL character
+      llvm::SmallVector<llvm::StringRef, 10> Cmds;
+      MaybeData.get().split(Cmds, '\0', /*MaxSplit*/ -1, /*KeepEmpty*/ false);
+
+      for (auto &Flag : Cmds)
+        MI->add_build_flags(Flag.str());
+    }
+
+  }
+
+
+}
+
 void MonitorState::send_samples() {
   if (SamplingEnabled) {
     for (const pb::RawSample &Sample : RawSamples) {
@@ -39,6 +138,40 @@ void MonitorState::send_samples() {
     RawSamples.clear();
   }
 }
+
+// NOTE: this code should be moved to the halo server
+//
+// void MonitorState::dump_samples() const {
+//   auto &out = std::cerr;
+//   for (const pb::RawSample &Sample : RawSamples) {
+//     std::string AsJSON;
+//     proto::util::JsonPrintOptions Opts;
+//     Opts.add_whitespace = true;
+//     proto::util::MessageToJsonString(Sample, &AsJSON, Opts);
+//     out << AsJSON << "\n---\n";
+//
+//     out << "CallChain sample len: " << Sample.call_context_size() << "\n";
+//     for (const auto &RetAddr : Sample.call_context()) {
+//       out << "\t\t " << getFunc(CRI, RetAddr) << " @ 0x"
+//                 << std::hex << RetAddr << std::dec << "\n";
+//     }
+//
+//     out << "LBR sample len: " << Sample.branch_size() << "\n";
+//     uint64_t Missed = 0, Predicted = 0, Total = 0;
+//     for (const auto &BR : Sample.branch()) {
+//       Total++;
+//       if (BR.mispred()) Missed++;
+//       if (BR.predicted()) Predicted++;
+//
+//       out << std::hex << "\t\t"
+//         << getFunc(CRI, BR.from()) << " @ 0x" << BR.from() << " --> "
+//         << getFunc(CRI, BR.to())   << " @ 0x" << BR.to()
+//         << ", mispred = " << BR.mispred()
+//         << ", pred = " << BR.predicted()
+//         << std::dec << "\n";
+//     }
+//   }
+// }
 
 MonitorState::MonitorState() : SigSD(PerfSignalService),
                                SamplingEnabled(false) {
