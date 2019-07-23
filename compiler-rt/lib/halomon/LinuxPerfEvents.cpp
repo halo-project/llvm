@@ -457,5 +457,17 @@ bool close_perf_events(int PerfFD, uint8_t* EventBuf, size_t EventBufSz) {
   return false;
 }
 
+std::string get_self_exe() {
+  // get the path to this process's executable.
+  std::vector<char> buf(PATH_MAX);
+  ssize_t len = readlink("/proc/self/exe", buf.data(), buf.size()-1);
+  if (len == -1) {
+    std::cerr << strerror(errno) << "\n";
+    fatal_error("path to process's executable not found.");
+  }
+  buf[len] = '\0'; // null terminate
+  return std::string(buf.data());
+}
+
 } // end namespace linux
 } // end namespace halo

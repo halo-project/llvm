@@ -7,7 +7,6 @@
   #error "Boost ASIO POSIX support required"
 #endif
 
-#include "halomon/Profiler.h"
 #include "halomon/Client.h"
 
 // NOTE: we are Linux only right now, but the public interface
@@ -42,8 +41,7 @@ private:
   std::vector<pb::RawSample> RawSamples;
 
 public:
-  Profiler *Prof;
-  Client *Conn;
+  Client Net;
 
   // information about this process
   std::string ExePath;

@@ -13,11 +13,11 @@ void monitor_loop(MonitorState &M, std::atomic<bool> &ShutdownRequested) {
   /////////////////
   // Setup
 
-  Client* C = M.Conn;
+  Client &C = M.Net;
 
   {
     // try to establish a connection with the optimization server.
-    while (!C->connect()) {
+    while (!C.connect()) {
       if (ShutdownRequested)
         return;
 
@@ -33,7 +33,7 @@ void monitor_loop(MonitorState &M, std::atomic<bool> &ShutdownRequested) {
     CE.set_host_cpu(llvm::sys::getHostCPUName());
     M.gather_module_info(M.ExePath, CE.mutable_module());
 
-    C->Chan.send_proto(msg::ClientEnroll, CE);
+    C.Chan.send_proto(msg::ClientEnroll, CE);
   }
 
 

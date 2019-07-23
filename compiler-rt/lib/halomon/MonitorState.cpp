@@ -23,7 +23,7 @@ namespace object = llvm::object;
 namespace halo {
 
 void MonitorState::server_listen_loop() {
-  Conn->Chan.async_recv([this](msg::Kind Kind, std::vector<char>& Body) {
+  Net.Chan.async_recv([this](msg::Kind Kind, std::vector<char>& Body) {
     std::cerr << "got msg ID " << (uint32_t) Kind << "\n";
 
     switch (Kind) {
@@ -97,19 +97,15 @@ void MonitorState::gather_module_info(std::string ObjPath, pb::ModuleInfo *MI) {
 
   // Look for various sections in the object file
   for (const object::SectionRef &Sec : Obj->sections()) {
-
     if (Sec.isBitcode()) {
       llvm::Expected<llvm::StringRef> MaybeData = Sec.getContents();
       if (!MaybeData) halo::fatal_error("unable get bitcode section contents.");
 
-      llvm::SMDiagnostic Err;
-      auto MemBuf = llvm::MemoryBuffer::getMemBuffer(MaybeData.get());
-
-      // TODO: add bitcode to the module info.
-
+      MI->set_bitcode(MaybeData.get().str());
       continue;
     }
 
+    // test by section name
     llvm::StringRef Name;
     Sec.getName(Name);
 
@@ -118,80 +114,35 @@ void MonitorState::gather_module_info(std::string ObjPath, pb::ModuleInfo *MI) {
       if (!MaybeData) halo::fatal_error("unable get cmd section contents.");
 
       // each space is represented by a NULL character
-      llvm::SmallVector<llvm::StringRef, 10> Cmds;
+      llvm::SmallVector<llvm::StringRef, 128> Cmds;
       MaybeData.get().split(Cmds, '\0', /*MaxSplit*/ -1, /*KeepEmpty*/ false);
 
       for (auto &Flag : Cmds)
         MI->add_build_flags(Flag.str());
     }
-
   }
-
-
 }
 
 void MonitorState::send_samples() {
   if (SamplingEnabled) {
     for (const pb::RawSample &Sample : RawSamples) {
-      Conn->Chan.send_proto(msg::RawSample, Sample);
+      Net.Chan.send_proto(msg::RawSample, Sample);
     }
     RawSamples.clear();
   }
 }
 
-// NOTE: this code should be moved to the halo server
-//
-// void MonitorState::dump_samples() const {
-//   auto &out = std::cerr;
-//   for (const pb::RawSample &Sample : RawSamples) {
-//     std::string AsJSON;
-//     proto::util::JsonPrintOptions Opts;
-//     Opts.add_whitespace = true;
-//     proto::util::MessageToJsonString(Sample, &AsJSON, Opts);
-//     out << AsJSON << "\n---\n";
-//
-//     out << "CallChain sample len: " << Sample.call_context_size() << "\n";
-//     for (const auto &RetAddr : Sample.call_context()) {
-//       out << "\t\t " << getFunc(CRI, RetAddr) << " @ 0x"
-//                 << std::hex << RetAddr << std::dec << "\n";
-//     }
-//
-//     out << "LBR sample len: " << Sample.branch_size() << "\n";
-//     uint64_t Missed = 0, Predicted = 0, Total = 0;
-//     for (const auto &BR : Sample.branch()) {
-//       Total++;
-//       if (BR.mispred()) Missed++;
-//       if (BR.predicted()) Predicted++;
-//
-//       out << std::hex << "\t\t"
-//         << getFunc(CRI, BR.from()) << " @ 0x" << BR.from() << " --> "
-//         << getFunc(CRI, BR.to())   << " @ 0x" << BR.to()
-//         << ", mispred = " << BR.mispred()
-//         << ", pred = " << BR.predicted()
-//         << std::dec << "\n";
-//     }
-//   }
-// }
-
 MonitorState::MonitorState() : SigSD(PerfSignalService),
-                               SamplingEnabled(false) {
-
-  // get the path to this process's executable.
-  std::vector<char> buf(PATH_MAX);
-  ssize_t len = readlink("/proc/self/exe", buf.data(), buf.size()-1);
-  if (len == -1) {
-    std::cerr << strerror(errno) << "\n";
-    fatal_error("path to process's executable not found.");
-  }
-  buf[len] = '\0'; // null terminate
-  ExePath = std::string(buf.data());
-
-  Prof = new Profiler(buf.data());
+                               SamplingEnabled(false),
+                               // TODO: get the server addr from an env variable.
+                               Net("localhost", "29000"),
+                               ExePath(linux::get_self_exe())
+                               {
 
   // setup the monitor's initial state.
   // TODO: using a struct to hold the Linux Perf Events state with proper
   // destructor etc would be a lot nicer to do. Mainly the PerfFD and EventBuf.
-  // and their setup, etc.
+  // and their setup, etc. It's a bit of a pain so I've left it alone for now.
   if (linux::setup_perf_events(PerfFD, EventBuf, EventBufSz, PageSz) ||
       linux::setup_sigio_fd(PerfSignalService, SigSD, SigFD) ) {
     exit(EXIT_FAILURE);
@@ -199,15 +150,10 @@ MonitorState::MonitorState() : SigSD(PerfSignalService),
 
   // kick-off the chain of async read jobs for the signal file descriptor.
   schedule_signalfd_read();
-
-  Conn = new Client("localhost", "29000"); // TODO: get these from an env variable
 }
 
 MonitorState::~MonitorState() {
   // clean-up
-  delete Prof;
-  delete Conn;
-
   linux::close_perf_events(PerfFD, EventBuf, EventBufSz);
 }
 
@@ -308,7 +254,7 @@ void MonitorState::poll_for_sample_data() {
 }
 
 void MonitorState::check_msgs() {
-  Conn->poll();
+  Net.poll();
 }
 
 } // end namespace halo

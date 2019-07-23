@@ -20,5 +20,8 @@ namespace halo {
     void reset_sampling_counters(int PerfFD);
     void stop_sampling(int PerfFD);
     void set_sampling_period(int PerfFD, uint64_t Period);
+
+    // obtains the path to the currently executing process's executable.
+    std::string get_self_exe();
   }
 }
