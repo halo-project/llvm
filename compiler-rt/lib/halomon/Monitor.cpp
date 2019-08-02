@@ -5,13 +5,31 @@
 #include "halomon/MonitorState.h"
 #include "llvm/Support/Host.h"
 
+#include "../../include/xray/xray_interface.h"
+
 namespace halo {
+
+void handler(int32_t ID, XRayEntryType Type) {
+  std::cout << "Function " << ID << " performed " << Type << "\n";
+}
 
 ////////////////////////////////////////////////
 // Main loop of the Halo Monitor
 void monitor_loop(MonitorState &M, std::atomic<bool> &ShutdownRequested) {
   /////////////////
   // Setup
+
+  __xray_init();
+  __xray_set_handler(handler);
+  XRayPatchingStatus Stat = __xray_patch();
+
+  if (Stat == NOT_INITIALIZED)
+    std::cout << "XRay not initialized.\n";
+  else if (Stat == FAILED)
+    std::cout << "XRay patching failed.\n";
+
+////////////////////////////////////////////////////
+
 
   Client &C = M.Net;
 

@@ -4211,6 +4211,9 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     CmdArgs.push_back("-fhalo");
     CmdArgs.push_back("-fembed-bitcode=all");
     CmdArgs.push_back("-disable-O0-optnone");
+    CmdArgs.push_back("-fxray-instrument");
+    CmdArgs.push_back("-fnoxray-link-deps");
+    CmdArgs.push_back("-fxray-instruction-threshold=1");
   }
 
   // NVPTX doesn't support PGO or coverage. There's no runtime support for

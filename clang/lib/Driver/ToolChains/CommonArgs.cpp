@@ -791,6 +791,17 @@ void tools::addHaloRuntime(const ToolChain &TC, const llvm::opt::ArgList &Args,
       CmdArgs.push_back("-rpath");
       CmdArgs.push_back(Args.MakeArgString(CandidateRPath.c_str()));
     }
+
+    // Declare that the weak symbols defined by XRay are undefined.
+    // This is needed to ensure these symbols are resolved when
+    // linking the Halo shared lib into the executable.
+    //
+    // We need to do this manually since XRay isn't covered
+    // by `collectSanitizerRuntimes`
+    CmdArgs.push_back("-u"); CmdArgs.push_back("__start_xray_instr_map");
+    CmdArgs.push_back("-u"); CmdArgs.push_back("__stop_xray_instr_map");
+    CmdArgs.push_back("-u"); CmdArgs.push_back("__start_xray_fn_idx");
+    CmdArgs.push_back("-u"); CmdArgs.push_back("__stop_xray_fn_idx");
 }
 
 bool tools::areOptimizationsEnabled(const ArgList &Args) {

@@ -51,4 +51,5 @@ add_compiler_rt_runtime(clang_rt.halomon
   OBJECT_LIBS RTSanitizerCommon
               RTSanitizerCommonLibc
               RTSanitizerCommonSymbolizer
+              RTXray
   PARENT_TARGET halomon)
