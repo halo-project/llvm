@@ -752,6 +752,10 @@ void CodeGenFunction::StartFunction(GlobalDecl GD,
     }
   }
 
+  // Halo uses xray's patching infrastructure.
+  if (CGM.getCodeGenOpts().UseHalo)
+    Fn->addFnAttr("function-instrument", "xray-always");
+
   // Add no-jump-tables value.
   Fn->addFnAttr("no-jump-tables",
                 llvm::toStringRef(CGM.getCodeGenOpts().NoUseJumpTables));

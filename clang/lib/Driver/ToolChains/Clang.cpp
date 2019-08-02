@@ -4210,6 +4210,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   if (Args.hasFlag(options::OPT_fhalo, options::OPT_fno_halo, false)) {
     CmdArgs.push_back("-fhalo");
     CmdArgs.push_back("-fembed-bitcode=all");
+    CmdArgs.push_back("-disable-O0-optnone");
   }
 
   // NVPTX doesn't support PGO or coverage. There's no runtime support for
