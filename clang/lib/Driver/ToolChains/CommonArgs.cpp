@@ -779,29 +779,27 @@ void tools::addHaloRuntime(const ToolChain &TC, const llvm::opt::ArgList &Args,
     if (!Args.hasArg(options::OPT_fhalo))
       return;
 
-    // force linking of this library.
-    CmdArgs.push_back("--whole-archive");
-    CmdArgs.push_back(TC.getCompilerRTArgString(Args, "halomon",
-                                                      ToolChain::FT_Shared));
-    CmdArgs.push_back("--no-whole-archive");
+    addSanitizerRuntime(TC, Args, CmdArgs, "halomon",
+                                      /*Shared*/ false, /*Whole*/ true);
 
-    // NOTE: it's *not* the arch path, since the arch is part of the file name.
-    std::string CandidateRPath = TC.getCompilerRTPath();
-    if (TC.getVFS().exists(CandidateRPath)) {
-      CmdArgs.push_back("-rpath");
-      CmdArgs.push_back(Args.MakeArgString(CandidateRPath.c_str()));
-    }
+    // Add dependencies
+    linkXRayRuntimeDeps(TC, CmdArgs);
+    CmdArgs.push_back("-lpfm");
+    CmdArgs.push_back("-lboost_system");
+    CmdArgs.push_back("-lprotobuf");
+    CmdArgs.push_back("-lstdc++");
 
-    // Declare that the weak symbols defined by XRay are undefined.
-    // This is needed to ensure these symbols are resolved when
-    // linking the Halo shared lib into the executable.
-    //
-    // We need to do this manually since XRay isn't covered
-    // by `collectSanitizerRuntimes`
-    CmdArgs.push_back("-u"); CmdArgs.push_back("__start_xray_instr_map");
-    CmdArgs.push_back("-u"); CmdArgs.push_back("__stop_xray_instr_map");
-    CmdArgs.push_back("-u"); CmdArgs.push_back("__start_xray_fn_idx");
-    CmdArgs.push_back("-u"); CmdArgs.push_back("__stop_xray_fn_idx");
+    // Yes it's ugly but we have a but it works and I'm tired of linkers.
+    SmallString<128> Path(TC.getDriver().ResourceDir);
+    llvm::sys::path::append(Path, "..", "..");
+    std::string PathStr = Path.str();
+
+    // NOTE: -L install/lib is already passed on the command line
+    // Can we do without libLLVM?
+    CmdArgs.push_back("-rpath");
+    CmdArgs.push_back(Args.MakeArgString(PathStr.c_str()));
+
+    CmdArgs.push_back("-lLLVM");
 }
 
 bool tools::areOptimizationsEnabled(const ArgList &Args) {
