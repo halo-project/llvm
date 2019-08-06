@@ -228,12 +228,11 @@ RawComment *ASTContext::getRawCommentForDeclNoCache(const Decl *D) const {
 
     if (Found) {
       Comment = MaybeBeforeDecl + 1;
-      assert(Comment == std::lower_bound(RawComments.begin(), RawComments.end(),
-                                         &CommentAtDeclLoc, Compare));
+      assert(Comment ==
+             llvm::lower_bound(RawComments, &CommentAtDeclLoc, Compare));
     } else {
       // Slow path.
-      Comment = std::lower_bound(RawComments.begin(), RawComments.end(),
-                                 &CommentAtDeclLoc, Compare);
+      Comment = llvm::lower_bound(RawComments, &CommentAtDeclLoc, Compare);
     }
   }
 
@@ -1525,8 +1524,14 @@ const llvm::fltSemantics &ASTContext::getFloatTypeSemantics(QualType T) const {
     return Target->getHalfFormat();
   case BuiltinType::Float:      return Target->getFloatFormat();
   case BuiltinType::Double:     return Target->getDoubleFormat();
-  case BuiltinType::LongDouble: return Target->getLongDoubleFormat();
-  case BuiltinType::Float128:   return Target->getFloat128Format();
+  case BuiltinType::LongDouble:
+    if (getLangOpts().OpenMP && getLangOpts().OpenMPIsDevice)
+      return AuxTarget->getLongDoubleFormat();
+    return Target->getLongDoubleFormat();
+  case BuiltinType::Float128:
+    if (getLangOpts().OpenMP && getLangOpts().OpenMPIsDevice)
+      return AuxTarget->getFloat128Format();
+    return Target->getFloat128Format();
   }
 }
 
@@ -9809,25 +9814,10 @@ static GVALinkage basicGVALinkageForVariable(const ASTContext &Context,
     return StrongLinkage;
 
   case TSK_ExplicitSpecialization:
-    if (Context.getTargetInfo().getCXXABI().isMicrosoft()) {
-      // If this is a fully specialized constexpr variable template, pretend it
-      // was marked inline. MSVC 14.21.27702 headers define _Is_integral in a
-      // header this way, and we don't want to emit non-discardable definitions
-      // of these variables in every TU that includes <type_traits>. This
-      // behavior is non-conforming, since another TU could use an extern
-      // template declaration for this variable, but for constexpr variables,
-      // it's unlikely for a user to want to do that. This behavior can be
-      // removed if the headers change to explicitly mark such variable template
-      // specializations inline.
-      if (isa<VarTemplateSpecializationDecl>(VD) && VD->isConstexpr())
-        return GVA_DiscardableODR;
-
-      // Use ODR linkage for static data members of fully specialized templates
-      // to prevent duplicate definition errors with MSVC.
-      if (VD->isStaticDataMember())
-        return GVA_StrongODR;
-    }
-    return StrongLinkage;
+    return Context.getTargetInfo().getCXXABI().isMicrosoft() &&
+                   VD->isStaticDataMember()
+               ? GVA_StrongODR
+               : StrongLinkage;
 
   case TSK_ExplicitInstantiationDefinition:
     return GVA_StrongODR;
@@ -9870,7 +9860,7 @@ bool ASTContext::DeclMustBeEmitted(const Decl *D) {
     return !D->getDeclContext()->isDependentContext();
   else if (isa<OMPAllocateDecl>(D))
     return !D->getDeclContext()->isDependentContext();
-  else if (isa<OMPDeclareReductionDecl>(D))
+  else if (isa<OMPDeclareReductionDecl>(D) || isa<OMPDeclareMapperDecl>(D))
     return !D->getDeclContext()->isDependentContext();
   else if (isa<ImportDecl>(D))
     return true;
@@ -10045,7 +10035,7 @@ CallingConv ASTContext::getDefaultCallingConvention(bool IsVariadic,
       break;
     }
   }
-  return Target->getDefaultCallingConv(TargetInfo::CCMT_Unknown);
+  return Target->getDefaultCallingConv();
 }
 
 bool ASTContext::isNearlyEmpty(const CXXRecordDecl *RD) const {

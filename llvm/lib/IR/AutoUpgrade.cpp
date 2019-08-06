@@ -764,6 +764,8 @@ static bool UpgradeIntrinsicFunction1(Function *F, Function *&NewFn) {
                         .Cases("clz.ll", "popc.ll", "h2f", true)
                         .Cases("max.i", "max.ll", "max.ui", "max.ull", true)
                         .Cases("min.i", "min.ll", "min.ui", "min.ull", true)
+                        .StartsWith("atomic.load.add.f32.p", true)
+                        .StartsWith("atomic.load.add.f64.p", true)
                         .Default(false);
       if (Expand) {
         NewFn = nullptr;
@@ -782,6 +784,19 @@ static bool UpgradeIntrinsicFunction1(Function *F, Function *&NewFn) {
         rename(F);
         NewFn = Intrinsic::getDeclaration(F->getParent(), Intrinsic::objectsize,
                                           Tys);
+        return true;
+      }
+    }
+    break;
+
+  case 'p':
+    if (Name == "prefetch") {
+      // Handle address space overloading.
+      Type *Tys[] = {F->arg_begin()->getType()};
+      if (F->getName() != Intrinsic::getName(Intrinsic::prefetch, Tys)) {
+        rename(F);
+        NewFn =
+            Intrinsic::getDeclaration(F->getParent(), Intrinsic::prefetch, Tys);
         return true;
       }
     }
@@ -3426,6 +3441,12 @@ void llvm::UpgradeIntrinsicCall(CallInst *CI, Function *NewFn) {
       Value *Cmp = Builder.CreateICmpSGE(
           Arg, llvm::Constant::getNullValue(Arg->getType()), "abs.cond");
       Rep = Builder.CreateSelect(Cmp, Arg, Neg, "abs");
+    } else if (IsNVVM && (Name.startswith("atomic.load.add.f32.p") ||
+                          Name.startswith("atomic.load.add.f64.p"))) {
+      Value *Ptr = CI->getArgOperand(0);
+      Value *Val = CI->getArgOperand(1);
+      Rep = Builder.CreateAtomicRMW(AtomicRMWInst::FAdd, Ptr, Val,
+                                    AtomicOrdering::SequentiallyConsistent);
     } else if (IsNVVM && (Name == "max.i" || Name == "max.ll" ||
                           Name == "max.ui" || Name == "max.ull")) {
       Value *Arg0 = CI->getArgOperand(0);

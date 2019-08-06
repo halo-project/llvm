@@ -336,6 +336,7 @@ static cl::extrahelp
     HelpResponse("\nPass @FILE as argument to read options from FILE.\n");
 
 static StringSet<> DisasmFuncsSet;
+static StringSet<> FoundSectionSet;
 static StringRef ToolName;
 
 typedef std::vector<std::tuple<uint64_t, StringRef, uint8_t>> SectionSymbolsTy;
@@ -343,11 +344,15 @@ typedef std::vector<std::tuple<uint64_t, StringRef, uint8_t>> SectionSymbolsTy;
 static bool shouldKeep(object::SectionRef S) {
   if (FilterSections.empty())
     return true;
-  StringRef String;
-  std::error_code error = S.getName(String);
+  StringRef SecName;
+  std::error_code error = S.getName(SecName);
   if (error)
     return false;
-  return is_contained(FilterSections, String);
+  // StringSet does not allow empty key so avoid adding sections with
+  // no name (such as the section with index 0) here.
+  if (!SecName.empty())
+    FoundSectionSet.insert(SecName);
+  return is_contained(FilterSections, SecName);
 }
 
 SectionFilter ToolSectionFilter(object::ObjectFile const &O) {
@@ -381,8 +386,12 @@ void warn(StringRef Message) {
   errs().flush();
 }
 
-void warn(Twine Message) {
+static void warn(Twine Message) {
+  // Output order between errs() and outs() matters especially for archive
+  // files where the output is per member object.
+  outs().flush();
   WithColor::warning(errs(), ToolName) << Message << "\n";
+  errs().flush();
 }
 
 LLVM_ATTRIBUTE_NORETURN void report_error(StringRef File, Twine Message) {
@@ -432,6 +441,22 @@ LLVM_ATTRIBUTE_NORETURN void report_error(Error E, StringRef ArchiveName,
     report_error(std::move(E), ArchiveName, "???", ArchitectureName);
   } else
     report_error(std::move(E), ArchiveName, NameOrErr.get(), ArchitectureName);
+}
+
+static void warnOnNoMatchForSections() {
+  SetVector<StringRef> MissingSections;
+  for (StringRef S : FilterSections) {
+    if (FoundSectionSet.count(S))
+      return;
+    // User may specify a unnamed section. Don't warn for it.
+    if (!S.empty())
+      MissingSections.insert(S);
+  }
+
+  // Warn only if no section in FilterSections is matched.
+  for (StringRef S : MissingSections)
+    warn("section '" + S + "' mentioned in a -j/--section option, but not "
+         "found in any input file");
 }
 
 static const Target *getTarget(const ObjectFile *Obj = nullptr) {
@@ -579,8 +604,7 @@ void SourcePrinter::printSourceLine(raw_ostream &OS,
     return;
 
   DILineInfo LineInfo = DILineInfo();
-  auto ExpectedLineInfo =
-      Symbolizer->symbolizeCode(Obj->getFileName(), Address);
+  auto ExpectedLineInfo = Symbolizer->symbolizeCode(*Obj, Address);
   if (!ExpectedLineInfo)
     consumeError(ExpectedLineInfo.takeError());
   else
@@ -644,23 +668,19 @@ public:
     if (SP && (PrintSource || PrintLines))
       SP->printSourceLine(OS, Address);
 
-    {
-      formatted_raw_ostream FOS(OS);
-      if (!NoLeadingAddr)
-        FOS << format("%8" PRIx64 ":", Address.Address);
-      if (!NoShowRawInsn) {
-        FOS << ' ';
-        dumpBytes(Bytes, FOS);
-      }
-      FOS.flush();
-      // The output of printInst starts with a tab. Print some spaces so that
-      // the tab has 1 column and advances to the target tab stop.
-      unsigned TabStop = NoShowRawInsn ? 16 : 40;
-      unsigned Column = FOS.getColumn();
-      FOS.indent(Column < TabStop - 1 ? TabStop - 1 - Column : 7 - Column % 8);
-
-      // The dtor calls flush() to ensure the indent comes before printInst().
+    size_t Start = OS.tell();
+    if (!NoLeadingAddr)
+      OS << format("%8" PRIx64 ":", Address.Address);
+    if (!NoShowRawInsn) {
+      OS << ' ';
+      dumpBytes(Bytes, OS);
     }
+
+    // The output of printInst starts with a tab. Print some spaces so that
+    // the tab has 1 column and advances to the target tab stop.
+    unsigned TabStop = NoShowRawInsn ? 16 : 40;
+    unsigned Column = OS.tell() - Start;
+    OS.indent(Column < TabStop - 1 ? TabStop - 1 - Column : 7 - Column % 8);
 
     if (MI)
       IP.printInst(MI, OS, "", STI);
@@ -973,14 +993,15 @@ static bool shouldAdjustVA(const SectionRef &Section) {
 typedef std::pair<uint64_t, char> MappingSymbolPair;
 static char getMappingSymbolKind(ArrayRef<MappingSymbolPair> MappingSymbols,
                                  uint64_t Address) {
-  auto Sym = bsearch(MappingSymbols, [Address](const MappingSymbolPair &Val) {
-      return Val.first > Address;
-  });
+  auto It =
+      partition_point(MappingSymbols, [Address](const MappingSymbolPair &Val) {
+        return Val.first <= Address;
+      });
   // Return zero for any address before the first mapping symbol; this means
   // we should use the default disassembly mode, depending on the target.
-  if (Sym == MappingSymbols.begin())
+  if (It == MappingSymbols.begin())
     return '\x00';
-  return (Sym - 1)->second;
+  return (It - 1)->second;
 }
 
 static uint64_t
@@ -1119,9 +1140,9 @@ static void disassembleObject(const Target *TheTarget, const ObjectFile *Obj,
       error(ExportEntry.getExportRVA(RVA));
 
       uint64_t VA = COFFObj->getImageBase() + RVA;
-      auto Sec = llvm::bsearch(
-          SectionAddresses, [VA](const std::pair<uint64_t, SectionRef> &RHS) {
-            return VA < RHS.first;
+      auto Sec = partition_point(
+          SectionAddresses, [VA](const std::pair<uint64_t, SectionRef> &O) {
+            return O.first <= VA;
           });
       if (Sec != SectionAddresses.begin()) {
         --Sec;
@@ -1378,10 +1399,10 @@ static void disassembleObject(const Target *TheTarget, const ObjectFile *Obj,
             // N.B. We don't walk the relocations in the relocatable case yet.
             auto *TargetSectionSymbols = &Symbols;
             if (!Obj->isRelocatableObject()) {
-              auto It = llvm::bsearch(
+              auto It = partition_point(
                   SectionAddresses,
-                  [=](const std::pair<uint64_t, SectionRef> &RHS) {
-                    return Target < RHS.first;
+                  [=](const std::pair<uint64_t, SectionRef> &O) {
+                    return O.first <= Target;
                   });
               if (It != SectionAddresses.begin()) {
                 --It;
@@ -1394,17 +1415,17 @@ static void disassembleObject(const Target *TheTarget, const ObjectFile *Obj,
             // Find the last symbol in the section whose offset is less than
             // or equal to the target. If there isn't a section that contains
             // the target, find the nearest preceding absolute symbol.
-            auto TargetSym = llvm::bsearch(
+            auto TargetSym = partition_point(
                 *TargetSectionSymbols,
-                [=](const std::tuple<uint64_t, StringRef, uint8_t> &RHS) {
-                  return Target < std::get<0>(RHS);
+                [=](const std::tuple<uint64_t, StringRef, uint8_t> &O) {
+                  return std::get<0>(O) <= Target;
                 });
             if (TargetSym == TargetSectionSymbols->begin()) {
               TargetSectionSymbols = &AbsoluteSymbols;
-              TargetSym = llvm::bsearch(
+              TargetSym = partition_point(
                   AbsoluteSymbols,
-                  [=](const std::tuple<uint64_t, StringRef, uint8_t> &RHS) {
-                    return Target < std::get<0>(RHS);
+                  [=](const std::tuple<uint64_t, StringRef, uint8_t> &O) {
+                    return std::get<0>(O) <= Target;
                   });
             }
             if (TargetSym != TargetSectionSymbols->begin()) {
@@ -1985,6 +2006,40 @@ static void printArchiveChild(StringRef Filename, const Archive::Child &C) {
   outs() << Name << "\n";
 }
 
+// For ELF only now.
+static bool shouldWarnForInvalidStartStopAddress(ObjectFile *Obj) {
+  if (const auto *Elf = dyn_cast<ELFObjectFileBase>(Obj)) {
+    if (Elf->getEType() != ELF::ET_REL)
+      return true;
+  }
+  return false;
+}
+
+static void checkForInvalidStartStopAddress(ObjectFile *Obj,
+                                            uint64_t Start, uint64_t Stop) {
+  if (!shouldWarnForInvalidStartStopAddress(Obj))
+    return;
+
+  for (const SectionRef &Section : Obj->sections())
+    if (ELFSectionRef(Section).getFlags() & ELF::SHF_ALLOC) {
+      uint64_t BaseAddr = Section.getAddress();
+      uint64_t Size = Section.getSize();
+      if ((Start < BaseAddr + Size) && Stop > BaseAddr)
+        return;
+    }
+
+  if (StartAddress.getNumOccurrences() == 0)
+    warn("no section has address less than 0x" +
+         Twine::utohexstr(Stop) + " specified by --stop-address");
+  else if (StopAddress.getNumOccurrences() == 0)
+    warn("no section has address greater than or equal to 0x" +
+         Twine::utohexstr(Start) + " specified by --start-address");
+  else
+    warn("no section overlaps the range [0x" +
+         Twine::utohexstr(Start) + ",0x" + Twine::utohexstr(Stop) +
+         ") specified by --start-address/--stop-address");
+}
+
 static void dumpObject(ObjectFile *O, const Archive *A = nullptr,
                        const Archive::Child *C = nullptr) {
   // Avoid other output when using a raw option.
@@ -1996,6 +2051,9 @@ static void dumpObject(ObjectFile *O, const Archive *A = nullptr,
       outs() << O->getFileName();
     outs() << ":\tfile format " << O->getFileFormatName() << "\n\n";
   }
+
+  if (StartAddress.getNumOccurrences() || StopAddress.getNumOccurrences())
+    checkForInvalidStartStopAddress(O, StartAddress, StopAddress);
 
   StringRef ArchiveName = A ? A->getFileName() : "";
   if (FileHeaders)
@@ -2155,6 +2213,8 @@ int main(int argc, char **argv) {
                         DisassembleFunctions.end());
 
   llvm::for_each(InputFilenames, dumpInput);
+
+  warnOnNoMatchForSections();
 
   return EXIT_SUCCESS;
 }

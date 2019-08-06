@@ -206,18 +206,6 @@ void AMDGPUAsmPrinter::EmitFunctionBodyStart() {
 
   if (STM.isAmdHsaOS())
     HSAMetadataStream->emitKernel(*MF, CurrentProgramInfo);
-
-  DumpCodeInstEmitter = nullptr;
-  if (STM.dumpCode()) {
-    // For -dumpcode, get the assembler out of the streamer, even if it does
-    // not really want to let us have it. This only works with -filetype=obj.
-    bool SaveFlag = OutStreamer->getUseAssemblerInfoForParsing();
-    OutStreamer->setUseAssemblerInfoForParsing(true);
-    MCAssembler *Assembler = OutStreamer->getAssemblerPtr();
-    OutStreamer->setUseAssemblerInfoForParsing(SaveFlag);
-    if (Assembler)
-      DumpCodeInstEmitter = Assembler->getEmitterPtr();
-  }
 }
 
 void AMDGPUAsmPrinter::EmitFunctionBodyEnd() {
@@ -458,6 +446,18 @@ bool AMDGPUAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
     EmitProgramInfoSI(MF, CurrentProgramInfo);
   }
 
+  DumpCodeInstEmitter = nullptr;
+  if (STM.dumpCode()) {
+    // For -dumpcode, get the assembler out of the streamer, even if it does
+    // not really want to let us have it. This only works with -filetype=obj.
+    bool SaveFlag = OutStreamer->getUseAssemblerInfoForParsing();
+    OutStreamer->setUseAssemblerInfoForParsing(true);
+    MCAssembler *Assembler = OutStreamer->getAssemblerPtr();
+    OutStreamer->setUseAssemblerInfoForParsing(SaveFlag);
+    if (Assembler)
+      DumpCodeInstEmitter = Assembler->getEmitterPtr();
+  }
+
   DisasmLines.clear();
   HexLines.clear();
   DisasmLineMaxLen = 0;
@@ -505,6 +505,10 @@ bool AMDGPUAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
     OutStreamer->emitRawComment(
       " NumVGPRsForWavesPerEU: " +
       Twine(CurrentProgramInfo.NumVGPRsForWavesPerEU), false);
+
+    OutStreamer->emitRawComment(
+      " Occupancy: " +
+      Twine(CurrentProgramInfo.Occupancy), false);
 
     OutStreamer->emitRawComment(
       " WaveLimiterHint : " + Twine(MFI->needsWaveLimiter()), false);
@@ -634,6 +638,11 @@ AMDGPUAsmPrinter::SIFunctionResourceInfo AMDGPUAsmPrinter::analyzeResourceUsage(
         HighestVGPRReg = Reg;
         break;
       }
+      MCPhysReg AReg = AMDGPU::AGPR0 + TRI.getHWRegIndex(Reg);
+      if (MRI.isPhysRegUsed(AReg)) {
+        HighestVGPRReg = AReg;
+        break;
+      }
     }
 
     MCPhysReg HighestSGPRReg = AMDGPU::NoRegister;
@@ -737,6 +746,9 @@ AMDGPUAsmPrinter::SIFunctionResourceInfo AMDGPUAsmPrinter::analyzeResourceUsage(
         } else if (AMDGPU::VGPR_32RegClass.contains(Reg)) {
           IsSGPR = false;
           Width = 1;
+        } else if (AMDGPU::AGPR_32RegClass.contains(Reg)) {
+          IsSGPR = false;
+          Width = 1;
         } else if (AMDGPU::SReg_64RegClass.contains(Reg)) {
           assert(!AMDGPU::TTMP_64RegClass.contains(Reg) &&
                  "trap handler registers should not be used");
@@ -745,8 +757,13 @@ AMDGPUAsmPrinter::SIFunctionResourceInfo AMDGPUAsmPrinter::analyzeResourceUsage(
         } else if (AMDGPU::VReg_64RegClass.contains(Reg)) {
           IsSGPR = false;
           Width = 2;
+        } else if (AMDGPU::AReg_64RegClass.contains(Reg)) {
+          IsSGPR = false;
+          Width = 2;
         } else if (AMDGPU::VReg_96RegClass.contains(Reg)) {
           IsSGPR = false;
+          Width = 3;
+        } else if (AMDGPU::SReg_96RegClass.contains(Reg)) {
           Width = 3;
         } else if (AMDGPU::SReg_128RegClass.contains(Reg)) {
           assert(!AMDGPU::TTMP_128RegClass.contains(Reg) &&
@@ -754,6 +771,9 @@ AMDGPUAsmPrinter::SIFunctionResourceInfo AMDGPUAsmPrinter::analyzeResourceUsage(
           IsSGPR = true;
           Width = 4;
         } else if (AMDGPU::VReg_128RegClass.contains(Reg)) {
+          IsSGPR = false;
+          Width = 4;
+        } else if (AMDGPU::AReg_128RegClass.contains(Reg)) {
           IsSGPR = false;
           Width = 4;
         } else if (AMDGPU::SReg_256RegClass.contains(Reg)) {
@@ -772,9 +792,18 @@ AMDGPUAsmPrinter::SIFunctionResourceInfo AMDGPUAsmPrinter::analyzeResourceUsage(
         } else if (AMDGPU::VReg_512RegClass.contains(Reg)) {
           IsSGPR = false;
           Width = 16;
-        } else if (AMDGPU::SReg_96RegClass.contains(Reg)) {
+        } else if (AMDGPU::AReg_512RegClass.contains(Reg)) {
+          IsSGPR = false;
+          Width = 16;
+        } else if (AMDGPU::SReg_1024RegClass.contains(Reg)) {
           IsSGPR = true;
-          Width = 3;
+          Width = 32;
+        } else if (AMDGPU::VReg_1024RegClass.contains(Reg)) {
+          IsSGPR = false;
+          Width = 32;
+        } else if (AMDGPU::AReg_1024RegClass.contains(Reg)) {
+          IsSGPR = false;
+          Width = 32;
         } else {
           llvm_unreachable("Unknown register class");
         }
@@ -1032,6 +1061,10 @@ void AMDGPUAsmPrinter::getSIProgramInfo(SIProgramInfo &ProgInfo,
       // For AMDHSA, LDS_SIZE must be zero, as it is populated by the CP.
       S_00B84C_LDS_SIZE(STM.isAmdHsaOS() ? 0 : ProgInfo.LDSBlocks) |
       S_00B84C_EXCP_EN(0);
+
+  ProgInfo.Occupancy = STM.computeOccupancy(MF, ProgInfo.LDSSize,
+                                            ProgInfo.NumSGPRsForWavesPerEU,
+                                            ProgInfo.NumVGPRsForWavesPerEU);
 }
 
 static unsigned getRsrcReg(CallingConv::ID CallConv) {

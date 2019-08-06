@@ -169,8 +169,8 @@ static void ensureSufficientStack() {
 static void ensureSufficientStack() {}
 #endif
 
-/// print supported cpus of the given target
-int PrintSupportedCPUs(std::string TargetStr) {
+/// Print supported cpus of the given target.
+static int PrintSupportedCPUs(std::string TargetStr) {
   std::string Error;
   const llvm::Target *TheTarget =
       llvm::TargetRegistry::lookupTarget(TargetStr, Error);
@@ -216,13 +216,13 @@ int cc1_main(ArrayRef<const char *> Argv, const char *Argv0, void *MainAddr) {
   bool Success = CompilerInvocation::CreateFromArgs(
       Clang->getInvocation(), Argv.begin(), Argv.end(), Diags);
 
-  if (Clang->getFrontendOpts().TimeTrace)
-    llvm::timeTraceProfilerInitialize();
-
-  // --print-supported-cpus takes priority over the actual compilation
-  if (Clang->getFrontendOpts().PrintSupportedCPUs) {
-    return PrintSupportedCPUs(Clang->getTargetOpts().Triple);
+  if (Clang->getFrontendOpts().TimeTrace) {
+    llvm::timeTraceProfilerInitialize(
+        Clang->getFrontendOpts().TimeTraceGranularity);
   }
+  // --print-supported-cpus takes priority over the actual compilation.
+  if (Clang->getFrontendOpts().PrintSupportedCPUs)
+    return PrintSupportedCPUs(Clang->getTargetOpts().Triple);
 
   // Infer the builtin include path if unspecified.
   if (Clang->getHeaderSearchOpts().UseBuiltinIncludes &&

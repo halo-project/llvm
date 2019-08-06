@@ -82,7 +82,6 @@ if (COMPILER_RT_STANDALONE_BUILD)
   endif()
 
   # Find Python interpreter.
-  set(Python_ADDITIONAL_VERSIONS 2.7 2.6 2.5)
   include(FindPythonInterp)
   if(NOT PYTHONINTERP_FOUND)
     message(FATAL_ERROR "
@@ -284,7 +283,7 @@ append_list_if(COMPILER_RT_HAS_FNO_LTO_FLAG -fno-lto SANITIZER_COMMON_CFLAGS)
 
 # The following is a workaround for powerpc64le. This is the only architecture
 # that requires -fno-function-sections to work properly. If lacking, the ASan
-# Linux test function-sections-are-bad.cc fails with the following error:
+# Linux test function-sections-are-bad.cpp fails with the following error:
 # 'undefined symbol: __sanitizer_unaligned_load32'.
 if(DEFINED TARGET_powerpc64le_CFLAGS)
   append_list_if(COMPILER_RT_HAS_FNO_FUNCTION_SECTIONS_FLAG -fno-function-sections TARGET_powerpc64le_CFLAGS)
@@ -316,12 +315,11 @@ if(MSVC)
   endif()
   append_list_if(COMPILER_RT_HAS_Oy_FLAG /Oy- SANITIZER_COMMON_CFLAGS)
   append_list_if(COMPILER_RT_HAS_GS_FLAG /GS- SANITIZER_COMMON_CFLAGS)
-  # VS 2015 (version 1900) added support for thread safe static initialization.
-  # However, ASan interceptors run before CRT initialization, which causes the
-  # new thread safe code to crash. Disable this feature for now.
-  if (MSVC_VERSION GREATER 1899 OR "${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
-    list(APPEND SANITIZER_COMMON_CFLAGS /Zc:threadSafeInit-)
-  endif()
+
+  # Disable thread safe initialization for static locals. ASan shouldn't need
+  # it. Thread safe initialization assumes that the CRT has already been
+  # initialized, but ASan initializes before the CRT.
+  list(APPEND SANITIZER_COMMON_CFLAGS /Zc:threadSafeInit-)
 endif()
 
 append_list_if(COMPILER_RT_DEBUG -DSANITIZER_DEBUG=1 SANITIZER_COMMON_CFLAGS)

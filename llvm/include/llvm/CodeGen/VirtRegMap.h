@@ -67,8 +67,10 @@ class TargetInstrInfo;
   public:
     static char ID;
 
-    VirtRegMap() : MachineFunctionPass(ID), Virt2PhysMap(NO_PHYS_REG),
-                   Virt2StackSlotMap(NO_STACK_SLOT), Virt2SplitMap(0) {}
+    VirtRegMap()
+        : MachineFunctionPass(ID), MRI(nullptr), TII(nullptr), TRI(nullptr),
+          MF(nullptr), Virt2PhysMap(NO_PHYS_REG),
+          Virt2StackSlotMap(NO_STACK_SLOT), Virt2SplitMap(0) {}
     VirtRegMap(const VirtRegMap &) = delete;
     VirtRegMap &operator=(const VirtRegMap &) = delete;
 
@@ -109,7 +111,7 @@ class TargetInstrInfo;
     /// clears the specified virtual register's, physical
     /// register mapping
     void clearVirt(unsigned virtReg) {
-      assert(TargetRegisterInfo::isVirtualRegister(virtReg));
+      assert(Register::isVirtualRegister(virtReg));
       assert(Virt2PhysMap[virtReg] != NO_PHYS_REG &&
              "attempt to clear a not assigned virtual register");
       Virt2PhysMap[virtReg] = NO_PHYS_REG;
@@ -161,7 +163,7 @@ class TargetInstrInfo;
     /// returns the stack slot mapped to the specified virtual
     /// register
     int getStackSlot(unsigned virtReg) const {
-      assert(TargetRegisterInfo::isVirtualRegister(virtReg));
+      assert(Register::isVirtualRegister(virtReg));
       return Virt2StackSlotMap[virtReg];
     }
 

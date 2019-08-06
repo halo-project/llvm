@@ -194,6 +194,8 @@ static DecodeStatus DecodeGPRwithAPSRRegisterClass(MCInst &Inst,
 static DecodeStatus DecodeGPRwithZRRegisterClass(MCInst &Inst,
                                                unsigned RegNo, uint64_t Address,
                                                const void *Decoder);
+static DecodeStatus DecodeGPRwithZRnospRegisterClass(
+    MCInst &Inst, unsigned RegNo, uint64_t Address, const void *Decoder);
 static DecodeStatus DecodetGPRRegisterClass(MCInst &Inst, unsigned RegNo,
                                    uint64_t Address, const void *Decoder);
 static DecodeStatus DecodetcGPRRegisterClass(MCInst &Inst, unsigned RegNo,
@@ -312,7 +314,7 @@ static DecodeStatus DecodeVLD3DupInstruction(MCInst &Inst, unsigned Val,
                                uint64_t Address, const void *Decoder);
 static DecodeStatus DecodeVLD4DupInstruction(MCInst &Inst, unsigned Val,
                                uint64_t Address, const void *Decoder);
-static DecodeStatus DecodeNEONModImmInstruction(MCInst &Inst,unsigned Val,
+static DecodeStatus DecodeVMOVModImmInstruction(MCInst &Inst,unsigned Val,
                                uint64_t Address, const void *Decoder);
 static DecodeStatus DecodeMVEModImmInstruction(MCInst &Inst,unsigned Val,
                                uint64_t Address, const void *Decoder);
@@ -486,7 +488,7 @@ static DecodeStatus DecoderForMRRC2AndMCRR2(MCInst &Inst, unsigned Val,
 static DecodeStatus DecodeForVMRSandVMSR(MCInst &Inst, unsigned Val,
                                          uint64_t Address, const void *Decoder);
 
-template <bool isSigned, bool isNeg, int size>
+template <bool isSigned, bool isNeg, bool zeroPermitted, int size>
 static DecodeStatus DecodeBFLabelOperand(MCInst &Inst, unsigned val,
                                          uint64_t Address, const void *Decoder);
 static DecodeStatus DecodeBFAfterTargetOperand(MCInst &Inst, unsigned val,
@@ -559,6 +561,8 @@ static DecodeStatus DecodeMVEVCMP(MCInst &Inst, unsigned Insn,
                                   uint64_t Address, const void *Decoder);
 static DecodeStatus DecodeMveVCTP(MCInst &Inst, unsigned Insn,
                                   uint64_t Address, const void *Decoder);
+static DecodeStatus DecodeMVEVPNOT(MCInst &Inst, unsigned Insn,
+                                   uint64_t Address, const void *Decoder);
 static DecodeStatus DecodeMVEOverlappingLongShift(MCInst &Inst, unsigned Insn,
                                                   uint64_t Address,
                                                   const void *Decoder);
@@ -1184,9 +1188,19 @@ DecodeGPRwithZRRegisterClass(MCInst &Inst, unsigned RegNo,
   }
 
   if (RegNo == 13)
-    S = MCDisassembler::SoftFail;
+    Check(S, MCDisassembler::SoftFail);
 
   Check(S, DecodeGPRRegisterClass(Inst, RegNo, Address, Decoder));
+  return S;
+}
+
+static DecodeStatus
+DecodeGPRwithZRnospRegisterClass(MCInst &Inst, unsigned RegNo,
+                                 uint64_t Address, const void *Decoder) {
+  DecodeStatus S = MCDisassembler::Success;
+  if (RegNo == 13)
+    return MCDisassembler::Fail;
+  Check(S, DecodeGPRwithZRRegisterClass(Inst, RegNo, Address, Decoder));
   return S;
 }
 
@@ -3433,7 +3447,7 @@ static DecodeStatus DecodeVLD4DupInstruction(MCInst &Inst, unsigned Insn,
 }
 
 static DecodeStatus
-DecodeNEONModImmInstruction(MCInst &Inst, unsigned Insn,
+DecodeVMOVModImmInstruction(MCInst &Inst, unsigned Insn,
                             uint64_t Address, const void *Decoder) {
   DecodeStatus S = MCDisassembler::Success;
 
@@ -4170,7 +4184,7 @@ static DecodeStatus DecodeT2Imm7(MCInst &Inst, unsigned Val,
   else if (!(Val & 0x80))
     imm *= -1;
   if (imm != INT32_MIN)
-    imm <<= shift;
+    imm *= (1U << shift);
   Inst.addOperand(MCOperand::createImm(imm));
 
   return MCDisassembler::Success;
@@ -4436,7 +4450,7 @@ static DecodeStatus DecodeMveAddrModeQ(MCInst &Inst, unsigned Insn,
       imm *= -1;
   }
   if (imm != INT32_MIN)
-    imm <<= shift;
+    imm *= (1U << shift);
   Inst.addOperand(MCOperand::createImm(imm));
 
   return S;
@@ -4474,14 +4488,7 @@ static DecodeStatus DecodeCoprocessor(MCInst &Inst, unsigned Val,
   const FeatureBitset &featureBits =
     ((const MCDisassembler*)Decoder)->getSubtargetInfo().getFeatureBits();
 
-  if (featureBits[ARM::HasV8Ops] && !(Val == 14 || Val == 15))
-    return MCDisassembler::Fail;
-
-  // For Armv8.1-M Mainline coprocessors matching 100x,101x or 111x should
-  // decode as VFP/MVE instructions.
-  if (featureBits[ARM::HasV8_1MMainlineOps] &&
-      ((Val & 0xE) == 0x8 || (Val & 0xE) == 0xA ||
-       (Val & 0xE) == 0xE))
+  if (!isValidCoprocessorNumber(Val, featureBits))
     return MCDisassembler::Fail;
 
   Inst.addOperand(MCOperand::createImm(Val));
@@ -5674,7 +5681,7 @@ static DecodeStatus DecodeVCVTD(MCInst &Inst, unsigned Insn,
         }
       }
     }
-    return DecodeNEONModImmInstruction(Inst, Insn, Address, Decoder);
+    return DecodeVMOVModImmInstruction(Inst, Insn, Address, Decoder);
   }
 
   if (!(imm & 0x20)) return MCDisassembler::Fail;
@@ -5733,7 +5740,7 @@ static DecodeStatus DecodeVCVTQ(MCInst &Inst, unsigned Insn,
         }
       }
     }
-    return DecodeNEONModImmInstruction(Inst, Insn, Address, Decoder);
+    return DecodeVMOVModImmInstruction(Inst, Insn, Address, Decoder);
   }
 
   if (!(imm & 0x20)) return MCDisassembler::Fail;
@@ -5903,13 +5910,13 @@ static DecodeStatus DecodeForVMRSandVMSR(MCInst &Inst, unsigned Val,
   return S;
 }
 
-template <bool isSigned, bool isNeg, int size>
+template <bool isSigned, bool isNeg, bool zeroPermitted, int size>
 static DecodeStatus DecodeBFLabelOperand(MCInst &Inst, unsigned Val,
                                          uint64_t Address,
                                          const void *Decoder) {
   DecodeStatus S = MCDisassembler::Success;
-  if (Val == 0)
-    S = MCDisassembler::SoftFail;
+  if (Val == 0 && !zeroPermitted)
+    S = MCDisassembler::Fail;
 
   uint64_t DecVal;
   if (isSigned)
@@ -5960,8 +5967,8 @@ static DecodeStatus DecodeLOLoop(MCInst &Inst, unsigned Insn, uint64_t Address,
     Inst.addOperand(MCOperand::createReg(ARM::LR));
     LLVM_FALLTHROUGH;
   case ARM::t2LE:
-    if (!Check(S, DecodeBFLabelOperand<false, true, 11>(Inst, Imm, Address,
-                                                        Decoder)))
+    if (!Check(S, DecodeBFLabelOperand<false, true, true, 11>(
+                   Inst, Imm, Address, Decoder)))
       return MCDisassembler::Fail;
     break;
   case ARM::t2WLS:
@@ -5973,8 +5980,8 @@ static DecodeStatus DecodeLOLoop(MCInst &Inst, unsigned Insn, uint64_t Address,
     if (!Check(S,
                DecoderGPRRegisterClass(Inst, fieldFromInstruction(Insn, 16, 4),
                                        Address, Decoder)) ||
-        !Check(S, DecodeBFLabelOperand<false, false, 11>(Inst, Imm, Address,
-                                                         Decoder)))
+        !Check(S, DecodeBFLabelOperand<false, false, true, 11>(
+                   Inst, Imm, Address, Decoder)))
       return MCDisassembler::Fail;
     break;
   case ARM::t2DLS:
@@ -6498,6 +6505,13 @@ static DecodeStatus DecodeMVEOverlappingLongShift(
   if (!Check(S, DecoderGPRRegisterClass(Inst, Rm, Address, Decoder)))
     return MCDisassembler::Fail;
 
+  if (Inst.getOpcode() == ARM::MVE_SQRSHRL ||
+      Inst.getOpcode() == ARM::MVE_UQRSHLL) {
+    unsigned Saturate = fieldFromInstruction(Insn, 7, 1);
+    // Saturate, the bit position for saturation
+    Inst.addOperand(MCOperand::createImm(Saturate));
+  }
+
   return S;
 }
 
@@ -6565,5 +6579,13 @@ static DecodeStatus DecodeMveVCTP(MCInst &Inst, unsigned Insn, uint64_t Address,
   unsigned Rn = fieldFromInstruction(Insn, 16, 4);
   if (!Check(S, DecoderGPRRegisterClass(Inst, Rn, Address, Decoder)))
     return MCDisassembler::Fail;
+  return S;
+}
+
+static DecodeStatus DecodeMVEVPNOT(MCInst &Inst, unsigned Insn, uint64_t Address,
+                                   const void *Decoder) {
+  DecodeStatus S = MCDisassembler::Success;
+  Inst.addOperand(MCOperand::createReg(ARM::VPR));
+  Inst.addOperand(MCOperand::createReg(ARM::VPR));
   return S;
 }

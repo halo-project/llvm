@@ -3155,6 +3155,7 @@ int BoUpSLP::getSpillCost() const {
     });
 
     // Now find the sequence of instructions between PrevInst and Inst.
+    unsigned NumCalls = 0;
     BasicBlock::reverse_iterator InstIt = ++Inst->getIterator().getReverse(),
                                  PrevInstIt =
                                      PrevInst->getIterator().getReverse();
@@ -3167,14 +3168,17 @@ int BoUpSLP::getSpillCost() const {
       // Debug informations don't impact spill cost.
       if ((isa<CallInst>(&*PrevInstIt) &&
            !isa<DbgInfoIntrinsic>(&*PrevInstIt)) &&
-          &*PrevInstIt != PrevInst) {
-        SmallVector<Type*, 4> V;
-        for (auto *II : LiveValues)
-          V.push_back(VectorType::get(II->getType(), BundleWidth));
-        Cost += TTI->getCostOfKeepingLiveOverCall(V);
-      }
+          &*PrevInstIt != PrevInst)
+        NumCalls++;
 
       ++PrevInstIt;
+    }
+
+    if (NumCalls) {
+      SmallVector<Type*, 4> V;
+      for (auto *II : LiveValues)
+        V.push_back(VectorType::get(II->getType(), BundleWidth));
+      Cost += NumCalls * TTI->getCostOfKeepingLiveOverCall(V);
     }
 
     PrevInst = Inst;
@@ -3875,12 +3879,12 @@ Value *BoUpSLP::vectorizeTree(TreeEntry *E) {
     case Instruction::Call: {
       CallInst *CI = cast<CallInst>(VL0);
       setInsertPointAfterBundle(E->Scalars, S);
-      Function *FI;
+
       Intrinsic::ID IID  = Intrinsic::not_intrinsic;
-      Value *ScalarArg = nullptr;
-      if (CI && (FI = CI->getCalledFunction())) {
+      if (Function *FI = CI->getCalledFunction())
         IID = FI->getIntrinsicID();
-      }
+
+      Value *ScalarArg = nullptr;
       std::vector<Value *> OpVecs;
       for (int j = 0, e = CI->getNumArgOperands(); j < e; ++j) {
         ValueList OpVL;
@@ -3929,7 +3933,7 @@ Value *BoUpSLP::vectorizeTree(TreeEntry *E) {
                Instruction::isCast(S.getAltOpcode()))) &&
              "Invalid Shuffle Vector Operand");
 
-      Value *LHS, *RHS;
+      Value *LHS = nullptr, *RHS = nullptr;
       if (Instruction::isBinaryOp(S.getOpcode())) {
         setInsertPointAfterBundle(E->Scalars, S);
         LHS = vectorizeTree(E->getOperand(0));
@@ -5567,7 +5571,7 @@ class HorizontalReduction {
     Value *createOp(IRBuilder<> &Builder, const Twine &Name) const {
       assert(isVectorizable() &&
              "Expected add|fadd or min/max reduction operation.");
-      Value *Cmp;
+      Value *Cmp = nullptr;
       switch (Kind) {
       case RK_Arithmetic:
         return Builder.CreateBinOp((Instruction::BinaryOps)Opcode, LHS, RHS,
@@ -6319,7 +6323,7 @@ private:
     IsPairwiseReduction = PairwiseRdxCost < SplittingRdxCost;
     int VecReduxCost = IsPairwiseReduction ? PairwiseRdxCost : SplittingRdxCost;
 
-    int ScalarReduxCost;
+    int ScalarReduxCost = 0;
     switch (ReductionData.getKind()) {
     case RK_Arithmetic:
       ScalarReduxCost =

@@ -1317,14 +1317,37 @@ static Instruction *processUGT_ADDCST_ADD(ICmpInst &I, Value *A, Value *B,
   return ExtractValueInst::Create(Call, 1, "sadd.overflow");
 }
 
-// Handle (icmp sgt smin(PosA, B) 0) -> (icmp sgt B 0)
+/// If we have:
+///   icmp eq/ne (urem/srem %x, %y), 0
+/// iff %y is a power-of-two, we can replace this with a bit test:
+///   icmp eq/ne (and %x, (add %y, -1)), 0
+Instruction *InstCombiner::foldIRemByPowerOfTwoToBitTest(ICmpInst &I) {
+  // This fold is only valid for equality predicates.
+  if (!I.isEquality())
+    return nullptr;
+  ICmpInst::Predicate Pred;
+  Value *X, *Y, *Zero;
+  if (!match(&I, m_ICmp(Pred, m_OneUse(m_IRem(m_Value(X), m_Value(Y))),
+                        m_CombineAnd(m_Zero(), m_Value(Zero)))))
+    return nullptr;
+  if (!isKnownToBeAPowerOfTwo(Y, /*OrZero*/ true, 0, &I))
+    return nullptr;
+  // This may increase instruction count, we don't enforce that Y is a constant.
+  Value *Mask = Builder.CreateAdd(Y, Constant::getAllOnesValue(Y->getType()));
+  Value *Masked = Builder.CreateAnd(X, Mask);
+  return ICmpInst::Create(Instruction::ICmp, Pred, Masked, Zero);
+}
+
+// Handle  icmp pred X, 0
 Instruction *InstCombiner::foldICmpWithZero(ICmpInst &Cmp) {
   CmpInst::Predicate Pred = Cmp.getPredicate();
-  Value *X = Cmp.getOperand(0);
+  if (!match(Cmp.getOperand(1), m_Zero()))
+    return nullptr;
 
-  if (match(Cmp.getOperand(1), m_Zero()) && Pred == ICmpInst::ICMP_SGT) {
+  // (icmp sgt smin(PosA, B) 0) -> (icmp sgt B 0)
+  if (Pred == ICmpInst::ICMP_SGT) {
     Value *A, *B;
-    SelectPatternResult SPR = matchSelectPattern(X, A, B);
+    SelectPatternResult SPR = matchSelectPattern(Cmp.getOperand(0), A, B);
     if (SPR.Flavor == SPF_SMIN) {
       if (isKnownPositive(A, DL, 0, &AC, &Cmp, &DT))
         return new ICmpInst(Pred, B, Cmp.getOperand(1));
@@ -1332,6 +1355,23 @@ Instruction *InstCombiner::foldICmpWithZero(ICmpInst &Cmp) {
         return new ICmpInst(Pred, A, Cmp.getOperand(1));
     }
   }
+
+  if (Instruction *New = foldIRemByPowerOfTwoToBitTest(Cmp))
+    return New;
+
+  // Given:
+  //   icmp eq/ne (urem %x, %y), 0
+  // Iff %x has 0 or 1 bits set, and %y has at least 2 bits set, omit 'urem':
+  //   icmp eq/ne %x, 0
+  Value *X, *Y;
+  if (match(Cmp.getOperand(0), m_URem(m_Value(X), m_Value(Y))) &&
+      ICmpInst::isEquality(Pred)) {
+    KnownBits XKnown = computeKnownBits(X, 0, &Cmp);
+    KnownBits YKnown = computeKnownBits(Y, 0, &Cmp);
+    if (XKnown.countMaxPopulation() == 1 && YKnown.countMinPopulation() >= 2)
+      return new ICmpInst(Pred, X, Cmp.getOperand(1));
+  }
+
   return nullptr;
 }
 
@@ -3254,6 +3294,64 @@ foldICmpWithTruncSignExtendedVal(ICmpInst &I,
   return T1;
 }
 
+// Given pattern:
+//   icmp eq/ne (and ((x shift Q), (y oppositeshift K))), 0
+// we should move shifts to the same hand of 'and', i.e. rewrite as
+//   icmp eq/ne (and (x shift (Q+K)), y), 0  iff (Q+K) u< bitwidth(x)
+// We are only interested in opposite logical shifts here.
+// If we can, we want to end up creating 'lshr' shift.
+static Value *
+foldShiftIntoShiftInAnotherHandOfAndInICmp(ICmpInst &I, const SimplifyQuery SQ,
+                                           InstCombiner::BuilderTy &Builder) {
+  if (!I.isEquality() || !match(I.getOperand(1), m_Zero()) ||
+      !I.getOperand(0)->hasOneUse())
+    return nullptr;
+
+  auto m_AnyLogicalShift = m_LogicalShift(m_Value(), m_Value());
+  auto m_AnyLShr = m_LShr(m_Value(), m_Value());
+
+  // Look for an 'and' of two (opposite) logical shifts.
+  // Pick the single-use shift as XShift.
+  Value *XShift, *YShift;
+  if (!match(I.getOperand(0),
+             m_c_And(m_OneUse(m_CombineAnd(m_AnyLogicalShift, m_Value(XShift))),
+                     m_CombineAnd(m_AnyLogicalShift, m_Value(YShift)))))
+    return nullptr;
+
+  // If YShift is a single-use 'lshr', swap the shifts around.
+  if (match(YShift, m_OneUse(m_AnyLShr)))
+    std::swap(XShift, YShift);
+
+  // The shifts must be in opposite directions.
+  Instruction::BinaryOps XShiftOpcode =
+      cast<BinaryOperator>(XShift)->getOpcode();
+  if (XShiftOpcode == cast<BinaryOperator>(YShift)->getOpcode())
+    return nullptr; // Do not care about same-direction shifts here.
+
+  Value *X, *XShAmt, *Y, *YShAmt;
+  match(XShift, m_BinOp(m_Value(X), m_Value(XShAmt)));
+  match(YShift, m_BinOp(m_Value(Y), m_Value(YShAmt)));
+
+  // Can we fold (XShAmt+YShAmt) ?
+  Value *NewShAmt = SimplifyBinOp(Instruction::BinaryOps::Add, XShAmt, YShAmt,
+                                  SQ.getWithInstruction(&I));
+  if (!NewShAmt)
+    return nullptr;
+  // Is the new shift amount smaller than the bit width?
+  // FIXME: could also rely on ConstantRange.
+  unsigned BitWidth = X->getType()->getScalarSizeInBits();
+  if (!match(NewShAmt, m_SpecificInt_ICMP(ICmpInst::Predicate::ICMP_ULT,
+                                          APInt(BitWidth, BitWidth))))
+    return nullptr;
+  // All good, we can do this fold. The shift is the same that was for X.
+  Value *T0 = XShiftOpcode == Instruction::BinaryOps::LShr
+                  ? Builder.CreateLShr(X, NewShAmt)
+                  : Builder.CreateShl(X, NewShAmt);
+  Value *T1 = Builder.CreateAnd(T0, Y);
+  return Builder.CreateICmp(I.getPredicate(), T1,
+                            Constant::getNullValue(X->getType()));
+}
+
 /// Try to fold icmp (binop), X or icmp X, (binop).
 /// TODO: A large part of this logic is duplicated in InstSimplify's
 /// simplifyICmpWithBinOp(). We should be able to share that and avoid the code
@@ -3609,6 +3707,9 @@ Instruction *InstCombiner::foldICmpBinOp(ICmpInst &I) {
   if (Value *V = foldICmpWithTruncSignExtendedVal(I, Builder))
     return replaceInstUsesWith(I, V);
 
+  if (Value *V = foldShiftIntoShiftInAnotherHandOfAndInICmp(I, SQ, Builder))
+    return replaceInstUsesWith(I, V);
+
   return nullptr;
 }
 
@@ -3850,9 +3951,15 @@ Instruction *InstCombiner::foldICmpEquality(ICmpInst &I) {
     return new ICmpInst(Pred, A, B);
 
   // Canonicalize checking for a power-of-2-or-zero value:
+  // (A & (A-1)) == 0 --> ctpop(A) < 2 (two commuted variants)
+  // ((A-1) & A) != 0 --> ctpop(A) > 1 (two commuted variants)
+  if (!match(Op0, m_OneUse(m_c_And(m_Add(m_Value(A), m_AllOnes()),
+                                   m_Deferred(A)))) ||
+      !match(Op1, m_ZeroInt()))
+    A = nullptr;
+
   // (A & -A) == A --> ctpop(A) < 2 (four commuted variants)
   // (-A & A) != A --> ctpop(A) > 1 (four commuted variants)
-  A = nullptr;
   if (match(Op0, m_OneUse(m_c_And(m_Neg(m_Specific(Op1)), m_Specific(Op1)))))
     A = Op1;
   else if (match(Op1,

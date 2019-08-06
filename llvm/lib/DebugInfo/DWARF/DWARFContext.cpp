@@ -138,7 +138,7 @@ static void dumpDWARFv5StringOffsetsSection(
   DWARFDataExtractor StrOffsetExt(Obj, StringOffsetsSection, LittleEndian, 0);
   DataExtractor StrData(StringSection, LittleEndian, 0);
   uint64_t SectionSize = StringOffsetsSection.Data.size();
-  uint32_t Offset = 0;
+  uint64_t Offset = 0;
   for (auto &Contribution : Contributions) {
     // Report an ill-formed contribution.
     if (!Contribution) {
@@ -166,10 +166,10 @@ static void dumpDWARFv5StringOffsetsSection(
     }
     // Report a gap in the table.
     if (Offset < ContributionHeader) {
-      OS << format("0x%8.8x: Gap, length = ", Offset);
+      OS << format("0x%8.8" PRIx64 ": Gap, length = ", Offset);
       OS << (ContributionHeader - Offset) << "\n";
     }
-    OS << format("0x%8.8x: ", (uint32_t)ContributionHeader);
+    OS << format("0x%8.8" PRIx64 ": ", ContributionHeader);
     // In DWARF v5 the contribution size in the descriptor does not equal
     // the originally encoded length (it does not contain the length of the
     // version field and the padding, a total of 4 bytes). Add them back in
@@ -181,26 +181,19 @@ static void dumpDWARFv5StringOffsetsSection(
     Offset = Contribution->Base;
     unsigned EntrySize = Contribution->getDwarfOffsetByteSize();
     while (Offset - Contribution->Base < Contribution->Size) {
-      OS << format("0x%8.8x: ", Offset);
-      // FIXME: We can only extract strings if the offset fits in 32 bits.
+      OS << format("0x%8.8" PRIx64 ": ", Offset);
       uint64_t StringOffset =
           StrOffsetExt.getRelocatedValue(EntrySize, &Offset);
-      // Extract the string if we can and display it. Otherwise just report
-      // the offset.
-      if (StringOffset <= std::numeric_limits<uint32_t>::max()) {
-        uint32_t StringOffset32 = (uint32_t)StringOffset;
-        OS << format("%8.8x ", StringOffset32);
-        const char *S = StrData.getCStr(&StringOffset32);
-        if (S)
-          OS << format("\"%s\"", S);
-      } else
-        OS << format("%16.16" PRIx64 " ", StringOffset);
+      OS << format("%8.8" PRIx64 " ", StringOffset);
+      const char *S = StrData.getCStr(&StringOffset);
+      if (S)
+        OS << format("\"%s\"", S);
       OS << "\n";
     }
   }
   // Report a gap at the end of the table.
   if (Offset < SectionSize) {
-    OS << format("0x%8.8x: Gap, length = ", Offset);
+    OS << format("0x%8.8" PRIx64 ": Gap, length = ", Offset);
     OS << (SectionSize - Offset) << "\n";
   }
 }
@@ -225,7 +218,7 @@ static void dumpStringOffsetsSection(raw_ostream &OS, StringRef SectionName,
                                     StringSection, Units, LittleEndian);
   else {
     DataExtractor strOffsetExt(StringOffsetsSection.Data, LittleEndian, 0);
-    uint32_t offset = 0;
+    uint64_t offset = 0;
     uint64_t size = StringOffsetsSection.Data.size();
     // Ensure that size is a multiple of the size of an entry.
     if (size & ((uint64_t)(sizeof(uint32_t) - 1))) {
@@ -235,9 +228,9 @@ static void dumpStringOffsetsSection(raw_ostream &OS, StringRef SectionName,
     }
     DataExtractor StrData(StringSection, LittleEndian, 0);
     while (offset < size) {
-      OS << format("0x%8.8x: ", offset);
-      uint32_t StringOffset = strOffsetExt.getU32(&offset);
-      OS << format("%8.8x  ", StringOffset);
+      OS << format("0x%8.8" PRIx64 ": ", offset);
+      uint64_t StringOffset = strOffsetExt.getU32(&offset);
+      OS << format("%8.8" PRIx64 "  ", StringOffset);
       const char *S = StrData.getCStr(&StringOffset);
       if (S)
         OS << format("\"%s\"", S);
@@ -250,10 +243,10 @@ static void dumpStringOffsetsSection(raw_ostream &OS, StringRef SectionName,
 static void dumpAddrSection(raw_ostream &OS, DWARFDataExtractor &AddrData,
                             DIDumpOptions DumpOpts, uint16_t Version,
                             uint8_t AddrSize) {
-  uint32_t Offset = 0;
+  uint64_t Offset = 0;
   while (AddrData.isValidOffset(Offset)) {
     DWARFDebugAddrTable AddrTable;
-    uint32_t TableOffset = Offset;
+    uint64_t TableOffset = Offset;
     if (Error Err = AddrTable.extract(AddrData, &Offset, Version, AddrSize,
                                       DWARFContext::dumpWarning)) {
       WithColor::error() << toString(std::move(Err)) << '\n';
@@ -261,8 +254,7 @@ static void dumpAddrSection(raw_ostream &OS, DWARFDataExtractor &AddrData,
       // could be read. If it couldn't, stop reading the section.
       if (!AddrTable.hasValidLength())
         break;
-      uint64_t Length = AddrTable.getLength();
-      Offset = TableOffset + Length;
+      Offset = TableOffset + AddrTable.getLength();
     } else {
       AddrTable.dump(OS, DumpOpts);
     }
@@ -275,10 +267,10 @@ static void dumpRnglistsSection(
     llvm::function_ref<Optional<object::SectionedAddress>(uint32_t)>
         LookupPooledAddress,
     DIDumpOptions DumpOpts) {
-  uint32_t Offset = 0;
+  uint64_t Offset = 0;
   while (rnglistData.isValidOffset(Offset)) {
     llvm::DWARFDebugRnglistTable Rnglists;
-    uint32_t TableOffset = Offset;
+    uint64_t TableOffset = Offset;
     if (Error Err = Rnglists.extract(rnglistData, &Offset)) {
       WithColor::error() << toString(std::move(Err)) << '\n';
       uint64_t Length = Rnglists.length();
@@ -297,7 +289,7 @@ static void dumpLoclistsSection(raw_ostream &OS, DIDumpOptions DumpOpts,
                                 DWARFDataExtractor Data,
                                 const MCRegisterInfo *MRI,
                                 Optional<uint64_t> DumpOffset) {
-  uint32_t Offset = 0;
+  uint64_t Offset = 0;
   DWARFDebugLoclists Loclists;
 
   DWARFListTableHeader Header(".debug_loclists", "locations");
@@ -402,11 +394,11 @@ void DWARFContext::dump(
   }
 
   if (const auto *Off = shouldDump(Explicit, ".debug_frame", DIDT_ID_DebugFrame,
-                                   DObj->getDebugFrameSection()))
+                                   DObj->getDebugFrameSection().Data))
     getDebugFrame()->dump(OS, getRegisterInfo(), *Off);
 
   if (const auto *Off = shouldDump(Explicit, ".eh_frame", DIDT_ID_DebugFrame,
-                                   DObj->getEHFrameSection()))
+                                   DObj->getEHFrameSection().Data))
     getEHFrame()->dump(OS, getRegisterInfo(), *Off);
 
   if (DumpType & DIDT_DebugMacro) {
@@ -418,7 +410,7 @@ void DWARFContext::dump(
 
   if (shouldDump(Explicit, ".debug_aranges", DIDT_ID_DebugAranges,
                  DObj->getARangeSection())) {
-    uint32_t offset = 0;
+    uint64_t offset = 0;
     DataExtractor arangesData(DObj->getARangeSection(), isLittleEndian(), 0);
     DWARFDebugArangeSet set;
     while (set.extract(arangesData, &offset))
@@ -433,7 +425,8 @@ void DWARFContext::dump(
         Parser.skip(dumpWarning);
         continue;
       }
-      OS << "debug_line[" << format("0x%8.8x", Parser.getOffset()) << "]\n";
+      OS << "debug_line[" << format("0x%8.8" PRIx64, Parser.getOffset())
+         << "]\n";
       if (DumpOpts.Verbose) {
         Parser.parseNext(dumpWarning, dumpWarning, &OS);
       } else {
@@ -476,30 +469,30 @@ void DWARFContext::dump(
   if (shouldDump(Explicit, ".debug_str", DIDT_ID_DebugStr,
                  DObj->getStringSection())) {
     DataExtractor strData(DObj->getStringSection(), isLittleEndian(), 0);
-    uint32_t offset = 0;
-    uint32_t strOffset = 0;
+    uint64_t offset = 0;
+    uint64_t strOffset = 0;
     while (const char *s = strData.getCStr(&offset)) {
-      OS << format("0x%8.8x: \"%s\"\n", strOffset, s);
+      OS << format("0x%8.8" PRIx64 ": \"%s\"\n", strOffset, s);
       strOffset = offset;
     }
   }
   if (shouldDump(ExplicitDWO, ".debug_str.dwo", DIDT_ID_DebugStr,
                  DObj->getStringDWOSection())) {
     DataExtractor strDWOData(DObj->getStringDWOSection(), isLittleEndian(), 0);
-    uint32_t offset = 0;
-    uint32_t strDWOOffset = 0;
+    uint64_t offset = 0;
+    uint64_t strDWOOffset = 0;
     while (const char *s = strDWOData.getCStr(&offset)) {
-      OS << format("0x%8.8x: \"%s\"\n", strDWOOffset, s);
+      OS << format("0x%8.8" PRIx64 ": \"%s\"\n", strDWOOffset, s);
       strDWOOffset = offset;
     }
   }
   if (shouldDump(Explicit, ".debug_line_str", DIDT_ID_DebugLineStr,
                  DObj->getLineStringSection())) {
     DataExtractor strData(DObj->getLineStringSection(), isLittleEndian(), 0);
-    uint32_t offset = 0;
-    uint32_t strOffset = 0;
+    uint64_t offset = 0;
+    uint64_t strOffset = 0;
     while (const char *s = strData.getCStr(&offset)) {
-      OS << format("0x%8.8x: \"", strOffset);
+      OS << format("0x%8.8" PRIx64 ": \"", strOffset);
       OS.write_escaped(s);
       OS << "\"\n";
       strOffset = offset;
@@ -518,7 +511,7 @@ void DWARFContext::dump(
     uint8_t savedAddressByteSize = getCUAddrSize();
     DWARFDataExtractor rangesData(*DObj, DObj->getRangeSection(),
                                   isLittleEndian(), savedAddressByteSize);
-    uint32_t offset = 0;
+    uint64_t offset = 0;
     DWARFDebugRangeList rangeList;
     while (rangesData.isValidOffset(offset)) {
       if (Error E = rangeList.extract(rangesData, &offset)) {
@@ -641,7 +634,7 @@ DWARFCompileUnit *DWARFContext::getDWOCompileUnitForHash(uint64_t Hash) {
   return nullptr;
 }
 
-DWARFDie DWARFContext::getDIEForOffset(uint32_t Offset) {
+DWARFDie DWARFContext::getDIEForOffset(uint64_t Offset) {
   parseNormalUnits();
   if (auto *CU = NormalUnits.getUnitForOffset(Offset))
     return CU->getDIEForOffset(Offset);
@@ -766,7 +759,7 @@ const DWARFDebugFrame *DWARFContext::getDebugFrame() {
   // provides this information). This problem is fixed in DWARFv4
   // See this dwarf-discuss discussion for more details:
   // http://lists.dwarfstd.org/htdig.cgi/dwarf-discuss-dwarfstd.org/2011-December/001173.html
-  DWARFDataExtractor debugFrameData(DObj->getDebugFrameSection(),
+  DWARFDataExtractor debugFrameData(*DObj, DObj->getDebugFrameSection(),
                                     isLittleEndian(), DObj->getAddressSize());
   DebugFrame.reset(new DWARFDebugFrame(getArch(), false /* IsEH */));
   DebugFrame->parse(debugFrameData);
@@ -777,8 +770,8 @@ const DWARFDebugFrame *DWARFContext::getEHFrame() {
   if (EHFrame)
     return EHFrame.get();
 
-  DWARFDataExtractor debugFrameData(DObj->getEHFrameSection(), isLittleEndian(),
-                                    DObj->getAddressSize());
+  DWARFDataExtractor debugFrameData(*DObj, DObj->getEHFrameSection(),
+                                    isLittleEndian(), DObj->getAddressSize());
   DebugFrame.reset(new DWARFDebugFrame(getArch(), true /* IsEH */));
   DebugFrame->parse(debugFrameData);
   return DebugFrame.get();
@@ -858,7 +851,7 @@ Expected<const DWARFDebugLine::LineTable *> DWARFContext::getLineTableForUnit(
   if (!Offset)
     return nullptr; // No line table for this compile unit.
 
-  uint32_t stmtOffset = *Offset + U->getLineTableOffset();
+  uint64_t stmtOffset = *Offset + U->getLineTableOffset();
   // See if the line table is cached.
   if (const DWARFLineTable *lt = Line->getLineTable(stmtOffset))
     return lt;
@@ -898,7 +891,7 @@ void DWARFContext::parseDWOUnits(bool Lazy) {
   });
 }
 
-DWARFCompileUnit *DWARFContext::getCompileUnitForOffset(uint32_t Offset) {
+DWARFCompileUnit *DWARFContext::getCompileUnitForOffset(uint64_t Offset) {
   parseNormalUnits();
   return dyn_cast_or_null<DWARFCompileUnit>(
       NormalUnits.getUnitForOffset(Offset));
@@ -906,7 +899,7 @@ DWARFCompileUnit *DWARFContext::getCompileUnitForOffset(uint32_t Offset) {
 
 DWARFCompileUnit *DWARFContext::getCompileUnitForAddress(uint64_t Address) {
   // First, get the offset of the compile unit.
-  uint32_t CUOffset = getDebugAranges()->findAddress(Address);
+  uint64_t CUOffset = getDebugAranges()->findAddress(Address);
   // Retrieve the compile unit.
   return getCompileUnitForOffset(CUOffset);
 }
@@ -1385,6 +1378,8 @@ class DWARFObjInMemory final : public DWARFObject {
   DWARFSectionMap RnglistsSection;
   DWARFSectionMap StringOffsetSection;
   DWARFSectionMap LineDWOSection;
+  DWARFSectionMap DebugFrameSection;
+  DWARFSectionMap EHFrameSection;
   DWARFSectionMap LocDWOSection;
   DWARFSectionMap StringOffsetDWOSection;
   DWARFSectionMap RangeDWOSection;
@@ -1405,6 +1400,8 @@ class DWARFObjInMemory final : public DWARFObject {
         .Case("debug_loc", &LocSection)
         .Case("debug_loclists", &LocListsSection)
         .Case("debug_line", &LineSection)
+        .Case("debug_frame", &DebugFrameSection)
+        .Case("eh_frame", &EHFrameSection)
         .Case("debug_str_offsets", &StringOffsetSection)
         .Case("debug_ranges", &RangeSection)
         .Case("debug_rnglists", &RnglistsSection)
@@ -1428,8 +1425,6 @@ class DWARFObjInMemory final : public DWARFObject {
 
   StringRef AbbrevSection;
   StringRef ARangeSection;
-  StringRef DebugFrameSection;
-  StringRef EHFrameSection;
   StringRef StringSection;
   StringRef MacinfoSection;
   StringRef AbbrevDWOSection;
@@ -1449,8 +1444,6 @@ class DWARFObjInMemory final : public DWARFObject {
     return StringSwitch<StringRef *>(Name)
         .Case("debug_abbrev", &AbbrevSection)
         .Case("debug_aranges", &ARangeSection)
-        .Case("debug_frame", &DebugFrameSection)
-        .Case("eh_frame", &EHFrameSection)
         .Case("debug_str", &StringSection)
         .Case("debug_macinfo", &MacinfoSection)
         .Case("debug_abbrev.dwo", &AbbrevDWOSection)
@@ -1651,9 +1644,25 @@ public:
         //
         // TODO Don't store Resolver in every RelocAddrEntry.
         if (Supports && Supports(Reloc.getType())) {
-          Map->try_emplace(Reloc.getOffset(),
-                           RelocAddrEntry{SymInfoOrErr->SectionIndex, Reloc,
-                                          Resolver, SymInfoOrErr->Address});
+          auto I = Map->try_emplace(
+              Reloc.getOffset(),
+              RelocAddrEntry{SymInfoOrErr->SectionIndex, Reloc,
+                             SymInfoOrErr->Address,
+                             Optional<object::RelocationRef>(), 0, Resolver});
+          // If we didn't successfully insert that's because we already had a
+          // relocation for that offset. Store it as a second relocation in the
+          // same RelocAddrEntry instead.
+          if (!I.second) {
+            RelocAddrEntry &entry = I.first->getSecond();
+            if (entry.Reloc2) {
+              ErrorPolicy EP = HandleError(createError(
+                  "At most two relocations per offset are supported"));
+              if (EP == ErrorPolicy::Halt)
+                return;
+            }
+            entry.Reloc2 = Reloc;
+            entry.SymbolValue2 = SymInfoOrErr->Address;
+          }
         } else {
           SmallString<32> Type;
           Reloc.getTypeName(Type);
@@ -1731,8 +1740,12 @@ public:
   const DWARFSection &getLocSection() const override { return LocSection; }
   const DWARFSection &getLoclistsSection() const override { return LocListsSection; }
   StringRef getARangeSection() const override { return ARangeSection; }
-  StringRef getDebugFrameSection() const override { return DebugFrameSection; }
-  StringRef getEHFrameSection() const override { return EHFrameSection; }
+  const DWARFSection &getDebugFrameSection() const override {
+    return DebugFrameSection;
+  }
+  const DWARFSection &getEHFrameSection() const override {
+    return EHFrameSection;
+  }
   const DWARFSection &getLineSection() const override { return LineSection; }
   StringRef getStringSection() const override { return StringSection; }
   const DWARFSection &getRangeSection() const override { return RangeSection; }

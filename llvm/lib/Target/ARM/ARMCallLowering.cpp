@@ -137,6 +137,8 @@ struct OutgoingValueHandler : public CallLowering::ValueHandler {
 
   unsigned assignCustomValue(const CallLowering::ArgInfo &Arg,
                              ArrayRef<CCValAssign> VAs) override {
+    assert(Arg.Regs.size() == 1 && "Can't handle multple regs yet");
+
     CCValAssign VA = VAs[0];
     assert(VA.needsCustom() && "Value doesn't need custom handling");
     assert(VA.getValVT() == MVT::f64 && "Unsupported type");
@@ -153,7 +155,7 @@ struct OutgoingValueHandler : public CallLowering::ValueHandler {
 
     Register NewRegs[] = {MRI.createGenericVirtualRegister(LLT::scalar(32)),
                           MRI.createGenericVirtualRegister(LLT::scalar(32))};
-    MIRBuilder.buildUnmerge(NewRegs, Arg.Reg);
+    MIRBuilder.buildUnmerge(NewRegs, Arg.Regs[0]);
 
     bool IsLittle = MIRBuilder.getMF().getSubtarget<ARMSubtarget>().isLittle();
     if (!IsLittle)
@@ -182,17 +184,17 @@ struct OutgoingValueHandler : public CallLowering::ValueHandler {
 
 } // end anonymous namespace
 
-void ARMCallLowering::splitToValueTypes(
-    const ArgInfo &OrigArg, SmallVectorImpl<ArgInfo> &SplitArgs,
-    MachineFunction &MF, const SplitArgTy &PerformArgSplit) const {
+void ARMCallLowering::splitToValueTypes(const ArgInfo &OrigArg,
+                                        SmallVectorImpl<ArgInfo> &SplitArgs,
+                                        MachineFunction &MF) const {
   const ARMTargetLowering &TLI = *getTLI<ARMTargetLowering>();
   LLVMContext &Ctx = OrigArg.Ty->getContext();
   const DataLayout &DL = MF.getDataLayout();
-  MachineRegisterInfo &MRI = MF.getRegInfo();
   const Function &F = MF.getFunction();
 
   SmallVector<EVT, 4> SplitVTs;
   ComputeValueVTs(TLI, DL, OrigArg.Ty, SplitVTs, nullptr, nullptr, 0);
+  assert(OrigArg.Regs.size() == SplitVTs.size() && "Regs / types mismatch");
 
   if (SplitVTs.size() == 1) {
     // Even if there is no splitting to do, we still want to replace the
@@ -200,11 +202,12 @@ void ARMCallLowering::splitToValueTypes(
     auto Flags = OrigArg.Flags;
     unsigned OriginalAlignment = DL.getABITypeAlignment(OrigArg.Ty);
     Flags.setOrigAlign(OriginalAlignment);
-    SplitArgs.emplace_back(OrigArg.Reg, SplitVTs[0].getTypeForEVT(Ctx), Flags,
-                           OrigArg.IsFixed);
+    SplitArgs.emplace_back(OrigArg.Regs[0], SplitVTs[0].getTypeForEVT(Ctx),
+                           Flags, OrigArg.IsFixed);
     return;
   }
 
+  // Create one ArgInfo for each virtual register.
   for (unsigned i = 0, e = SplitVTs.size(); i != e; ++i) {
     EVT SplitVT = SplitVTs[i];
     Type *SplitTy = SplitVT.getTypeForEVT(Ctx);
@@ -222,10 +225,9 @@ void ARMCallLowering::splitToValueTypes(
         Flags.setInConsecutiveRegsLast();
     }
 
-    unsigned PartReg =
-        MRI.createGenericVirtualRegister(getLLTForType(*SplitTy, DL));
-    SplitArgs.push_back(ArgInfo{PartReg, SplitTy, Flags, OrigArg.IsFixed});
-    PerformArgSplit(PartReg);
+    // FIXME: We also want to split SplitTy further.
+    Register PartReg = OrigArg.Regs[i];
+    SplitArgs.emplace_back(PartReg, SplitTy, Flags, OrigArg.IsFixed);
   }
 }
 
@@ -246,29 +248,17 @@ bool ARMCallLowering::lowerReturnVal(MachineIRBuilder &MIRBuilder,
   if (!isSupportedType(DL, TLI, Val->getType()))
     return false;
 
-  SmallVector<EVT, 4> SplitEVTs;
-  ComputeValueVTs(TLI, DL, Val->getType(), SplitEVTs);
-  assert(VRegs.size() == SplitEVTs.size() &&
-         "For each split Type there should be exactly one VReg.");
+  ArgInfo OrigRetInfo(VRegs, Val->getType());
+  setArgFlags(OrigRetInfo, AttributeList::ReturnIndex, DL, F);
 
-  SmallVector<ArgInfo, 4> SplitVTs;
-  LLVMContext &Ctx = Val->getType()->getContext();
-  for (unsigned i = 0; i < SplitEVTs.size(); ++i) {
-    ArgInfo CurArgInfo(VRegs[i], SplitEVTs[i].getTypeForEVT(Ctx));
-    setArgFlags(CurArgInfo, AttributeList::ReturnIndex, DL, F);
-
-    SmallVector<Register, 4> Regs;
-    splitToValueTypes(CurArgInfo, SplitVTs, MF,
-                      [&](Register Reg) { Regs.push_back(Reg); });
-    if (Regs.size() > 1)
-      MIRBuilder.buildUnmerge(Regs, VRegs[i]);
-  }
+  SmallVector<ArgInfo, 4> SplitRetInfos;
+  splitToValueTypes(OrigRetInfo, SplitRetInfos, MF);
 
   CCAssignFn *AssignFn =
       TLI.CCAssignFnForReturn(F.getCallingConv(), F.isVarArg());
 
   OutgoingValueHandler RetHandler(MIRBuilder, MF.getRegInfo(), Ret, AssignFn);
-  return handleAssignments(MIRBuilder, SplitVTs, RetHandler);
+  return handleAssignments(MIRBuilder, SplitRetInfos, RetHandler);
 }
 
 bool ARMCallLowering::lowerReturn(MachineIRBuilder &MIRBuilder,
@@ -296,7 +286,7 @@ struct IncomingValueHandler : public CallLowering::ValueHandler {
                        CCAssignFn AssignFn)
       : ValueHandler(MIRBuilder, MRI, AssignFn) {}
 
-  bool isArgumentHandler() const override { return true; }
+  bool isIncomingArgumentHandler() const override { return true; }
 
   Register getStackAddress(uint64_t Size, int64_t Offset,
                            MachinePointerInfo &MPO) override {
@@ -372,6 +362,8 @@ struct IncomingValueHandler : public CallLowering::ValueHandler {
 
   unsigned assignCustomValue(const ARMCallLowering::ArgInfo &Arg,
                              ArrayRef<CCValAssign> VAs) override {
+    assert(Arg.Regs.size() == 1 && "Can't handle multple regs yet");
+
     CCValAssign VA = VAs[0];
     assert(VA.needsCustom() && "Value doesn't need custom handling");
     assert(VA.getValVT() == MVT::f64 && "Unsupported type");
@@ -396,7 +388,7 @@ struct IncomingValueHandler : public CallLowering::ValueHandler {
     if (!IsLittle)
       std::swap(NewRegs[0], NewRegs[1]);
 
-    MIRBuilder.buildMerge(Arg.Reg, NewRegs);
+    MIRBuilder.buildMerge(Arg.Regs[0], NewRegs);
 
     return 1;
   }
@@ -413,15 +405,16 @@ struct FormalArgHandler : public IncomingValueHandler {
       : IncomingValueHandler(MIRBuilder, MRI, AssignFn) {}
 
   void markPhysRegUsed(unsigned PhysReg) override {
+    MIRBuilder.getMRI()->addLiveIn(PhysReg);
     MIRBuilder.getMBB().addLiveIn(PhysReg);
   }
 };
 
 } // end anonymous namespace
 
-bool ARMCallLowering::lowerFormalArguments(MachineIRBuilder &MIRBuilder,
-                                           const Function &F,
-                                           ArrayRef<Register> VRegs) const {
+bool ARMCallLowering::lowerFormalArguments(
+    MachineIRBuilder &MIRBuilder, const Function &F,
+    ArrayRef<ArrayRef<Register>> VRegs) const {
   auto &TLI = *getTLI<ARMTargetLowering>();
   auto Subtarget = TLI.getSubtarget();
 
@@ -452,20 +445,13 @@ bool ARMCallLowering::lowerFormalArguments(MachineIRBuilder &MIRBuilder,
   FormalArgHandler ArgHandler(MIRBuilder, MIRBuilder.getMF().getRegInfo(),
                               AssignFn);
 
-  SmallVector<ArgInfo, 8> ArgInfos;
-  SmallVector<Register, 4> SplitRegs;
+  SmallVector<ArgInfo, 8> SplitArgInfos;
   unsigned Idx = 0;
   for (auto &Arg : F.args()) {
-    ArgInfo AInfo(VRegs[Idx], Arg.getType());
-    setArgFlags(AInfo, Idx + AttributeList::FirstArgIndex, DL, F);
+    ArgInfo OrigArgInfo(VRegs[Idx], Arg.getType());
 
-    SplitRegs.clear();
-
-    splitToValueTypes(AInfo, ArgInfos, MF,
-                      [&](Register Reg) { SplitRegs.push_back(Reg); });
-
-    if (!SplitRegs.empty())
-      MIRBuilder.buildMerge(VRegs[Idx], SplitRegs);
+    setArgFlags(OrigArgInfo, Idx + AttributeList::FirstArgIndex, DL, F);
+    splitToValueTypes(OrigArgInfo, SplitArgInfos, MF);
 
     Idx++;
   }
@@ -473,7 +459,7 @@ bool ARMCallLowering::lowerFormalArguments(MachineIRBuilder &MIRBuilder,
   if (!MBB.empty())
     MIRBuilder.setInstr(*MBB.begin());
 
-  if (!handleAssignments(MIRBuilder, ArgInfos, ArgHandler))
+  if (!handleAssignments(MIRBuilder, SplitArgInfos, ArgHandler))
     return false;
 
   // Move back to the end of the basic block.
@@ -517,7 +503,8 @@ bool ARMCallLowering::lowerCall(MachineIRBuilder &MIRBuilder,
                                 CallingConv::ID CallConv,
                                 const MachineOperand &Callee,
                                 const ArgInfo &OrigRet,
-                                ArrayRef<ArgInfo> OrigArgs) const {
+                                ArrayRef<ArgInfo> OrigArgs,
+                                const MDNode *KnownCallees) const {
   MachineFunction &MF = MIRBuilder.getMF();
   const auto &TLI = *getTLI<ARMTargetLowering>();
   const auto &DL = MF.getDataLayout();
@@ -546,7 +533,7 @@ bool ARMCallLowering::lowerCall(MachineIRBuilder &MIRBuilder,
   MIB.add(Callee);
   if (!IsDirect) {
     auto CalleeReg = Callee.getReg();
-    if (CalleeReg && !TRI->isPhysicalRegister(CalleeReg)) {
+    if (CalleeReg && !Register::isPhysicalRegister(CalleeReg)) {
       unsigned CalleeIdx = IsThumb ? 2 : 0;
       MIB->getOperand(CalleeIdx).setReg(constrainOperandRegClass(
           MF, *TRI, MRI, *STI.getInstrInfo(), *STI.getRegBankInfo(),
@@ -568,12 +555,7 @@ bool ARMCallLowering::lowerCall(MachineIRBuilder &MIRBuilder,
     if (Arg.Flags.isByVal())
       return false;
 
-    SmallVector<Register, 8> Regs;
-    splitToValueTypes(Arg, ArgInfos, MF,
-                      [&](unsigned Reg) { Regs.push_back(Reg); });
-
-    if (Regs.size() > 1)
-      MIRBuilder.buildUnmerge(Regs, Arg.Reg);
+    splitToValueTypes(Arg, ArgInfos, MF);
   }
 
   auto ArgAssignFn = TLI.CCAssignFnForCall(CallConv, IsVarArg);
@@ -589,20 +571,11 @@ bool ARMCallLowering::lowerCall(MachineIRBuilder &MIRBuilder,
       return false;
 
     ArgInfos.clear();
-    SmallVector<Register, 8> SplitRegs;
-    splitToValueTypes(OrigRet, ArgInfos, MF,
-                      [&](Register Reg) { SplitRegs.push_back(Reg); });
-
+    splitToValueTypes(OrigRet, ArgInfos, MF);
     auto RetAssignFn = TLI.CCAssignFnForReturn(CallConv, IsVarArg);
     CallReturnHandler RetHandler(MIRBuilder, MRI, MIB, RetAssignFn);
     if (!handleAssignments(MIRBuilder, ArgInfos, RetHandler))
       return false;
-
-    if (!SplitRegs.empty()) {
-      // We have split the value and allocated each individual piece, now build
-      // it up again.
-      MIRBuilder.buildMerge(OrigRet.Reg, SplitRegs);
-    }
   }
 
   // We now know the size of the stack - update the ADJCALLSTACKDOWN

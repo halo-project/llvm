@@ -43,7 +43,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "LLVMContextImpl.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/APInt.h"
@@ -319,31 +318,6 @@ public:
 
   bool hasBrokenDebugInfo() const { return BrokenDebugInfo; }
 
-  void verifyTypes() {
-    LLVMContext &Ctx = M.getContext();
-    for (auto &Entry : Ctx.pImpl->ArrayTypes) {
-      Type *EltTy = Entry.second->getElementType();
-      if (auto *VTy = dyn_cast<VectorType>(EltTy))
-        if (VTy->isScalable())
-          CheckFailed("Arrays cannot contain scalable vectors",
-                      Entry.second, &M);
-    }
-
-    for (StructType* STy : Ctx.pImpl->AnonStructTypes)
-      for (Type *EltTy : STy->elements())
-        if (auto *VTy = dyn_cast<VectorType>(EltTy))
-          if (VTy->isScalable())
-            CheckFailed("Structs cannot contain scalable vectors", STy, &M);
-
-    for (auto &Entry : Ctx.pImpl->NamedStructTypes) {
-      StructType *STy = Entry.second;
-      for (Type *EltTy : STy->elements())
-        if (auto *VTy = dyn_cast<VectorType>(EltTy))
-          if (VTy->isScalable())
-            CheckFailed("Structs cannot contain scalable vectors", STy, &M);
-    }
-  }
-
   bool verify(const Function &F) {
     assert(F.getParent() == &M &&
            "An instance of this class only works with a specific module!");
@@ -412,8 +386,6 @@ public:
     visitModuleCommandLines(M);
 
     verifyCompileUnits();
-
-    verifyTypes();
 
     verifyDeoptimizeCallingConvs();
     DISubprogramAttachments.clear();
@@ -721,10 +693,10 @@ void Verifier::visitGlobalVariable(const GlobalVariable &GV) {
 
   // Scalable vectors cannot be global variables, since we don't know
   // the runtime size. If the global is a struct or an array containing
-  // scalable vectors, that will be caught be verifyTypes instead.
+  // scalable vectors, that will be caught by the isValidElementType methods
+  // in StructType or ArrayType instead.
   if (auto *VTy = dyn_cast<VectorType>(GV.getValueType()))
-    if (VTy->isScalable())
-      CheckFailed("Globals cannot contain scalable vectors", &GV);
+    Assert(!VTy->isScalable(), "Globals cannot contain scalable vectors", &GV);
 
   if (!GV.hasInitializer()) {
     visitGlobalValue(GV);
@@ -1521,9 +1493,12 @@ void Verifier::visitModuleFlagCGProfileEntry(const MDOperand &MDO) {
 static bool isFuncOnlyAttr(Attribute::AttrKind Kind) {
   switch (Kind) {
   case Attribute::NoReturn:
+  case Attribute::NoSync:
+  case Attribute::WillReturn:
   case Attribute::NoCfCheck:
   case Attribute::NoUnwind:
   case Attribute::NoInline:
+  case Attribute::NoFree:
   case Attribute::AlwaysInline:
   case Attribute::OptimizeForSize:
   case Attribute::StackProtect:
@@ -1541,6 +1516,7 @@ static bool isFuncOnlyAttr(Attribute::AttrKind Kind) {
   case Attribute::ReturnsTwice:
   case Attribute::SanitizeAddress:
   case Attribute::SanitizeHWAddress:
+  case Attribute::SanitizeMemTag:
   case Attribute::SanitizeThread:
   case Attribute::SanitizeMemory:
   case Attribute::MinSize:
@@ -2263,8 +2239,11 @@ void Verifier::visitFunction(const Function &F) {
            MDs.empty() ? nullptr : MDs.front().second);
   } else if (F.isDeclaration()) {
     for (const auto &I : MDs) {
-      AssertDI(I.first != LLVMContext::MD_dbg,
-               "function declaration may not have a !dbg attachment", &F);
+      // This is used for call site debug information.
+      AssertDI(I.first != LLVMContext::MD_dbg ||
+                   !cast<DISubprogram>(I.second)->isDistinct(),
+               "function declaration may only have a unique !dbg attachment",
+               &F);
       Assert(I.first != LLVMContext::MD_prof,
              "function declaration may not have a !prof attachment", &F);
 
@@ -4004,9 +3983,9 @@ void Verifier::verifyDominatesUse(Instruction &I, unsigned i) {
 void Verifier::visitDereferenceableMetadata(Instruction& I, MDNode* MD) {
   Assert(I.getType()->isPointerTy(), "dereferenceable, dereferenceable_or_null "
          "apply only to pointer types", &I);
-  Assert(isa<LoadInst>(I),
+  Assert((isa<LoadInst>(I) || isa<IntToPtrInst>(I)),
          "dereferenceable, dereferenceable_or_null apply only to load"
-         " instructions, use attributes for calls or invokes", &I);
+         " and inttoptr instructions, use attributes for calls or invokes", &I);
   Assert(MD->getNumOperands() == 1, "dereferenceable, dereferenceable_or_null "
          "take one operand!", &I);
   ConstantInt *CI = mdconst::dyn_extract<ConstantInt>(MD->getOperand(0));
@@ -4799,11 +4778,11 @@ void Verifier::visitConstrainedFPIntrinsic(ConstrainedFPIntrinsic &FPI) {
   // argument type check is needed here.
 
   if (HasExceptionMD) {
-    Assert(FPI.getExceptionBehavior() != ConstrainedFPIntrinsic::ebInvalid,
+    Assert(FPI.getExceptionBehavior().hasValue(),
            "invalid exception behavior argument", &FPI);
   }
   if (HasRoundingMD) {
-    Assert(FPI.getRoundingMode() != ConstrainedFPIntrinsic::rmInvalid,
+    Assert(FPI.getRoundingMode().hasValue(),
            "invalid rounding mode argument", &FPI);
   }
 }

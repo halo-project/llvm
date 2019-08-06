@@ -213,8 +213,8 @@ private:
   bool translateStore(const User &U, MachineIRBuilder &MIRBuilder);
 
   /// Translate an LLVM string intrinsic (memcpy, memset, ...).
-  bool translateMemfunc(const CallInst &CI, MachineIRBuilder &MIRBuilder,
-                        unsigned ID);
+  bool translateMemFunc(const CallInst &CI, MachineIRBuilder &MIRBuilder,
+                        Intrinsic::ID ID);
 
   void getStackGuard(Register DstReg, MachineIRBuilder &MIRBuilder);
 
@@ -236,14 +236,6 @@ private:
                                MachineIRBuilder &MIRBuilder);
 
   bool translateInlineAsm(const CallInst &CI, MachineIRBuilder &MIRBuilder);
-
-  // FIXME: temporary function to expose previous interface to call lowering
-  // until it is refactored.
-  /// Combines all component registers of \p V into a single scalar with size
-  /// "max(Offsets) + last size".
-  Register packRegs(const Value &V, MachineIRBuilder &MIRBuilder);
-
-  void unpackRegs(const Value &V, Register Src, MachineIRBuilder &MIRBuilder);
 
   /// Returns true if the value should be split into multiple LLTs.
   /// If \p Offsets is given then the split type's offsets will be stored in it.
@@ -298,8 +290,7 @@ private:
   // Begin switch lowering functions.
   bool emitJumpTableHeader(SwitchCG::JumpTable &JT,
                            SwitchCG::JumpTableHeader &JTH,
-                           MachineBasicBlock *SwitchBB,
-                           MachineIRBuilder &MIB);
+                           MachineBasicBlock *HeaderBB);
   void emitJumpTable(SwitchCG::JumpTable &JT, MachineBasicBlock *MBB);
 
   void emitSwitchCase(SwitchCG::CaseBlock &CB, MachineBasicBlock *SwitchBB,
@@ -307,6 +298,7 @@ private:
 
   bool lowerJumpTableWorkItem(SwitchCG::SwitchWorkListItem W,
                               MachineBasicBlock *SwitchMBB,
+                              MachineBasicBlock *CurMBB,
                               MachineBasicBlock *DefaultMBB,
                               MachineIRBuilder &MIB,
                               MachineFunction::iterator BBI,
@@ -456,6 +448,7 @@ private:
 
   bool translateAtomicCmpXchg(const User &U, MachineIRBuilder &MIRBuilder);
   bool translateAtomicRMW(const User &U, MachineIRBuilder &MIRBuilder);
+  bool translateFence(const User &U, MachineIRBuilder &MIRBuilder);
 
   // Stubs to keep the compiler happy while we implement the rest of the
   // translation.
@@ -469,9 +462,6 @@ private:
     return false;
   }
   bool translateCatchSwitch(const User &U, MachineIRBuilder &MIRBuilder) {
-    return false;
-  }
-  bool translateFence(const User &U, MachineIRBuilder &MIRBuilder) {
     return false;
   }
   bool translateAddrSpaceCast(const User &U, MachineIRBuilder &MIRBuilder) {

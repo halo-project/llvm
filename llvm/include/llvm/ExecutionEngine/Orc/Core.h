@@ -16,6 +16,7 @@
 #include "llvm/ADT/BitmaskEnum.h"
 #include "llvm/ExecutionEngine/JITSymbol.h"
 #include "llvm/ExecutionEngine/Orc/SymbolStringPool.h"
+#include "llvm/ExecutionEngine/OrcV1Deprecation.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/Debug.h"
 
@@ -637,7 +638,6 @@ private:
     void addQuery(std::shared_ptr<AsynchronousSymbolQuery> Q);
     void removeQuery(const AsynchronousSymbolQuery &Q);
     AsynchronousSymbolQueryList takeQueriesMeeting(SymbolState RequiredState);
-    AsynchronousSymbolQueryList takeAllQueries();
     bool hasQueriesPending() const { return !PendingQueries.empty(); }
     const AsynchronousSymbolQueryList &pendingQueries() const {
       return PendingQueries;

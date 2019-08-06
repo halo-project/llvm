@@ -12,6 +12,7 @@
 
 #include "clang/Frontend/PrecompiledPreamble.h"
 #include "clang/AST/DeclObjC.h"
+#include "clang/Basic/LangStandard.h"
 #include "clang/Basic/TargetInfo.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/CompilerInvocation.h"
@@ -303,7 +304,7 @@ llvm::ErrorOr<PrecompiledPreamble> PrecompiledPreamble::Build(
       Clang->getFrontendOpts().Inputs[0].getKind().getFormat() !=
           InputKind::Source ||
       Clang->getFrontendOpts().Inputs[0].getKind().getLanguage() ==
-          InputKind::LLVM_IR) {
+          Language::LLVM_IR) {
     return BuildPreambleError::BadInputs;
   }
 
@@ -352,7 +353,8 @@ llvm::ErrorOr<PrecompiledPreamble> PrecompiledPreamble::Build(
   if (auto CommentHandler = Callbacks.getCommentHandler())
     Clang->getPreprocessor().addCommentHandler(CommentHandler);
 
-  Act->Execute();
+  if (llvm::Error Err = Act->Execute())
+    return errorToErrorCode(std::move(Err));
 
   // Run the callbacks.
   Callbacks.AfterExecute(*Clang);
@@ -368,9 +370,11 @@ llvm::ErrorOr<PrecompiledPreamble> PrecompiledPreamble::Build(
 
   SourceManager &SourceMgr = Clang->getSourceManager();
   for (auto &Filename : PreambleDepCollector->getDependencies()) {
-    const FileEntry *File = Clang->getFileManager().getFile(Filename);
-    if (!File || File == SourceMgr.getFileEntryForID(SourceMgr.getMainFileID()))
+    auto FileOrErr = Clang->getFileManager().getFile(Filename);
+    if (!FileOrErr ||
+        *FileOrErr == SourceMgr.getFileEntryForID(SourceMgr.getMainFileID()))
       continue;
+    auto File = *FileOrErr;
     if (time_t ModTime = File->getModificationTime()) {
       FilesInPreamble[File->getName()] =
           PrecompiledPreamble::PreambleFileHash::createForFile(File->getSize(),

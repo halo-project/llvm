@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "ARMFeatures.h"
+#include "ARMBaseInstrInfo.h"
 #include "Utils/ARMBaseInfo.h"
 #include "MCTargetDesc/ARMAddressingModes.h"
 #include "MCTargetDesc/ARMBaseInfo.h"
@@ -2274,6 +2275,14 @@ public:
     return Value >= 1 && Value <= 32;
   }
 
+  bool isMveSaturateOp() const {
+    if (!isImm()) return false;
+    const MCConstantExpr *CE = dyn_cast<MCConstantExpr>(getImm());
+    if (!CE) return false;
+    uint64_t Value = CE->getValue();
+    return Value == 48 || Value == 64;
+  }
+
   bool isITCondCodeNoAL() const {
     if (!isITCondCode()) return false;
     ARMCC::CondCodes CC = getCondCode();
@@ -3369,6 +3378,14 @@ public:
     Inst.addOperand(MCOperand::createImm((CE->getValue() - 90) / 180));
   }
 
+  void addMveSaturateOperands(MCInst &Inst, unsigned N) const {
+    assert(N == 1 && "Invalid number of operands!");
+    const MCConstantExpr *CE = dyn_cast<MCConstantExpr>(getImm());
+    unsigned Imm = CE->getValue();
+    assert((Imm == 48 || Imm == 64) && "Invalid saturate operand");
+    Inst.addOperand(MCOperand::createImm(Imm == 48 ? 1 : 0));
+  }
+
   void print(raw_ostream &OS) const override;
 
   static std::unique_ptr<ARMOperand> CreateITMask(unsigned Mask, SMLoc S) {
@@ -4167,8 +4184,7 @@ ARMAsmParser::parseCoprocNumOperand(OperandVector &Operands) {
   int Num = MatchCoprocessorOperandName(Tok.getString().lower(), 'p');
   if (Num == -1)
     return MatchOperand_NoMatch;
-  // ARMv7 and v8 don't allow cp10/cp11 due to VFP/NEON specific instructions
-  if ((hasV7Ops() || hasV8Ops()) && (Num == 10 || Num == 11))
+  if (!isValidCoprocessorNumber(Num, getSTI().getFeatureBits()))
     return MatchOperand_NoMatch;
 
   Parser.Lex(); // Eat identifier token.
@@ -7865,15 +7881,7 @@ bool ARMAsmParser::validateInstruction(MCInst &Inst,
   case ARM::MVE_VMULLs32bh:
   case ARM::MVE_VMULLs32th:
   case ARM::MVE_VMULLu32bh:
-  case ARM::MVE_VMULLu32th:
-  case ARM::MVE_VQDMLADHs32:
-  case ARM::MVE_VQDMLADHXs32:
-  case ARM::MVE_VQRDMLADHs32:
-  case ARM::MVE_VQRDMLADHXs32:
-  case ARM::MVE_VQDMLSDHs32:
-  case ARM::MVE_VQDMLSDHXs32:
-  case ARM::MVE_VQRDMLSDHs32:
-  case ARM::MVE_VQRDMLSDHXs32: {
+  case ARM::MVE_VMULLu32th: {
     if (Operands[3]->getReg() == Operands[4]->getReg()) {
       return Error (Operands[3]->getStartLoc(),
                     "Qd register and Qn register can't be identical");

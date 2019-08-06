@@ -95,6 +95,11 @@ private:
   MachineBasicBlock::iterator
   getSaluInsertionAtEnd(MachineBasicBlock &MBB) const;
 
+  bool isVreg1(unsigned Reg) const {
+    return Register::isVirtualRegister(Reg) &&
+           MRI->getRegClass(Reg) == &AMDGPU::VReg_1RegClass;
+  }
+
   bool isLaneMaskReg(unsigned Reg) const {
     return TII->getRegisterInfo().isSGPRReg(*MRI, Reg) &&
            TII->getRegisterInfo().getRegSizeInBits(Reg, *MRI) ==
@@ -494,13 +499,10 @@ void SILowerI1Copies::lowerCopiesFromI1() {
 
       unsigned DstReg = MI.getOperand(0).getReg();
       unsigned SrcReg = MI.getOperand(1).getReg();
-      if (!TargetRegisterInfo::isVirtualRegister(SrcReg) ||
-          MRI->getRegClass(SrcReg) != &AMDGPU::VReg_1RegClass)
+      if (!isVreg1(SrcReg))
         continue;
 
-      if (isLaneMaskReg(DstReg) ||
-          (TargetRegisterInfo::isVirtualRegister(DstReg) &&
-           MRI->getRegClass(DstReg) == &AMDGPU::VReg_1RegClass))
+      if (isLaneMaskReg(DstReg) || isVreg1(DstReg))
         continue;
 
       // Copy into a 32-bit vector register.
@@ -543,7 +545,7 @@ void SILowerI1Copies::lowerPhis() {
 
     for (MachineInstr &MI : MBB.phis()) {
       unsigned DstReg = MI.getOperand(0).getReg();
-      if (MRI->getRegClass(DstReg) != &AMDGPU::VReg_1RegClass)
+      if (!isVreg1(DstReg))
         continue;
 
       LLVM_DEBUG(dbgs() << "Lower PHI: " << MI);
@@ -560,7 +562,7 @@ void SILowerI1Copies::lowerPhis() {
 
         if (IncomingDef->getOpcode() == AMDGPU::COPY) {
           IncomingReg = IncomingDef->getOperand(1).getReg();
-          assert(isLaneMaskReg(IncomingReg));
+          assert(isLaneMaskReg(IncomingReg) || isVreg1(IncomingReg));
           assert(!IncomingDef->getOperand(1).getSubReg());
         } else if (IncomingDef->getOpcode() == AMDGPU::IMPLICIT_DEF) {
           continue;
@@ -668,8 +670,7 @@ void SILowerI1Copies::lowerCopiesToI1() {
         continue;
 
       unsigned DstReg = MI.getOperand(0).getReg();
-      if (!TargetRegisterInfo::isVirtualRegister(DstReg) ||
-          MRI->getRegClass(DstReg) != &AMDGPU::VReg_1RegClass)
+      if (!isVreg1(DstReg))
         continue;
 
       if (MRI->use_empty(DstReg)) {
@@ -688,8 +689,8 @@ void SILowerI1Copies::lowerCopiesToI1() {
       unsigned SrcReg = MI.getOperand(1).getReg();
       assert(!MI.getOperand(1).getSubReg());
 
-      if (!TargetRegisterInfo::isVirtualRegister(SrcReg) ||
-          !isLaneMaskReg(SrcReg)) {
+      if (!Register::isVirtualRegister(SrcReg) ||
+          (!isLaneMaskReg(SrcReg) && !isVreg1(SrcReg))) {
         assert(TII->getRegisterInfo().getRegSizeInBits(SrcReg, *MRI) == 32);
         unsigned TmpReg = createLaneMaskReg(*MF);
         BuildMI(MBB, MI, DL, TII->get(AMDGPU::V_CMP_NE_U32_e64), TmpReg)
@@ -733,7 +734,7 @@ bool SILowerI1Copies::isConstantLaneMask(unsigned Reg, bool &Val) const {
       break;
 
     Reg = MI->getOperand(1).getReg();
-    if (!TargetRegisterInfo::isVirtualRegister(Reg))
+    if (!Register::isVirtualRegister(Reg))
       return false;
     if (!isLaneMaskReg(Reg))
       return false;

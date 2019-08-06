@@ -61,6 +61,7 @@ bool X86CallLowering::splitToValueTypes(const ArgInfo &OrigArg,
   SmallVector<EVT, 4> SplitVTs;
   SmallVector<uint64_t, 4> Offsets;
   ComputeValueVTs(TLI, DL, OrigArg.Ty, SplitVTs, &Offsets, 0);
+  assert(OrigArg.Regs.size() == 1 && "Can't handle multple regs yet");
 
   if (OrigArg.Ty->isVoidTy())
     return true;
@@ -70,7 +71,7 @@ bool X86CallLowering::splitToValueTypes(const ArgInfo &OrigArg,
 
   if (NumParts == 1) {
     // replace the original type ( pointer -> GPR ).
-    SplitArgs.emplace_back(OrigArg.Reg, VT.getTypeForEVT(Context),
+    SplitArgs.emplace_back(OrigArg.Regs[0], VT.getTypeForEVT(Context),
                            OrigArg.Flags, OrigArg.IsFixed);
     return true;
   }
@@ -85,7 +86,7 @@ bool X86CallLowering::splitToValueTypes(const ArgInfo &OrigArg,
         ArgInfo{MRI.createGenericVirtualRegister(getLLTForType(*PartTy, DL)),
                 PartTy, OrigArg.Flags};
     SplitArgs.push_back(Info);
-    SplitRegs.push_back(Info.Reg);
+    SplitRegs.push_back(Info.Regs[0]);
   }
 
   PerformArgSplit(SplitRegs);
@@ -228,7 +229,7 @@ struct IncomingValueHandler : public CallLowering::ValueHandler {
       : ValueHandler(MIRBuilder, MRI, AssignFn),
         DL(MIRBuilder.getMF().getDataLayout()) {}
 
-  bool isArgumentHandler() const override { return true; }
+  bool isIncomingArgumentHandler() const override { return true; }
 
   Register getStackAddress(uint64_t Size, int64_t Offset,
                            MachinePointerInfo &MPO) override {
@@ -300,6 +301,7 @@ struct FormalArgHandler : public IncomingValueHandler {
       : IncomingValueHandler(MIRBuilder, MRI, AssignFn) {}
 
   void markPhysRegUsed(unsigned PhysReg) override {
+    MIRBuilder.getMRI()->addLiveIn(PhysReg);
     MIRBuilder.getMBB().addLiveIn(PhysReg);
   }
 };
@@ -319,9 +321,9 @@ protected:
 
 } // end anonymous namespace
 
-bool X86CallLowering::lowerFormalArguments(MachineIRBuilder &MIRBuilder,
-                                           const Function &F,
-                                           ArrayRef<Register> VRegs) const {
+bool X86CallLowering::lowerFormalArguments(
+    MachineIRBuilder &MIRBuilder, const Function &F,
+    ArrayRef<ArrayRef<Register>> VRegs) const {
   if (F.arg_empty())
     return true;
 
@@ -343,14 +345,14 @@ bool X86CallLowering::lowerFormalArguments(MachineIRBuilder &MIRBuilder,
         Arg.hasAttribute(Attribute::StructRet) ||
         Arg.hasAttribute(Attribute::SwiftSelf) ||
         Arg.hasAttribute(Attribute::SwiftError) ||
-        Arg.hasAttribute(Attribute::Nest))
+        Arg.hasAttribute(Attribute::Nest) || VRegs[Idx].size() > 1)
       return false;
 
     ArgInfo OrigArg(VRegs[Idx], Arg.getType());
     setArgFlags(OrigArg, Idx + AttributeList::FirstArgIndex, DL, F);
     if (!splitToValueTypes(OrigArg, SplitArgs, DL, MRI,
                            [&](ArrayRef<Register> Regs) {
-                             MIRBuilder.buildMerge(VRegs[Idx], Regs);
+                             MIRBuilder.buildMerge(VRegs[Idx][0], Regs);
                            }))
       return false;
     Idx++;
@@ -374,7 +376,8 @@ bool X86CallLowering::lowerCall(MachineIRBuilder &MIRBuilder,
                                 CallingConv::ID CallConv,
                                 const MachineOperand &Callee,
                                 const ArgInfo &OrigRet,
-                                ArrayRef<ArgInfo> OrigArgs) const {
+                                ArrayRef<ArgInfo> OrigArgs,
+                                const MDNode *KnownCallees) const {
   MachineFunction &MF = MIRBuilder.getMF();
   const Function &F = MF.getFunction();
   MachineRegisterInfo &MRI = MF.getRegInfo();
@@ -408,9 +411,12 @@ bool X86CallLowering::lowerCall(MachineIRBuilder &MIRBuilder,
     if (OrigArg.Flags.isByVal())
       return false;
 
+    if (OrigArg.Regs.size() > 1)
+      return false;
+
     if (!splitToValueTypes(OrigArg, SplitArgs, DL, MRI,
                            [&](ArrayRef<Register> Regs) {
-                             MIRBuilder.buildUnmerge(Regs, OrigArg.Reg);
+                             MIRBuilder.buildUnmerge(Regs, OrigArg.Regs[0]);
                            }))
       return false;
   }
@@ -450,7 +456,10 @@ bool X86CallLowering::lowerCall(MachineIRBuilder &MIRBuilder,
   // symmetry with the arguments, the physical register must be an
   // implicit-define of the call instruction.
 
-  if (OrigRet.Reg) {
+  if (!OrigRet.Ty->isVoidTy()) {
+    if (OrigRet.Regs.size() > 1)
+      return false;
+
     SplitArgs.clear();
     SmallVector<Register, 8> NewRegs;
 
@@ -465,7 +474,7 @@ bool X86CallLowering::lowerCall(MachineIRBuilder &MIRBuilder,
       return false;
 
     if (!NewRegs.empty())
-      MIRBuilder.buildMerge(OrigRet.Reg, NewRegs);
+      MIRBuilder.buildMerge(OrigRet.Regs[0], NewRegs);
   }
 
   CallSeqStart.addImm(Handler.getStackSize())

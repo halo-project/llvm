@@ -67,7 +67,8 @@ public:
 
   bool HandleTopLevelDecl(DeclGroupRef DG) override {
     for (Decl *D : DG) {
-      if (D->isFromASTFile())
+      auto &SM = D->getASTContext().getSourceManager();
+      if (!isInsideMainFile(D->getLocation(), SM))
         continue;
 
       // ObjCMethodDecl are not actually top-level decls.
@@ -235,7 +236,8 @@ private:
     for (const auto &Inc : Includes.MainFileIncludes) {
       const FileEntry *File = nullptr;
       if (Inc.Resolved != "")
-        File = SM.getFileManager().getFile(Inc.Resolved);
+        if (auto FE = SM.getFileManager().getFile(Inc.Resolved))
+          File = *FE;
 
       llvm::StringRef WrittenFilename =
           llvm::StringRef(Inc.Written).drop_front().drop_back();
@@ -354,8 +356,7 @@ ParsedAST::build(std::unique_ptr<CompilerInvocation> CI,
           // those might take us into a preamble file as well.
           bool IsInsideMainFile =
               Info.hasSourceManager() &&
-              Info.getSourceManager().isWrittenInMainFile(
-                  Info.getSourceManager().getFileLoc(Info.getLocation()));
+              isInsideMainFile(Info.getLocation(), Info.getSourceManager());
           if (IsInsideMainFile && tidy::ShouldSuppressDiagnostic(
                                       DiagLevel, Info, *CTContext,
                                       /* CheckMacroExpansion = */ false)) {
@@ -374,7 +375,7 @@ ParsedAST::build(std::unique_ptr<CompilerInvocation> CI,
     }
   }
 
-  // Add IncludeFixer which can recorver diagnostics caused by missing includes
+  // Add IncludeFixer which can recover diagnostics caused by missing includes
   // (e.g. incomplete type) and attach include insertion fixes to diagnostics.
   llvm::Optional<IncludeFixer> FixIncludes;
   auto BuildDir = VFS->getCurrentWorkingDirectory();
@@ -420,11 +421,16 @@ ParsedAST::build(std::unique_ptr<CompilerInvocation> CI,
   Clang->getPreprocessor().addCommentHandler(IWYUHandler.get());
 
   // Collect tokens of the main file.
-  syntax::TokenCollector Tokens(Clang->getPreprocessor());
+  syntax::TokenCollector CollectTokens(Clang->getPreprocessor());
 
-  if (!Action->Execute())
-    log("Execute() failed when building AST for {0}", MainInput.getFile());
+  if (llvm::Error Err = Action->Execute())
+    log("Execute() failed when building AST for {0}: {1}", MainInput.getFile(),
+        toString(std::move(Err)));
 
+  // We have to consume the tokens before running clang-tidy to avoid collecting
+  // tokens from running the preprocessor inside the checks (only
+  // modernize-use-trailing-return-type does that today).
+  syntax::TokenBuffer Tokens = std::move(CollectTokens).consume();
   std::vector<Decl *> ParsedDecls = Action->takeTopLevelDecls();
   // AST traversals should exclude the preamble, to avoid performance cliffs.
   Clang->getASTContext().setTraversalScope(ParsedDecls);
@@ -450,9 +456,8 @@ ParsedAST::build(std::unique_ptr<CompilerInvocation> CI,
   if (Preamble)
     Diags.insert(Diags.begin(), Preamble->Diags.begin(), Preamble->Diags.end());
   return ParsedAST(std::move(Preamble), std::move(Clang), std::move(Action),
-                   std::move(Tokens).consume(), std::move(ParsedDecls),
-                   std::move(Diags), std::move(Includes),
-                   std::move(CanonIncludes));
+                   std::move(Tokens), std::move(ParsedDecls), std::move(Diags),
+                   std::move(Includes), std::move(CanonIncludes));
 }
 
 ParsedAST::ParsedAST(ParsedAST &&Other) = default;
@@ -566,7 +571,8 @@ buildPreamble(PathRef FileName, CompilerInvocation &CI,
               PreambleParsedCallback PreambleCallback) {
   // Note that we don't need to copy the input contents, preamble can live
   // without those.
-  auto ContentsBuffer = llvm::MemoryBuffer::getMemBuffer(Inputs.Contents);
+  auto ContentsBuffer =
+      llvm::MemoryBuffer::getMemBuffer(Inputs.Contents, FileName);
   auto Bounds =
       ComputePreambleBounds(*CI.getLangOpts(), ContentsBuffer.get(), 0);
 
@@ -646,10 +652,10 @@ buildAST(PathRef FileName, std::unique_ptr<CompilerInvocation> Invocation,
     // dirs.
   }
 
-  return ParsedAST::build(llvm::make_unique<CompilerInvocation>(*Invocation),
-                          Preamble,
-                          llvm::MemoryBuffer::getMemBufferCopy(Inputs.Contents),
-                          std::move(VFS), Inputs.Index, Inputs.Opts);
+  return ParsedAST::build(
+      llvm::make_unique<CompilerInvocation>(*Invocation), Preamble,
+      llvm::MemoryBuffer::getMemBufferCopy(Inputs.Contents, FileName),
+      std::move(VFS), Inputs.Index, Inputs.Opts);
 }
 
 SourceLocation getBeginningOfIdentifier(const ParsedAST &Unit,

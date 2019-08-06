@@ -14,9 +14,11 @@ namespace tidy {
 namespace utils {
 using tooling::RewriteRule;
 
+#ifndef NDEBUG
 static bool hasExplanation(const RewriteRule::Case &C) {
   return C.Explanation != nullptr;
 }
+#endif
 
 // This constructor cannot dispatch to the simpler one (below), because, in
 // order to get meaningful results from `getLangOpts` and `Options`, we need the
@@ -42,6 +44,19 @@ TransformerClangTidyCheck::TransformerClangTidyCheck(RewriteRule R,
   assert(llvm::all_of(Rule->Cases, hasExplanation) &&
          "clang-tidy checks must have an explanation by default;"
          " explicitly provide an empty explanation if none is desired");
+}
+
+void TransformerClangTidyCheck::registerPPCallbacks(
+    const SourceManager &SM, Preprocessor *PP, Preprocessor *ModuleExpanderPP) {
+  // Only allocate and register the IncludeInsert when some `Case` will add
+  // includes.
+  if (Rule && llvm::any_of(Rule->Cases, [](const RewriteRule::Case &C) {
+        return !C.AddedIncludes.empty();
+      })) {
+    Inserter = llvm::make_unique<IncludeInserter>(
+        SM, getLangOpts(), utils::IncludeSorter::IS_LLVM);
+    PP->addPPCallbacks(Inserter->CreatePPCallbacks());
+  }
 }
 
 void TransformerClangTidyCheck::registerMatchers(
@@ -86,6 +101,15 @@ void TransformerClangTidyCheck::check(
   DiagnosticBuilder Diag = diag(RootLoc, *Explanation);
   for (const auto &T : *Transformations) {
     Diag << FixItHint::CreateReplacement(T.Range, T.Replacement);
+  }
+
+  for (const auto &I : Case.AddedIncludes) {
+    auto &Header = I.first;
+    if (Optional<FixItHint> Fix = Inserter->CreateIncludeInsertion(
+            Result.SourceManager->getMainFileID(), Header,
+            /*IsAngled=*/I.second == tooling::IncludeFormat::Angled)) {
+      Diag << *Fix;
+    }
   }
 }
 

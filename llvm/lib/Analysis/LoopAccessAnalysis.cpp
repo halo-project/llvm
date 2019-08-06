@@ -1189,11 +1189,24 @@ bool llvm::isConsecutiveAccess(Value *A, Value *B, const DataLayout &DL,
 
   unsigned IdxWidth = DL.getIndexSizeInBits(ASA);
   Type *Ty = cast<PointerType>(PtrA->getType())->getElementType();
-  APInt Size(IdxWidth, DL.getTypeStoreSize(Ty));
 
   APInt OffsetA(IdxWidth, 0), OffsetB(IdxWidth, 0);
   PtrA = PtrA->stripAndAccumulateInBoundsConstantOffsets(DL, OffsetA);
   PtrB = PtrB->stripAndAccumulateInBoundsConstantOffsets(DL, OffsetB);
+
+  // Retrieve the address space again as pointer stripping now tracks through
+  // `addrspacecast`.
+  ASA = cast<PointerType>(PtrA->getType())->getAddressSpace();
+  ASB = cast<PointerType>(PtrB->getType())->getAddressSpace();
+  // Check that the address spaces match and that the pointers are valid.
+  if (ASA != ASB)
+    return false;
+
+  IdxWidth = DL.getIndexSizeInBits(ASA);
+  OffsetA = OffsetA.sextOrTrunc(IdxWidth);
+  OffsetB = OffsetB.sextOrTrunc(IdxWidth);
+
+  APInt Size(IdxWidth, DL.getTypeStoreSize(Ty));
 
   //  OffsetDelta = OffsetB - OffsetA;
   const SCEV *OffsetSCEVA = SE.getConstant(OffsetA);
@@ -1641,13 +1654,21 @@ bool MemoryDepChecker::areDepsSafe(DepCandidates &AccessSets,
     // Check every access pair.
     while (AI != AE) {
       Visited.insert(*AI);
-      EquivalenceClasses<MemAccessInfo>::member_iterator OI = std::next(AI);
+      bool AIIsWrite = AI->getInt();
+      // Check loads only against next equivalent class, but stores also against
+      // other stores in the same equivalence class - to the same address.
+      EquivalenceClasses<MemAccessInfo>::member_iterator OI =
+          (AIIsWrite ? AI : std::next(AI));
       while (OI != AE) {
         // Check every accessing instruction pair in program order.
         for (std::vector<unsigned>::iterator I1 = Accesses[*AI].begin(),
              I1E = Accesses[*AI].end(); I1 != I1E; ++I1)
-          for (std::vector<unsigned>::iterator I2 = Accesses[*OI].begin(),
-               I2E = Accesses[*OI].end(); I2 != I2E; ++I2) {
+          // Scan all accesses of another equivalence class, but only the next
+          // accesses of the same equivalent class.
+          for (std::vector<unsigned>::iterator
+                   I2 = (OI == AI ? std::next(I1) : Accesses[*OI].begin()),
+                   I2E = (OI == AI ? I1E : Accesses[*OI].end());
+               I2 != I2E; ++I2) {
             auto A = std::make_pair(&*AI, *I1);
             auto B = std::make_pair(&*OI, *I2);
 

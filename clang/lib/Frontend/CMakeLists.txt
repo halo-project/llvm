@@ -2,6 +2,7 @@ add_subdirectory(Rewrite)
 
 set(LLVM_LINK_COMPONENTS
   BitReader
+  BitstreamReader
   Option
   ProfileData
   Support
@@ -31,7 +32,6 @@ add_clang_library(clangFrontend
   HeaderIncludeGen.cpp
   InitHeaderSearch.cpp
   InitPreprocessor.cpp
-  LangStandards.cpp
   LayoutOverrideSource.cpp
   LogDiagnosticPrinter.cpp
   ModuleDependencyCollector.cpp

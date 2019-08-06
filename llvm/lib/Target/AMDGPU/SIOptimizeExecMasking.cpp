@@ -202,6 +202,12 @@ static bool removeTerminatorBit(const SIInstrInfo &TII, MachineInstr &MI) {
     MI.setDesc(TII.get(AMDGPU::S_OR_B32));
     return true;
   }
+  case AMDGPU::S_OR_B64_term: {
+    // This is only a terminator to get the correct spill code placement during
+    // register allocation.
+    MI.setDesc(TII.get(AMDGPU::S_OR_B64));
+    return true;
+  }
   case AMDGPU::S_ANDN2_B64_term: {
     // This is only a terminator to get the correct spill code placement during
     // register allocation.
@@ -253,8 +259,8 @@ static MachineBasicBlock::reverse_iterator findExecCopy(
 }
 
 // XXX - Seems LivePhysRegs doesn't work correctly since it will incorrectly
-// repor tthe register as unavailable because a super-register with a lane mask
-// as unavailable.
+// report the register as unavailable because a super-register with a lane mask
+// is unavailable.
 static bool isLiveOut(const MachineBasicBlock &MBB, unsigned Reg) {
   for (MachineBasicBlock *Succ : MBB.successors()) {
     if (Succ->isLiveIn(Reg))
