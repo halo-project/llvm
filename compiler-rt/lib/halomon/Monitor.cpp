@@ -10,7 +10,7 @@
 namespace halo {
 
 void handler(int32_t ID, XRayEntryType Type) {
-  std::cout << "Function " << ID << " performed " << Type << "\n";
+  // std::cout << "Function " << ID << " performed " << Type << "\n";
 }
 
 ////////////////////////////////////////////////
