@@ -790,7 +790,7 @@ void tools::addHaloRuntime(const ToolChain &TC, const llvm::opt::ArgList &Args,
     //
     // Other options are under llvm-config --components
     //
-    // NOTE: this list has to be kept in sync with
+    // FIXME: this list has to be kept in sync with
     //        compiler-rt/lib/halomon/CMakeLists.txt !
     //
     // QUESTION: is there a cleaner way to do this in clang?
@@ -806,6 +806,7 @@ void tools::addHaloRuntime(const ToolChain &TC, const llvm::opt::ArgList &Args,
     CmdArgs.push_back("-lLLVMDebugInfoCodeView");
     CmdArgs.push_back("-lLLVMDebugInfoMSF");
     CmdArgs.push_back("-lLLVMBitReader");
+    CmdArgs.push_back("-lLLVMBitstreamReader");
     CmdArgs.push_back("-lLLVMCore");
     CmdArgs.push_back("-lLLVMRemarks");
     CmdArgs.push_back("-lLLVMBinaryFormat");

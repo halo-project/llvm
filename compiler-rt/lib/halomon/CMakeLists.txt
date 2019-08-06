@@ -60,7 +60,7 @@ add_compiler_rt_runtime(clang_rt.halomon
 # LLVM component static libs. We only add dependencies here because I had
 # difficulty trying to link them directly into the halomon library.
 #
-# NOTE: keep this list sync'd with clang/lib/Driver/ToolChains/CommonArgs.cpp !
+# FIXME: keep this list sync'd with clang/lib/Driver/ToolChains/CommonArgs.cpp !
 # Also, other options are under llvm-config --components
 ###########
 
@@ -75,6 +75,7 @@ set(LLVM_TGTS
   LLVMDebugInfoCodeView
   LLVMDebugInfoMSF
   LLVMBitReader
+  LLVMBitstreamReader
   LLVMCore
   LLVMRemarks
   LLVMBinaryFormat
