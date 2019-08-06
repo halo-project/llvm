@@ -41,7 +41,7 @@ bool addXRayRuntime(const ToolChain &TC, const llvm::opt::ArgList &Args,
 void linkXRayRuntimeDeps(const ToolChain &TC,
                          llvm::opt::ArgStringList &CmdArgs);
 
-void addHaloRuntime(const ToolChain &TC, const llvm::opt::ArgList &Args,
+bool addHaloRuntime(const ToolChain &TC, const llvm::opt::ArgList &Args,
                    llvm::opt::ArgStringList &CmdArgs);
 
 void AddRunTimeLibs(const ToolChain &TC, const Driver &D,

@@ -521,7 +521,7 @@ void tools::gnutools::Linker::ConstructJob(Compilation &C, const JobAction &JA,
 
   bool NeedsSanitizerDeps = addSanitizerRuntimes(ToolChain, Args, CmdArgs);
   bool NeedsXRayDeps = addXRayRuntime(ToolChain, Args, CmdArgs);
-  addHaloRuntime(ToolChain, Args, CmdArgs);
+  bool NeedsHaloDeps = addHaloRuntime(ToolChain, Args, CmdArgs);
   AddLinkerInputs(ToolChain, Inputs, Args, CmdArgs, JA);
   // The profile runtime also needs access to system libraries.
   getToolChain().addProfileRTLibs(Args, CmdArgs);
@@ -554,7 +554,8 @@ void tools::gnutools::Linker::ConstructJob(Compilation &C, const JobAction &JA,
         linkXRayRuntimeDeps(ToolChain, CmdArgs);
 
       bool WantPthread = Args.hasArg(options::OPT_pthread) ||
-                         Args.hasArg(options::OPT_pthreads);
+                         Args.hasArg(options::OPT_pthreads) ||
+                         NeedsHaloDeps;
 
       // FIXME: Only pass GompNeedsRT = true for platforms with libgomp that
       // require librt. Most modern Linux platforms do, but some may not.
@@ -589,6 +590,21 @@ void tools::gnutools::Linker::ConstructJob(Compilation &C, const JobAction &JA,
       if (IsIAMCU) {
         CmdArgs.push_back("--as-needed");
         CmdArgs.push_back("-lsoftfp");
+        CmdArgs.push_back("--no-as-needed");
+      }
+
+      if (NeedsHaloDeps) {
+        CmdArgs.push_back("--as-needed");
+        CmdArgs.push_back("-ldl");
+        CmdArgs.push_back("-lm");
+        // FIXME this is the libc++ we compiled halomon with; conflict prone!
+        ToolChain.AddCXXStdlibLibArgs(Args, CmdArgs);
+        CmdArgs.push_back("-lpfm");
+        CmdArgs.push_back("-lboost_system");
+        CmdArgs.push_back("-lprotobuf");
+        // DSOs needed mainly by LLVM.
+        CmdArgs.push_back("-lz");
+        CmdArgs.push_back("-lcurses");
         CmdArgs.push_back("--no-as-needed");
       }
     }

@@ -774,12 +774,14 @@ void tools::linkXRayRuntimeDeps(const ToolChain &TC, ArgStringList &CmdArgs) {
     CmdArgs.push_back("-ldl");
 }
 
-void tools::addHaloRuntime(const ToolChain &TC, const llvm::opt::ArgList &Args,
-                    llvm::opt::ArgStringList &CmdArgs) {
-    if (!Args.hasArg(options::OPT_fhalo))
-      return;
+bool tools::addHaloRuntime(const ToolChain &TC, const ArgList &Args,
+                                                      ArgStringList &CmdArgs) {
 
-    // Static libs go first.
+    // Only support Linux.
+    if (!Args.hasArg(options::OPT_fhalo) || !TC.getTriple().isOSLinux())
+      return false;
+
+    // Add any static libraries needed to include halomon.
 
     addSanitizerRuntime(TC, Args, CmdArgs, "halomon",
                                       /*Shared*/ false, /*Whole*/ true);
@@ -790,7 +792,7 @@ void tools::addHaloRuntime(const ToolChain &TC, const llvm::opt::ArgList &Args,
     //
     // Other options are under llvm-config --components
     //
-    // FIXME: this list has to be kept in sync with
+    // FIXME: this list awful and has to be kept in sync with
     //        compiler-rt/lib/halomon/CMakeLists.txt !
     //
     // QUESTION: is there a cleaner way to do this in clang?
@@ -813,17 +815,7 @@ void tools::addHaloRuntime(const ToolChain &TC, const llvm::opt::ArgList &Args,
     CmdArgs.push_back("-lLLVMSupport");
     CmdArgs.push_back("-lLLVMDemangle");
 
-
-    // First, Halo's DSOs
-    linkXRayRuntimeDeps(TC, CmdArgs);
-    CmdArgs.push_back("-lpfm");
-    CmdArgs.push_back("-lboost_system");
-    CmdArgs.push_back("-lprotobuf");
-    TC.AddCXXStdlibLibArgs(Args, CmdArgs);
-
-    // Next, DSOs needed by LLVM.
-    CmdArgs.push_back("-lz");
-    CmdArgs.push_back("-lcurses");
+    return true; // currently always need to link dependencies.
 }
 
 bool tools::areOptimizationsEnabled(const ArgList &Args) {
