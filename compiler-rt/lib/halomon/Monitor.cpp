@@ -19,9 +19,10 @@ void monitor_loop(MonitorState &M, std::atomic<bool> &ShutdownRequested) {
   /////////////////
   // Setup
 
-  __xray_init();
-  __xray_set_handler(handler);
-  XRayPatchingStatus Stat = __xray_patch();
+  // __xray_init();
+  // __xray_set_handler(handler);
+  XRayPatchingStatus Stat = FAILED; //__xray_patch();
+  return;
 
   if (Stat == NOT_INITIALIZED)
     std::cout << "XRay not initialized.\n";
