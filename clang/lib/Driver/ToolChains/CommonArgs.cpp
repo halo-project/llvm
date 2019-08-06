@@ -779,27 +779,50 @@ void tools::addHaloRuntime(const ToolChain &TC, const llvm::opt::ArgList &Args,
     if (!Args.hasArg(options::OPT_fhalo))
       return;
 
+    // Static libs go first.
+
     addSanitizerRuntime(TC, Args, CmdArgs, "halomon",
                                       /*Shared*/ false, /*Whole*/ true);
 
-    // Add dependencies
+    ////////////
+    // LLVM component static libs. Obtained the list below via
+    //     llvm-config --libs support core object jitlink symbolize
+    //
+    // Other options are under llvm-config --components
+    //
+    // NOTE: this list has to be kept in sync with
+    //        compiler-rt/lib/halomon/CMakeLists.txt !
+    //
+    // QUESTION: is there a cleaner way to do this in clang?
+    /////////////////////
+
+    CmdArgs.push_back("-lLLVMSymbolize");
+    CmdArgs.push_back("-lLLVMDebugInfoPDB");
+    CmdArgs.push_back("-lLLVMDebugInfoDWARF");
+    CmdArgs.push_back("-lLLVMJITLink");
+    CmdArgs.push_back("-lLLVMObject");
+    CmdArgs.push_back("-lLLVMMCParser");
+    CmdArgs.push_back("-lLLVMMC");
+    CmdArgs.push_back("-lLLVMDebugInfoCodeView");
+    CmdArgs.push_back("-lLLVMDebugInfoMSF");
+    CmdArgs.push_back("-lLLVMBitReader");
+    CmdArgs.push_back("-lLLVMCore");
+    CmdArgs.push_back("-lLLVMRemarks");
+    CmdArgs.push_back("-lLLVMBinaryFormat");
+    CmdArgs.push_back("-lLLVMSupport");
+    CmdArgs.push_back("-lLLVMDemangle");
+
+
+    // First, Halo's DSOs
     linkXRayRuntimeDeps(TC, CmdArgs);
     CmdArgs.push_back("-lpfm");
     CmdArgs.push_back("-lboost_system");
     CmdArgs.push_back("-lprotobuf");
-    CmdArgs.push_back("-lstdc++");
+    TC.AddCXXStdlibLibArgs(Args, CmdArgs);
 
-    // Yes it's ugly but we have a but it works and I'm tired of linkers.
-    SmallString<128> Path(TC.getDriver().ResourceDir);
-    llvm::sys::path::append(Path, "..", "..");
-    std::string PathStr = Path.str();
-
-    // NOTE: -L install/lib is already passed on the command line
-    // Can we do without libLLVM?
-    CmdArgs.push_back("-rpath");
-    CmdArgs.push_back(Args.MakeArgString(PathStr.c_str()));
-
-    CmdArgs.push_back("-lLLVM");
+    // Next, DSOs needed by LLVM.
+    CmdArgs.push_back("-lz");
+    CmdArgs.push_back("-lcurses");
 }
 
 bool tools::areOptimizationsEnabled(const ArgList &Args) {

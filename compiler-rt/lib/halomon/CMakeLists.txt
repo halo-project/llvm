@@ -43,8 +43,6 @@ file(GLOB HALOMON_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/*.cpp)
 
 include_directories(.. ${HALO_NET_DIR} ${Boost_INCLUDE_DIR} ${Protobuf_INCLUDE_DIR} ${LLVM_INCLUDE_DIRS})
 
-add_dependencies(halomon install-LLVM)
-
 add_compiler_rt_runtime(clang_rt.halomon
   STATIC
   ARCHS ${HALOMON_SUPPORTED_ARCH}
@@ -57,3 +55,37 @@ add_compiler_rt_runtime(clang_rt.halomon
               RTSanitizerCommonSymbolizer
               RTXray
   PARENT_TARGET halomon)
+
+###########
+# LLVM component static libs. We only add dependencies here because I had
+# difficulty trying to link them directly into the halomon library.
+#
+# NOTE: keep this list sync'd with clang/lib/Driver/ToolChains/CommonArgs.cpp !
+# Also, other options are under llvm-config --components
+###########
+
+set(LLVM_TGTS
+  LLVMSymbolize
+  LLVMDebugInfoPDB
+  LLVMDebugInfoDWARF
+  LLVMJITLink
+  LLVMObject
+  LLVMMCParser
+  LLVMMC
+  LLVMDebugInfoCodeView
+  LLVMDebugInfoMSF
+  LLVMBitReader
+  LLVMCore
+  LLVMRemarks
+  LLVMBinaryFormat
+  LLVMSupport
+  LLVMDemangle
+)
+
+set(LLVM_INSTALL_TGTS)
+foreach (lib ${LLVM_TGTS})
+  list(APPEND LLVM_INSTALL_TGTS "install-${lib}")
+endforeach(lib)
+
+add_dependencies(halomon ${LLVM_TGTS})
+add_dependencies(install-halomon ${LLVM_INSTALL_TGTS})
