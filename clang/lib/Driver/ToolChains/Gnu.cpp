@@ -604,7 +604,7 @@ void tools::gnutools::Linker::ConstructJob(Compilation &C, const JobAction &JA,
         CmdArgs.push_back("-lprotobuf");
         // DSOs needed mainly by LLVM.
         CmdArgs.push_back("-lz");
-        CmdArgs.push_back("-lcurses");
+        CmdArgs.push_back("-ltinfo");
         CmdArgs.push_back("--no-as-needed");
       }
     }
