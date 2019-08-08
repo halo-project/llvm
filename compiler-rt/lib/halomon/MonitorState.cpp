@@ -39,6 +39,17 @@ void MonitorState::server_listen_loop() {
         stop_sampling();
       } break;
 
+      case msg::ReqMeasureFunction: {
+        std::string Blob(Body.data(), Body.size());
+        pb::ReqMeasureFunction Req;
+        Req.ParseFromString(Blob);
+
+        // TODO: invoke patcher.
+        std::cerr << "Recieved request to measure perf of func "
+                  << Req.func_addr() << "\n";
+
+      } break;
+
       default: {
         std::cerr << "recieved unknown message from server: #"
                   << (uint32_t) Kind << "\n";
