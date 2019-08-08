@@ -1,19 +1,22 @@
 
-#include <iostream>
+#include "halomon/Error.h"
 #include <cstdlib>
+#include <iostream>
 
 namespace boost {
 
 void throw_exception(std::exception const& ex) {
-  std::cerr << "uncaught exception: " << ex.what() << "\n";
+  if (halo::LOG) halo::log << "uncaught exception: " << ex.what() << "\n";
   std::exit(EXIT_FAILURE);
 }
 
 }
 
 namespace halo {
+  std::ostream log(std::cerr.rdbuf()); // TODO: have an option to log to file.
+
   void fatal_error(const std::string &msg) {
-    std::cerr << "(halo) fatal error: " << msg << "\n";
+    if (LOG) log << "(halo) fatal error: " << msg << "\n";
     std::exit(EXIT_FAILURE);
   }
 }

@@ -24,11 +24,11 @@ namespace halo {
 
 void MonitorState::server_listen_loop() {
   Net.Chan.async_recv([this](msg::Kind Kind, std::vector<char>& Body) {
-    std::cerr << "got msg ID " << (uint32_t) Kind << "\n";
+    if (LOG) log << "got msg ID " << (uint32_t) Kind << "\n";
 
     switch (Kind) {
       case msg::Shutdown: {
-        std::cerr << "server session terminated.\n";
+        if (LOG) log << "server session terminated.\n";
       } return; // NOTE: the return.
 
       case msg::StartSampling: {
@@ -45,13 +45,13 @@ void MonitorState::server_listen_loop() {
         Req.ParseFromString(Blob);
 
         // TODO: invoke patcher.
-        std::cerr << "Recieved request to measure perf of func "
+        if (LOG) log << "Recieved request to measure perf of func "
                   << Req.func_addr() << "\n";
 
       } break;
 
       default: {
-        std::cerr << "recieved unknown message from server: #"
+        if (LOG) log << "recieved unknown message from server: #"
                   << (uint32_t) Kind << "\n";
       } break;
     };
@@ -198,19 +198,19 @@ void MonitorState::set_sampling_period(uint64_t period) {
 void MonitorState::handle_signalfd_read(const boost::system::error_code &Error, size_t BytesTransferred) {
   bool IOError = false;
   if (Error) {
-    std::cerr << "Error reading from signal file handle: " << Error.message() << "\n";
+    if (LOG) log << "Error reading from signal file handle: " << Error.message() << "\n";
     IOError = true;
   }
 
   if (BytesTransferred != sizeof(SigFDInfo)) {
-    std::cerr << "Read the wrong the number of bytes from the signal file handle: "
+    if (LOG) log << "Read the wrong the number of bytes from the signal file handle: "
                  "read " << BytesTransferred << " bytes\n";
     IOError = true;
   }
 
   // TODO: convert this into a debug-mode assert.
   if (SigFDInfo.ssi_signo != SIGIO) {
-    std::cerr << "Unexpected signal recieved on signal file handle: "
+    if (LOG) log << "Unexpected signal recieved on signal file handle: "
               << SigFDInfo.ssi_signo << "\n";
     IOError = true;
   }
@@ -230,7 +230,7 @@ void MonitorState::handle_signalfd_read(const boost::system::error_code &Error, 
   // What if the process is doing IO? How do we forward the interrupt to
   // the right place? What should we do?
   if (SigFDInfo.ssi_fd != PerfFD) {
-    std::cerr << "Unexpected file descriptor associated with SIGIO interrupt.\n";
+    if (LOG) log << "Unexpected file descriptor associated with SIGIO interrupt.\n";
     IOError = true;
   }
 

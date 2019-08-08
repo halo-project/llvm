@@ -1,6 +1,6 @@
 #include <thread>
 #include <atomic>
-#include <iostream>
+#include "halomon/Error.h"
 
 #include "halomon/MonitorState.h"
 #include "llvm/Support/Host.h"
@@ -77,7 +77,7 @@ public:
     MonitorThread = std::thread(monitor_loop,
                                   std::ref(State), std::ref(ShutdownRequested));
 
-    std::cerr << "Halo Running!\n";
+    if (LOG) log << "Halo Running!\n";
   }
 
   /////////////////////////////////////////////////////////////////////////

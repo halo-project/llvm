@@ -3,7 +3,7 @@
 #include <cassert>
 #include <cstdlib>
 #include <string>
-#include <iostream>
+#include "halomon/Error.h"
 #include <atomic>
 #include <thread>
 
@@ -106,7 +106,7 @@ void handle_perf_event(MonitorState *MS, perf_event_header *EvtHeader) {
     }
 
   } else {
-    // std::cout << "some other perf event was encountered.\n";
+    // if (LOG) log << "some other perf event was encountered.\n";
   }
 
 }
@@ -234,7 +234,7 @@ int get_perf_events_fd(const std::string &Name,
 
   int Ret = pfm_get_os_event_encoding(Name.c_str(), PFM_PLM3, PFM_OS_PERF_EVENT_EXT, &Arg);
   if (Ret != PFM_SUCCESS) {
-    std::cerr << "Unable to get event encoding for " << Name << ": " <<
+    if (LOG) log << "Unable to get event encoding for " << Name << ": " <<
                  pfm_strerror(Ret) << "\n";
     return -1;
   }
@@ -330,7 +330,7 @@ int get_perf_events_fd(const std::string &Name,
 
   int NewPerfFD = syscall(__NR_perf_event_open, &Attr, TID, CPU, -1, 0);
   if (NewPerfFD == -1) {
-    std::cerr << "Unable to open perf events for this process: " << strerror(errno) << "\n";
+    if (LOG) log << "Unable to open perf events for this process: " << strerror(errno) << "\n";
     return -1;
   }
 
@@ -349,7 +349,7 @@ bool setup_perf_events(int &PerfFD, uint8_t* &EventBuf, size_t &EventBufSz, size
 
   int Ret = pfm_initialize();
   if (Ret != PFM_SUCCESS) {
-    std::cerr << "Failed to initialize PFM library: " << pfm_strerror(Ret) << "\n";
+    if (LOG) log << "Failed to initialize PFM library: " << pfm_strerror(Ret) << "\n";
     return true;
   }
 
@@ -383,9 +383,9 @@ bool setup_perf_events(int &PerfFD, uint8_t* &EventBuf, size_t &EventBufSz, size
                            PROT_READ|PROT_WRITE, MAP_SHARED, PerfFD, 0);
   if (EventBuf == MAP_FAILED) {
     if (errno == EPERM)
-      std::cerr << "Consider increasing /proc/sys/kernel/perf_event_mlock_kb or "
+      if (LOG) log << "Consider increasing /proc/sys/kernel/perf_event_mlock_kb or "
                    "allocating less memory for events buffer.\n";
-    std::cerr << "Unable to map perf events pages: " << strerror(errno) << "\n";
+    if (LOG) log << "Unable to map perf events pages: " << strerror(errno) << "\n";
     return true;
   }
 
@@ -409,13 +409,13 @@ bool setup_sigio_fd(asio::io_service &PerfSignalService, asio::posix::stream_des
   sigaddset(&SigMask, SIGIO);
 
   if (sigprocmask(SIG_BLOCK, &SigMask, NULL) == -1) {
-    std::cerr << "Unable to block signals: " << strerror(errno) << "\n";
+    if (LOG) log << "Unable to block signals: " << strerror(errno) << "\n";
     return true;
   }
 
   SigFD = signalfd(-1, &SigMask, 0);
   if (SigFD == -1) {
-    std::cerr << "Unable create signal file handle: " << strerror(errno) << "\n";
+    if (LOG) log << "Unable create signal file handle: " << strerror(errno) << "\n";
     return true;
   }
 
@@ -445,13 +445,13 @@ void set_sampling_period(int PerfFD, uint64_t Period) {
 bool close_perf_events(int PerfFD, uint8_t* EventBuf, size_t EventBufSz) {
   int ret = munmap(EventBuf, EventBufSz);
   if (ret) {
-    std::cerr << "Failed to unmap event buffer: " << strerror(errno) << "\n";
+    if (LOG) log << "Failed to unmap event buffer: " << strerror(errno) << "\n";
     return true;
   }
 
   ret = close(PerfFD);
   if (ret) {
-    std::cerr << "Failed to close perf_event file descriptor: " << strerror(errno) << "\n";
+    if (LOG) log << "Failed to close perf_event file descriptor: " << strerror(errno) << "\n";
     return true;
   }
 
@@ -463,7 +463,7 @@ std::string get_self_exe() {
   std::vector<char> buf(PATH_MAX);
   ssize_t len = readlink("/proc/self/exe", buf.data(), buf.size()-1);
   if (len == -1) {
-    std::cerr << strerror(errno) << "\n";
+    if (LOG) log << strerror(errno) << "\n";
     halo::fatal_error("path to process's executable not found.");
   }
   buf[len] = '\0'; // null terminate
