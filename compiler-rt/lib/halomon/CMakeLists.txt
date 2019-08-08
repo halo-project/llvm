@@ -38,16 +38,22 @@ file(GLOB PROTO_FILES ${HALO_NET_DIR}/*.proto)
 protobuf_generate_cpp(PROTO_SRCS PROTO_HDRS ${PROTO_FILES})
 
 # enumerate files in our local dir
-file(GLOB HALOMON_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/*.h)
-file(GLOB HALOMON_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/*.cpp)
+set(HALOMON_SOURCES
+  ${CMAKE_CURRENT_SOURCE_DIR}/Error.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/LinuxPerfEvents.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/Monitor.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/MonitorState.cpp
+)
 
-include_directories(.. ${HALO_NET_DIR} ${Boost_INCLUDE_DIR} ${Protobuf_INCLUDE_DIR} ${LLVM_INCLUDE_DIRS})
+include_directories(..)
+include_directories(../../include)
+include_directories(${HALO_NET_DIR} ${Boost_INCLUDE_DIR} ${Protobuf_INCLUDE_DIR} ${LLVM_INCLUDE_DIRS})
 
 add_compiler_rt_runtime(clang_rt.halomon
   STATIC
   ARCHS ${HALOMON_SUPPORTED_ARCH}
   SOURCES ${HALOMON_SOURCES} ${PROTO_SRCS}
-  ADDITIONAL_HEADERS ${HALOMON_HEADERS} ${PROTO_HDRS}
+  ADDITIONAL_HEADERS ${PROTO_HDRS}
   CFLAGS ${SANITIZER_COMMON_CFLAGS} ${LLVM_DEFINITIONS} ${HALOMON_CFLAGS}
   LINK_FLAGS ${SANITIZER_COMMON_LINK_FLAGS}
   OBJECT_LIBS RTSanitizerCommon

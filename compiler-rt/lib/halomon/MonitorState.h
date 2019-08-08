@@ -8,6 +8,7 @@
 #endif
 
 #include "halomon/Client.h"
+#include "halomon/Patcher.h"
 
 // NOTE: we are Linux only right now, but the public interface
 // will try to remain OS independent.
@@ -42,6 +43,7 @@ private:
 
 public:
   Client Net;
+  Patcher Patch;
 
   // information about this process
   std::string ExePath;
