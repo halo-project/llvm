@@ -48,6 +48,8 @@ void MonitorState::server_listen_loop() {
         if (LOG) log << "Recieved request to measure perf of func "
                   << Req.func_addr() << "\n";
 
+        Patch.measureRunningTime(Req.func_addr());
+
       } break;
 
       default: {

@@ -1,17 +1,18 @@
 #pragma once
 
-#include "xray/xray_interface_internal.h"
+#include <unordered_map>
 
 namespace halo {
 
 class Patcher {
 public:
-  Patcher() {
-    __xray_init();
-  }
+  Patcher();
+
+void measureRunningTime(uint64_t FnPtr);
 
 private:
-
+  size_t MaxID;
+  std::unordered_map<uintptr_t, int32_t> AddrToID;
 };
 
 } // end namespace
