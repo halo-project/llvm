@@ -52,9 +52,6 @@ public:
       if (LOG) log << "Connected to: " << Endpoint << "\n";
       return true;
     }
-
-    asio::socket_base::keep_alive option(true);
-    Socket.set_option(option);
   }
 
 };
