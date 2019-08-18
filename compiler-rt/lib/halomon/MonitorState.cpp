@@ -4,6 +4,7 @@
 #include "halomon/Error.h"
 
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Object/ELFObjectFile.h"
@@ -40,7 +41,7 @@ void MonitorState::server_listen_loop() {
       } break;
 
       case msg::ReqMeasureFunction: {
-        std::string Blob(Body.data(), Body.size());
+        llvm::StringRef Blob(Body.data(), Body.size());
         pb::ReqMeasureFunction Req;
         Req.ParseFromString(Blob);
 
@@ -49,6 +50,15 @@ void MonitorState::server_listen_loop() {
                   << Req.func_addr() << "\n";
 
         Patch.measureRunningTime(Req.func_addr());
+
+      } break;
+
+      case msg::CodeReplacement: {
+        llvm::StringRef Blob(Body.data(), Body.size());
+        pb::CodeReplacement CR;
+        CR.ParseFromString(Blob);
+
+        Linker.run(CR);
 
       } break;
 
