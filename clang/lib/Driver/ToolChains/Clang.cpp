@@ -4250,7 +4250,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     CmdArgs.push_back("-fembed-bitcode=all");
     CmdArgs.push_back("-disable-O0-optnone");
     CmdArgs.push_back("-fxray-instrument");
-    CmdArgs.push_back("-fnoxray-link-deps"); // we will take care of the deps.
+    CmdArgs.push_back("-fnoxray-link-deps"); // halomon links with xray already
     CmdArgs.push_back("-fxray-instruction-threshold=1");
   }
 

@@ -781,41 +781,38 @@ bool tools::addHaloRuntime(const ToolChain &TC, const ArgList &Args,
     if (!Args.hasArg(options::OPT_fhalo) || !TC.getTriple().isOSLinux())
       return false;
 
-    // Add any static libraries needed to include halomon.
+    // Add any static libraries needed for halomon.
 
     addSanitizerRuntime(TC, Args, CmdArgs, "halomon",
                                       /*Shared*/ false, /*Whole*/ true);
 
-    ////////////
-    // LLVM component static libs. Obtained the list below via
-    //     llvm-config --libs support core object jitlink symbolize
-    //
-    // Other options are under llvm-config --components
-    //
-    // FIXME: this list awful and has to be kept in sync with
-    //        compiler-rt/lib/halomon/CMakeLists.txt !
-    //
-    // QUESTION: is there a cleaner way to do this in clang?
-    /////////////////////
+    return true; // currently always need to link DSO dependencies.
+}
 
-    CmdArgs.push_back("-lLLVMSymbolize");
-    CmdArgs.push_back("-lLLVMDebugInfoPDB");
-    CmdArgs.push_back("-lLLVMDebugInfoDWARF");
-    CmdArgs.push_back("-lLLVMJITLink");
-    CmdArgs.push_back("-lLLVMObject");
-    CmdArgs.push_back("-lLLVMMCParser");
-    CmdArgs.push_back("-lLLVMMC");
-    CmdArgs.push_back("-lLLVMDebugInfoCodeView");
-    CmdArgs.push_back("-lLLVMDebugInfoMSF");
-    CmdArgs.push_back("-lLLVMBitReader");
-    CmdArgs.push_back("-lLLVMBitstreamReader");
-    CmdArgs.push_back("-lLLVMCore");
-    CmdArgs.push_back("-lLLVMRemarks");
-    CmdArgs.push_back("-lLLVMBinaryFormat");
-    CmdArgs.push_back("-lLLVMSupport");
-    CmdArgs.push_back("-lLLVMDemangle");
+void tools::linkHaloRuntimeDeps(const ToolChain &TC, const ArgList &Args,
+                                                      ArgStringList &CmdArgs) {
+  CmdArgs.push_back("--as-needed");
+  CmdArgs.push_back("-lpthread");
+  CmdArgs.push_back("-ldl");
+  CmdArgs.push_back("-lm");
+  // FIXME this must be the libc++ we compiled halomon with; conflict prone!
+  TC.AddCXXStdlibLibArgs(Args, CmdArgs);
+  CmdArgs.push_back("-lpfm");
+  CmdArgs.push_back("-lboost_system");
+  CmdArgs.push_back("-lprotobuf");
 
-    return true; // currently always need to link dependencies.
+  // Link agianst libLLVM.
+  // We expect the relative path to not change.
+  SmallString<128> Path(TC.getDriver().ResourceDir);
+  llvm::sys::path::append(Path, "..", "..");
+  std::string PathStr = Path.str();
+
+  // NOTE: -L (install or build)/lib is already passed on the command line
+  CmdArgs.push_back("-rpath");
+  CmdArgs.push_back(Args.MakeArgString(PathStr.c_str()));
+  CmdArgs.push_back("-lLLVM");
+
+  CmdArgs.push_back("--no-as-needed");
 }
 
 bool tools::areOptimizationsEnabled(const ArgList &Args) {

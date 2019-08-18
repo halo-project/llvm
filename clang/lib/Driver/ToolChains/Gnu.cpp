@@ -553,9 +553,11 @@ void tools::gnutools::Linker::ConstructJob(Compilation &C, const JobAction &JA,
       if (NeedsXRayDeps)
         linkXRayRuntimeDeps(ToolChain, CmdArgs);
 
+      if (NeedsHaloDeps)
+        linkHaloRuntimeDeps(ToolChain, Args, CmdArgs);
+
       bool WantPthread = Args.hasArg(options::OPT_pthread) ||
-                         Args.hasArg(options::OPT_pthreads) ||
-                         NeedsHaloDeps;
+                         Args.hasArg(options::OPT_pthreads);
 
       // FIXME: Only pass GompNeedsRT = true for platforms with libgomp that
       // require librt. Most modern Linux platforms do, but some may not.
@@ -590,21 +592,6 @@ void tools::gnutools::Linker::ConstructJob(Compilation &C, const JobAction &JA,
       if (IsIAMCU) {
         CmdArgs.push_back("--as-needed");
         CmdArgs.push_back("-lsoftfp");
-        CmdArgs.push_back("--no-as-needed");
-      }
-
-      if (NeedsHaloDeps) {
-        CmdArgs.push_back("--as-needed");
-        CmdArgs.push_back("-ldl");
-        CmdArgs.push_back("-lm");
-        // FIXME this is the libc++ we compiled halomon with; conflict prone!
-        ToolChain.AddCXXStdlibLibArgs(Args, CmdArgs);
-        CmdArgs.push_back("-lpfm");
-        CmdArgs.push_back("-lboost_system");
-        CmdArgs.push_back("-lprotobuf");
-        // DSOs needed mainly by LLVM.
-        CmdArgs.push_back("-lz");
-        CmdArgs.push_back("-ltinfo");
         CmdArgs.push_back("--no-as-needed");
       }
     }
