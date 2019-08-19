@@ -4,6 +4,8 @@
 
 #include "halomon/DynamicLinker.h"
 
+#include "Channel.h"
+#include "Messages.pb.h"
 
 
 namespace halo {
@@ -13,7 +15,8 @@ public:
   CodePatcher();
 
 void measureRunningTime(uint64_t FnPtr);
-void replace(pb::CodeReplacement const&, DynamicLinker const&);
+llvm::Error replaceAll(pb::CodeReplacement const&, llvm::StringRef &ObjFile,
+                        DynamicLinker &, Channel &);
 
 private:
   size_t MaxID;

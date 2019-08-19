@@ -159,8 +159,35 @@ void CodePatcher::measureRunningTime(uint64_t FnPtr) {
   __xray_patch_function(id);
 }
 
-void CodePatcher::replace(pb::CodeReplacement const& CR, DynamicLinker const& DL) {
-  // TODO:
+llvm::Error CodePatcher::replaceAll(pb::CodeReplacement const& CR, llvm::StringRef &ObjFile,
+                                      DynamicLinker &DL, Channel &Chan) {
+  // perform linking on all requested symbols and collect those
+  // new addresses.
+
+  for (pb::FunctionSymbol const& Request : CR.symbols()) {
+    auto &Label = Request.label();
+    auto MaybeSymbol = DL.lookup(Label);
+
+    if (!MaybeSymbol)
+      return MaybeSymbol.takeError();
+
+    llvm::JITEvaluatedSymbol Symb = MaybeSymbol.get();
+
+    llvm::outs() << Label << " --> " << Symb.getAddress() << "\n";
+
+    // find the size of the label from the object file.
+
+  }
+
+  // send a message to server containing the new address information
+
+  // inform perf-events of these new code addresses so we recieve samples
+  // from them. NOTE: it might be the case that any pages mapped as executable
+  // generates the corresponding perf_event or something? research is needed.
+
+  // patch in the new functions!
+
+  return llvm::Error::success();
 }
 
 } // end namespace

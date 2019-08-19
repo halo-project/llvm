@@ -48,8 +48,10 @@ public:
               GlobalSymbolPrefix)));
     }
 
-  void add(std::unique_ptr<std::string> ObjFile) {
-    auto Buffer = llvm::MemoryBuffer::getMemBuffer(llvm::StringRef(*ObjFile));
+  // All lookups performed after adding the object file must happen before
+  // the string ref here goes out of scope!
+  void add(llvm::StringRef ObjFile) {
+    auto Buffer = llvm::MemoryBuffer::getMemBuffer(ObjFile);
     ObjectLayer.add(ES.getMainJITDylib(), std::move(Buffer));
   }
 

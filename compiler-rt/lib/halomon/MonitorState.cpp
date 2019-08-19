@@ -58,12 +58,16 @@ void MonitorState::server_listen_loop() {
         pb::CodeReplacement CR;
         CR.ParseFromString(Blob);
 
-        msg::print_proto(CR);
+        // msg::print_proto(CR);
 
-        std::unique_ptr<std::string> ObjFile(CR.release_objfile());
-        Linker.add(std::move(ObjFile));
+        std::unique_ptr<std::string> ObjFileStorage(CR.release_objfile());
+        llvm::StringRef ObjFile(*ObjFileStorage);
+        Linker.add(ObjFile);
 
-        Patcher.replace(CR, Linker);
+        auto Error = Patcher.replaceAll(CR, ObjFile, Linker, Net.Chan);
+
+        if (Error)
+          llvm::outs() << "Code patching failed: " << Error << "\n";
 
       } break;
 
