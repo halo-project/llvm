@@ -159,14 +159,18 @@ void CodePatcher::measureRunningTime(uint64_t FnPtr) {
   __xray_patch_function(id);
 }
 
-llvm::Error CodePatcher::replaceAll(pb::CodeReplacement const& CR, llvm::StringRef &ObjFile,
+llvm::Error CodePatcher::replaceAll(pb::CodeReplacement const& CR,
+                                      std::string const& DylibName,
+                                      llvm::StringRef &ObjFile,
                                       DynamicLinker &DL, Channel &Chan) {
   // perform linking on all requested symbols and collect those
   // new addresses.
 
+  llvm::outs() << "DylibName = " << DylibName << "\n";
+
   for (pb::FunctionSymbol const& Request : CR.symbols()) {
     auto &Label = Request.label();
-    auto MaybeSymbol = DL.lookup(Label);
+    auto MaybeSymbol = DL.lookup(DylibName, Label);
 
     if (!MaybeSymbol)
       return MaybeSymbol.takeError();

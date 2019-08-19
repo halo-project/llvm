@@ -15,8 +15,8 @@ public:
   CodePatcher();
 
 void measureRunningTime(uint64_t FnPtr);
-llvm::Error replaceAll(pb::CodeReplacement const&, llvm::StringRef &ObjFile,
-                        DynamicLinker &, Channel &);
+llvm::Error replaceAll(pb::CodeReplacement const&, std::string const& DylibName,
+                        llvm::StringRef &ObjFile, DynamicLinker &, Channel &);
 
 private:
   size_t MaxID;

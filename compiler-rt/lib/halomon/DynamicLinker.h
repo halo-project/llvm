@@ -25,6 +25,8 @@ class DynamicLinker {
   orc::ThreadSafeContext Ctx;
   char GlobalSymbolPrefix;
 
+  uint64_t LibTicker = 0;
+
 public:
   DynamicLinker()
   : ObjectLayer(ES, []() { return std::make_unique<llvm::SectionMemoryManager>(); }),
@@ -50,13 +52,31 @@ public:
 
   // All lookups performed after adding the object file must happen before
   // the string ref here goes out of scope!
-  void add(llvm::StringRef ObjFile) {
+  std::string add(llvm::StringRef ObjFile) {
+    // NOTE: testing here. We need a mechanism to unload / deallocate these dylibs!
+
+    // Also: what happens if one dylib's symbols override another, do the old
+    // addresses in the later lib become invalid?
+    std::string Name = "newCode";
+    Name += std::to_string(LibTicker++);
+    // auto &NewDylib = ES.createJITDylib(Name); // UNCOMMENT TO TRY ADDING TO NEW DYLIB INSTEAD
+    auto &NewDylib = ES.getMainJITDylib();
+
     auto Buffer = llvm::MemoryBuffer::getMemBuffer(ObjFile);
-    ObjectLayer.add(ES.getMainJITDylib(), std::move(Buffer));
+    ObjectLayer.add(NewDylib, std::move(Buffer));
+
+    return Name;
   }
 
-  llvm::Expected<llvm::JITEvaluatedSymbol> lookup(llvm::StringRef MangledName) {
-    return ES.lookup({&ES.getMainJITDylib()}, MangledName);
+  llvm::Expected<llvm::JITEvaluatedSymbol> lookup(llvm::StringRef LibName, llvm::StringRef MangledName) {
+    orc::JITDylibSearchList SearchOrder;
+
+    // UNCOMMENT TO TRY RESOLVING FROM NEW DYLIB INSTEAD
+    // SearchOrder.emplace_back(ES.getJITDylibByName(LibName), /* MatchWithInternalSymbols */ true);
+
+    SearchOrder.emplace_back(&ES.getMainJITDylib(), /* MatchWithInternalSymbols */ true);
+
+    return ES.lookup(SearchOrder, ES.intern(MangledName));
   }
 
 };

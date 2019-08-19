@@ -62,9 +62,9 @@ void MonitorState::server_listen_loop() {
 
         std::unique_ptr<std::string> ObjFileStorage(CR.release_objfile());
         llvm::StringRef ObjFile(*ObjFileStorage);
-        Linker.add(ObjFile);
+        auto DylibName = Linker.add(ObjFile);
 
-        auto Error = Patcher.replaceAll(CR, ObjFile, Linker, Net.Chan);
+        auto Error = Patcher.replaceAll(CR, DylibName, ObjFile, Linker, Net.Chan);
 
         if (Error)
           llvm::outs() << "Code patching failed: " << Error << "\n";
