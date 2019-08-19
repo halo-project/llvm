@@ -39,8 +39,8 @@ protobuf_generate_cpp(PROTO_SRCS PROTO_HDRS ${PROTO_FILES})
 
 # enumerate files in our local dir
 set(HALOMON_SOURCES
-  ${CMAKE_CURRENT_SOURCE_DIR}/Error.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/LinuxPerfEvents.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/Logging.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/Monitor.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/MonitorState.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/CodePatcher.cpp

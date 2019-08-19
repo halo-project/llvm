@@ -7,7 +7,7 @@
 #include "Channel.h"
 
 #include <cinttypes>
-#include "halomon/Error.h"
+#include "halomon/Logging.h"
 
 namespace asio = boost::asio;
 namespace ip = boost::asio::ip;
@@ -44,12 +44,14 @@ public:
     Socket.connect(Endpoint, Err);
 
     if (Err) {
-      if (LOG) log << "Failed to connect: " << Err.message() << "\n";
+      if (LOG) log() << "Failed to connect: " << Err.message() << "\n";
       // we have to close the socket manually
       Socket.close();
       return false;
     } else {
-      if (LOG) log << "Connected to: " << Endpoint << "\n";
+      std::stringstream ss;
+      ss << Endpoint;
+      if (LOG) log() << "Connected to: " << ss.str() << "\n";
       return true;
     }
   }
