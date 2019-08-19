@@ -370,6 +370,8 @@ AArch64LegalizerInfo::AArch64LegalizerInfo(const AArch64Subtarget &ST) {
 
   getActionDefinitionsBuilder(G_TRUNC).alwaysLegal();
 
+  getActionDefinitionsBuilder(G_SEXT_INREG).lower();
+
   // FP conversions
   getActionDefinitionsBuilder(G_FPTRUNC).legalFor(
       {{s16, s32}, {s16, s64}, {s32, s64}, {v4s16, v4s32}, {v2s32, v2s64}});
@@ -703,7 +705,7 @@ bool AArch64LegalizerInfo::legalizeLoadStore(
     auto Bitcast = MIRBuilder.buildBitcast({NewTy}, {ValReg});
     MIRBuilder.buildStore(Bitcast.getReg(0), MI.getOperand(1).getReg(), MMO);
   } else {
-    unsigned NewReg = MRI.createGenericVirtualRegister(NewTy);
+    Register NewReg = MRI.createGenericVirtualRegister(NewTy);
     auto NewLoad = MIRBuilder.buildLoad(NewReg, MI.getOperand(1).getReg(), MMO);
     MIRBuilder.buildBitcast({ValReg}, {NewLoad});
   }

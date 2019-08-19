@@ -14,7 +14,6 @@
 #include "clang/Tooling/Tooling.h"
 #include "llvm/ADT/FunctionExtras.h"
 #include "llvm/ADT/STLExtras.h"
-#include "gmock/gmock-generated-matchers.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include <cassert>
@@ -43,7 +42,7 @@ public:
       llvm::function_ref<void(ASTContext &CTx)> Process;
     };
 
-    return llvm::make_unique<Consumer>(Process);
+    return std::make_unique<Consumer>(Process);
   }
 
 private:

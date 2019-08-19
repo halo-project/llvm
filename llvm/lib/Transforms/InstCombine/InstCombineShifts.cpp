@@ -46,8 +46,14 @@ reassociateShiftAmtsOfTwoSameDirectionShifts(BinaryOperator *Sh0,
                     m_Instruction(Sh1)));
 
   // Inner shift: (x shiftopcode ShAmt1)
+  // Like with other shift, ignore zext of shift amount if any.
   Value *X, *ShAmt1;
   if (!match(Sh1, m_Shift(m_Value(X), m_ZExtOrSelf(m_Value(ShAmt1)))))
+    return nullptr;
+
+  // We have two shift amounts from two different shifts. The types of those
+  // shift amounts may not match. If that's the case let's bailout now..
+  if (ShAmt0->getType() != ShAmt1->getType())
     return nullptr;
 
   // The shift opcodes must be identical.
@@ -757,25 +763,14 @@ Instruction *InstCombiner::visitShl(BinaryOperator &I) {
     unsigned ShAmt = ShAmtAPInt->getZExtValue();
     unsigned BitWidth = Ty->getScalarSizeInBits();
 
+    // shl (zext X), ShAmt --> zext (shl X, ShAmt)
+    // This is only valid if X would have zeros shifted out.
     Value *X;
     if (match(Op0, m_OneUse(m_ZExt(m_Value(X))))) {
       unsigned SrcWidth = X->getType()->getScalarSizeInBits();
-      // shl (zext X), ShAmt --> zext (shl X, ShAmt)
-      // This is only valid if X would have zeros shifted out.
       if (ShAmt < SrcWidth &&
           MaskedValueIsZero(X, APInt::getHighBitsSet(SrcWidth, ShAmt), 0, &I))
         return new ZExtInst(Builder.CreateShl(X, ShAmt), Ty);
-
-      // shl (zext (mul MulOp, C2)), ShAmt --> mul (zext MulOp), (C2 << ShAmt)
-      // This is valid if the high bits of the wider multiply are shifted out.
-      Value *MulOp;
-      const APInt *C2;
-      if (ShAmt >= (BitWidth - SrcWidth) &&
-          match(X, m_Mul(m_Value(MulOp), m_APInt(C2)))) {
-        Value *Zext = Builder.CreateZExt(MulOp, Ty);
-        Constant *NewMulC = ConstantInt::get(Ty, C2->zext(BitWidth).shl(ShAmt));
-        return BinaryOperator::CreateMul(Zext, NewMulC);
-      }
     }
 
     // (X >> C) << C --> X & (-1 << C)

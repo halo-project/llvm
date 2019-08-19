@@ -68,7 +68,7 @@ namespace {
     }
 
     LoadInst *getBaseLoad() const {
-      return cast<LoadInst>(LHS);
+      return VecLd.front();
     }
   };
 
@@ -92,7 +92,7 @@ namespace {
     /// Record a MulCandidate, rooted at a Mul instruction, that is a part of
     /// this reduction.
     void InsertMul(Instruction *I, Value *LHS, Value *RHS) {
-      Muls.push_back(make_unique<MulCandidate>(I, LHS, RHS));
+      Muls.push_back(std::make_unique<MulCandidate>(I, LHS, RHS));
     }
 
     /// Add the incoming accumulator value, returns true if a value had not
@@ -696,16 +696,18 @@ LoadInst* ARMParallelDSP::CreateWideLoad(MemInstList &Loads,
   // Loads[0] needs trunc while Loads[1] needs a lshr and trunc.
   // TODO: Support big-endian as well.
   Value *Bottom = IRB.CreateTrunc(WideLoad, Base->getType());
-  BaseSExt->setOperand(0, Bottom);
+  Value *NewBaseSExt = IRB.CreateSExt(Bottom, BaseSExt->getType());
+  BaseSExt->replaceAllUsesWith(NewBaseSExt);
 
   IntegerType *OffsetTy = cast<IntegerType>(Offset->getType());
   Value *ShiftVal = ConstantInt::get(LoadTy, OffsetTy->getBitWidth());
   Value *Top = IRB.CreateLShr(WideLoad, ShiftVal);
   Value *Trunc = IRB.CreateTrunc(Top, OffsetTy);
-  OffsetSExt->setOperand(0, Trunc);
+  Value *NewOffsetSExt = IRB.CreateSExt(Trunc, OffsetSExt->getType());
+  OffsetSExt->replaceAllUsesWith(NewOffsetSExt);
 
   WideLoads.emplace(std::make_pair(Base,
-                                   make_unique<WidenedLoad>(Loads, WideLoad)));
+                                   std::make_unique<WidenedLoad>(Loads, WideLoad)));
   return WideLoad;
 }
 

@@ -1,4 +1,4 @@
-//===- llvm-reduce.cpp - The LLVM Delta Reduction utility -----------------===//
+//===-- tools/llvm-reduce/TestRunner.h ---------------------------*- C++ -*-===/
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -12,6 +12,8 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/Path.h"
 #include "llvm/Support/Program.h"
 #include <vector>
 
@@ -23,7 +25,7 @@ namespace llvm {
 class TestRunner {
 public:
   TestRunner(StringRef TestName, std::vector<std::string> TestArgs,
-             StringRef ReducedFilepath, SmallString<128> TmpDirectory);
+             StringRef ReducedFilepath);
 
   /// Runs the interesting-ness test for the specified file
   /// @returns 0 if test was successful, 1 if otherwise
@@ -36,7 +38,9 @@ public:
   /// Returns the most reduced version of the original testcase
   Module *getProgram() const { return Program.get(); }
 
-  void setReducedFilepath(SmallString<128> F) { ReducedFilepath = F; }
+  void setReducedFilepath(SmallString<128> F) {
+    ReducedFilepath = std::move(F);
+  }
   void setProgram(std::unique_ptr<Module> P) { Program = std::move(P); }
 
 private:

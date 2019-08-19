@@ -75,7 +75,7 @@ if(APPLE AND CMAKE_GENERATOR STREQUAL Xcode)
   if(NOT LLDB_EXPLICIT_XCODE_CACHE_USED)
     message(WARNING
       "When building with Xcode, we recommend using the corresponding cache script. "
-      "If this was a mistake, clean your lean build directory and re-run CMake with:\n"
+      "If this was a mistake, clean your build directory and re-run CMake with:\n"
       "  -C ${CMAKE_SOURCE_DIR}/cmake/caches/Apple-lldb-Xcode.cmake\n"
       "See: https://lldb.llvm.org/resources/build.html#cmakegeneratedxcodeproject\n")
   endif()
@@ -333,8 +333,8 @@ set(LLDB_VERSION "${LLDB_VERSION_MAJOR}.${LLDB_VERSION_MINOR}.${LLDB_VERSION_PAT
 message(STATUS "LLDB version: ${LLDB_VERSION}")
 
 include_directories(BEFORE
-  ${CMAKE_CURRENT_SOURCE_DIR}/include
   ${CMAKE_CURRENT_BINARY_DIR}/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
   )
 
 if (NOT LLVM_INSTALL_TOOLCHAIN_ONLY)
@@ -345,7 +345,6 @@ if (NOT LLVM_INSTALL_TOOLCHAIN_ONLY)
     PATTERN "*.h"
     PATTERN ".svn" EXCLUDE
     PATTERN ".cmake" EXCLUDE
-    PATTERN "Config.h" EXCLUDE
     )
 
   install(DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/include/
@@ -409,7 +408,7 @@ list(APPEND system_libs ${CMAKE_DL_LIBS})
 
 # Figure out if lldb could use lldb-server.  If so, then we'll
 # ensure we build lldb-server when an lldb target is being built.
-if (CMAKE_SYSTEM_NAME MATCHES "Android|Darwin|FreeBSD|Linux|NetBSD")
+if (CMAKE_SYSTEM_NAME MATCHES "Android|Darwin|FreeBSD|Linux|NetBSD|Windows")
   set(LLDB_CAN_USE_LLDB_SERVER ON)
 else()
   set(LLDB_CAN_USE_LLDB_SERVER OFF)

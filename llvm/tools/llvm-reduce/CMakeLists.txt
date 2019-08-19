@@ -3,6 +3,7 @@ set(LLVM_LINK_COMPONENTS
   AllTargetsCodeGens
   AllTargetsDescs
   AllTargetsInfos
+  Core
   IRReader
   Support
   Target
@@ -15,7 +16,9 @@ set(LLVM_NO_DEAD_STRIP 1)
 add_llvm_tool(llvm-reduce
   llvm-reduce.cpp
   TestRunner.cpp
-  deltas/RemoveFunctions.cpp
+  deltas/Delta.cpp
+  deltas/ReduceFunctions.cpp
+  deltas/ReduceGlobalVars.cpp
 
   DEPENDS
   intrinsics_gen

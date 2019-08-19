@@ -2475,6 +2475,10 @@ readAddressAreas(DWARFContext &dwarf, InputSection *sec) {
 
   uint32_t cuIdx = 0;
   for (std::unique_ptr<DWARFUnit> &cu : dwarf.compile_units()) {
+    if (Error e = cu->tryExtractDIEsIfNeeded(false)) {
+      error(toString(sec) + ": " + toString(std::move(e)));
+      return {};
+    }
     Expected<DWARFAddressRangesVector> ranges = cu->collectAddressRanges();
     if (!ranges) {
       error(toString(sec) + ": " + toString(ranges.takeError()));
@@ -2504,9 +2508,9 @@ readAddressAreas(DWARFContext &dwarf, InputSection *sec) {
 template <class ELFT>
 static std::vector<GdbIndexSection::NameAttrEntry>
 readPubNamesAndTypes(const LLDDwarfObj<ELFT> &obj,
-                     const std::vector<GdbIndexSection::CuEntry> &cUs) {
-  const DWARFSection &pubNames = obj.getGnuPubNamesSection();
-  const DWARFSection &pubTypes = obj.getGnuPubTypesSection();
+                     const std::vector<GdbIndexSection::CuEntry> &cus) {
+  const DWARFSection &pubNames = obj.getGnuPubnamesSection();
+  const DWARFSection &pubTypes = obj.getGnuPubtypesSection();
 
   std::vector<GdbIndexSection::NameAttrEntry> ret;
   for (const DWARFSection *pub : {&pubNames, &pubTypes}) {
@@ -2516,12 +2520,11 @@ readPubNamesAndTypes(const LLDDwarfObj<ELFT> &obj,
       // don't know how many compilation units precede this object to compute
       // cuIndex, we compute (kind << 24 | cuIndexInThisObject) instead, and add
       // the number of preceding compilation units later.
-      uint32_t i =
-          lower_bound(cUs, set.Offset,
-                      [](GdbIndexSection::CuEntry cu, uint32_t offset) {
-                        return cu.cuOffset < offset;
-                      }) -
-          cUs.begin();
+      uint32_t i = llvm::partition_point(cus,
+                                         [&](GdbIndexSection::CuEntry cu) {
+                                           return cu.cuOffset < set.Offset;
+                                         }) -
+                   cus.begin();
       for (const DWARFDebugPubTable::Entry &ent : set.Entries)
         ret.push_back({{ent.Name, computeGdbHash(ent.Name)},
                        (ent.Descriptor.toBits() << 24) | i});
@@ -2626,7 +2629,7 @@ template <class ELFT> GdbIndexSection *GdbIndexSection::create() {
 
   parallelForEachN(0, sections.size(), [&](size_t i) {
     ObjFile<ELFT> *file = sections[i]->getFile<ELFT>();
-    DWARFContext dwarf(make_unique<LLDDwarfObj<ELFT>>(file));
+    DWARFContext dwarf(std::make_unique<LLDDwarfObj<ELFT>>(file));
 
     chunks[i].sec = sections[i];
     chunks[i].compilationUnits = readCuList(dwarf);

@@ -677,7 +677,7 @@ void MCStreamer::EmitWinCFIStartProc(const MCSymbol *Symbol, SMLoc Loc) {
   MCSymbol *StartProc = EmitCFILabel();
 
   WinFrameInfos.emplace_back(
-      llvm::make_unique<WinEH::FrameInfo>(Symbol, StartProc));
+      std::make_unique<WinEH::FrameInfo>(Symbol, StartProc));
   CurrentWinFrameInfo = WinFrameInfos.back().get();
   CurrentWinFrameInfo->TextSection = getCurrentSectionOnly();
 }
@@ -711,7 +711,7 @@ void MCStreamer::EmitWinCFIStartChained(SMLoc Loc) {
 
   MCSymbol *StartProc = EmitCFILabel();
 
-  WinFrameInfos.emplace_back(llvm::make_unique<WinEH::FrameInfo>(
+  WinFrameInfos.emplace_back(std::make_unique<WinEH::FrameInfo>(
       CurFrame->Function, StartProc, CurFrame));
   CurrentWinFrameInfo = WinFrameInfos.back().get();
   CurrentWinFrameInfo->TextSection = getCurrentSectionOnly();
@@ -1054,6 +1054,10 @@ void MCStreamer::EmitCOFFSymbolStorageClass(int StorageClass) {
 }
 void MCStreamer::EmitCOFFSymbolType(int Type) {
   llvm_unreachable("this directive only supported on COFF targets");
+}
+void MCStreamer::EmitXCOFFLocalCommonSymbol(MCSymbol *Symbol, uint64_t Size,
+                                            unsigned ByteAlign) {
+  llvm_unreachable("this directive only supported on XCOFF targets");
 }
 void MCStreamer::emitELFSize(MCSymbol *Symbol, const MCExpr *Value) {}
 void MCStreamer::emitELFSymverDirective(StringRef AliasName,

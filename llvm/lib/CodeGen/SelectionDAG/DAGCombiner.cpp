@@ -24,7 +24,6 @@
 #include "llvm/ADT/Optional.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
-#include "llvm/ADT/SmallBitVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/SmallVector.h"
@@ -380,6 +379,7 @@ namespace {
     SDValue visitSUBE(SDNode *N);
     SDValue visitSUBCARRY(SDNode *N);
     SDValue visitMUL(SDNode *N);
+    SDValue visitMULFIX(SDNode *N);
     SDValue useDivRem(SDNode *N);
     SDValue visitSDIV(SDNode *N);
     SDValue visitSDIVLike(SDValue N0, SDValue N1, SDNode *N);
@@ -867,6 +867,11 @@ static char isNegatibleForFree(SDValue Op, bool LegalOperations,
     if (char V = isNegatibleForFree(Op.getOperand(0), LegalOperations, TLI,
                                     Options, ForCodeSize, Depth + 1))
       return V;
+
+    // Ignore X * 2.0 because that is expected to be canonicalized to X + X.
+    if (auto *C = isConstOrConstSplatFP(Op.getOperand(1)))
+      if (C->isExactlyValue(2.0) && Op.getOpcode() == ISD::FMUL)
+        return 0;
 
     return isNegatibleForFree(Op.getOperand(1), LegalOperations, TLI, Options,
                               ForCodeSize, Depth + 1);
@@ -1692,6 +1697,9 @@ SDValue DAGCombiner::visit(SDNode *N) {
   case ISD::ADDCARRY:           return visitADDCARRY(N);
   case ISD::SUBE:               return visitSUBE(N);
   case ISD::SUBCARRY:           return visitSUBCARRY(N);
+  case ISD::SMULFIX:
+  case ISD::SMULFIXSAT:
+  case ISD::UMULFIX:            return visitMULFIX(N);
   case ISD::MUL:                return visitMUL(N);
   case ISD::SDIV:               return visitSDIV(N);
   case ISD::UDIV:               return visitUDIV(N);
@@ -3457,6 +3465,29 @@ SDValue DAGCombiner::visitSUBCARRY(SDNode *N) {
         TLI.isOperationLegalOrCustom(ISD::USUBO, N->getValueType(0)))
       return DAG.getNode(ISD::USUBO, SDLoc(N), N->getVTList(), N0, N1);
   }
+
+  return SDValue();
+}
+
+// Notice that "mulfix" can be any of SMULFIX, SMULFIXSAT and UMULFIX here.
+SDValue DAGCombiner::visitMULFIX(SDNode *N) {
+  SDValue N0 = N->getOperand(0);
+  SDValue N1 = N->getOperand(1);
+  SDValue Scale = N->getOperand(2);
+  EVT VT = N0.getValueType();
+
+  // fold (mulfix x, undef, scale) -> 0
+  if (N0.isUndef() || N1.isUndef())
+    return DAG.getConstant(0, SDLoc(N), VT);
+
+  // Canonicalize constant to RHS (vector doesn't have to splat)
+  if (DAG.isConstantIntBuildVectorOrConstantInt(N0) &&
+     !DAG.isConstantIntBuildVectorOrConstantInt(N1))
+    return DAG.getNode(N->getOpcode(), SDLoc(N), VT, N1, N0, Scale);
+
+  // fold (mulfix x, 0, scale) -> 0
+  if (isNullConstant(N1))
+    return DAG.getConstant(0, SDLoc(N), VT);
 
   return SDValue();
 }
@@ -8431,23 +8462,6 @@ SDValue DAGCombiner::visitSELECT(SDNode *N) {
   return SDValue();
 }
 
-static
-std::pair<SDValue, SDValue> SplitVSETCC(const SDNode *N, SelectionDAG &DAG) {
-  SDLoc DL(N);
-  EVT LoVT, HiVT;
-  std::tie(LoVT, HiVT) = DAG.GetSplitDestVTs(N->getValueType(0));
-
-  // Split the inputs.
-  SDValue Lo, Hi, LL, LH, RL, RH;
-  std::tie(LL, LH) = DAG.SplitVectorOperand(N, 0);
-  std::tie(RL, RH) = DAG.SplitVectorOperand(N, 1);
-
-  Lo = DAG.getNode(N->getOpcode(), DL, LoVT, LL, RL, N->getOperand(2));
-  Hi = DAG.getNode(N->getOpcode(), DL, HiVT, LH, RH, N->getOperand(2));
-
-  return std::make_pair(Lo, Hi);
-}
-
 // This function assumes all the vselect's arguments are CONCAT_VECTOR
 // nodes and that the condition is a BV of ConstantSDNodes (or undefs).
 static SDValue ConvertSelectToConcatVector(SDNode *N, SelectionDAG &DAG) {
@@ -8506,7 +8520,6 @@ static SDValue ConvertSelectToConcatVector(SDNode *N, SelectionDAG &DAG) {
 SDValue DAGCombiner::visitMSCATTER(SDNode *N) {
   MaskedScatterSDNode *MSC = cast<MaskedScatterSDNode>(N);
   SDValue Mask = MSC->getMask();
-  SDValue Data = MSC->getValue();
   SDValue Chain = MSC->getChain();
   SDLoc DL(N);
 
@@ -8514,124 +8527,19 @@ SDValue DAGCombiner::visitMSCATTER(SDNode *N) {
   if (ISD::isBuildVectorAllZeros(Mask.getNode()))
     return Chain;
 
-  if (Level >= AfterLegalizeTypes)
-    return SDValue();
-
-  // If the MSCATTER data type requires splitting and the mask is provided by a
-  // SETCC, then split both nodes and its operands before legalization. This
-  // prevents the type legalizer from unrolling SETCC into scalar comparisons
-  // and enables future optimizations (e.g. min/max pattern matching on X86).
-  if (Mask.getOpcode() != ISD::SETCC)
-    return SDValue();
-
-  // Check if any splitting is required.
-  if (TLI.getTypeAction(*DAG.getContext(), Data.getValueType()) !=
-      TargetLowering::TypeSplitVector)
-    return SDValue();
-  SDValue MaskLo, MaskHi;
-  std::tie(MaskLo, MaskHi) = SplitVSETCC(Mask.getNode(), DAG);
-
-  EVT LoVT, HiVT;
-  std::tie(LoVT, HiVT) = DAG.GetSplitDestVTs(MSC->getValueType(0));
-
-  EVT MemoryVT = MSC->getMemoryVT();
-  unsigned Alignment = MSC->getOriginalAlignment();
-
-  EVT LoMemVT, HiMemVT;
-  std::tie(LoMemVT, HiMemVT) = DAG.GetSplitDestVTs(MemoryVT);
-
-  SDValue DataLo, DataHi;
-  std::tie(DataLo, DataHi) = DAG.SplitVector(Data, DL);
-
-  SDValue Scale = MSC->getScale();
-  SDValue BasePtr = MSC->getBasePtr();
-  SDValue IndexLo, IndexHi;
-  std::tie(IndexLo, IndexHi) = DAG.SplitVector(MSC->getIndex(), DL);
-
-  MachineMemOperand *MMO = DAG.getMachineFunction().
-    getMachineMemOperand(MSC->getPointerInfo(),
-                          MachineMemOperand::MOStore,  LoMemVT.getStoreSize(),
-                          Alignment, MSC->getAAInfo(), MSC->getRanges());
-
-  SDValue OpsLo[] = { Chain, DataLo, MaskLo, BasePtr, IndexLo, Scale };
-  SDValue Lo = DAG.getMaskedScatter(DAG.getVTList(MVT::Other),
-                                    DataLo.getValueType(), DL, OpsLo, MMO,
-                                    MSC->getIndexType());
-
-  // The order of the Scatter operation after split is well defined. The "Hi"
-  // part comes after the "Lo". So these two operations should be chained one
-  // after another.
-  SDValue OpsHi[] = { Lo, DataHi, MaskHi, BasePtr, IndexHi, Scale };
-  return DAG.getMaskedScatter(DAG.getVTList(MVT::Other), DataHi.getValueType(),
-                              DL, OpsHi, MMO, MSC->getIndexType());
+  return SDValue();
 }
 
 SDValue DAGCombiner::visitMSTORE(SDNode *N) {
   MaskedStoreSDNode *MST = cast<MaskedStoreSDNode>(N);
   SDValue Mask = MST->getMask();
-  SDValue Data = MST->getValue();
   SDValue Chain = MST->getChain();
-  EVT VT = Data.getValueType();
   SDLoc DL(N);
 
   // Zap masked stores with a zero mask.
   if (ISD::isBuildVectorAllZeros(Mask.getNode()))
     return Chain;
 
-  if (Level >= AfterLegalizeTypes)
-    return SDValue();
-
-  // If the MSTORE data type requires splitting and the mask is provided by a
-  // SETCC, then split both nodes and its operands before legalization. This
-  // prevents the type legalizer from unrolling SETCC into scalar comparisons
-  // and enables future optimizations (e.g. min/max pattern matching on X86).
-  if (Mask.getOpcode() == ISD::SETCC) {
-    // Check if any splitting is required.
-    if (TLI.getTypeAction(*DAG.getContext(), VT) !=
-        TargetLowering::TypeSplitVector)
-      return SDValue();
-
-    SDValue MaskLo, MaskHi, Lo, Hi;
-    std::tie(MaskLo, MaskHi) = SplitVSETCC(Mask.getNode(), DAG);
-
-    SDValue Ptr   = MST->getBasePtr();
-
-    EVT MemoryVT = MST->getMemoryVT();
-    unsigned Alignment = MST->getOriginalAlignment();
-
-    EVT LoMemVT, HiMemVT;
-    std::tie(LoMemVT, HiMemVT) = DAG.GetSplitDestVTs(MemoryVT);
-
-    SDValue DataLo, DataHi;
-    std::tie(DataLo, DataHi) = DAG.SplitVector(Data, DL);
-
-    MachineMemOperand *MMO = DAG.getMachineFunction().
-      getMachineMemOperand(MST->getPointerInfo(),
-                           MachineMemOperand::MOStore,  LoMemVT.getStoreSize(),
-                           Alignment, MST->getAAInfo(), MST->getRanges());
-
-    Lo = DAG.getMaskedStore(Chain, DL, DataLo, Ptr, MaskLo, LoMemVT, MMO,
-                            MST->isTruncatingStore(),
-                            MST->isCompressingStore());
-
-    Ptr = TLI.IncrementMemoryAddress(Ptr, MaskLo, DL, LoMemVT, DAG,
-                                     MST->isCompressingStore());
-    unsigned HiOffset = LoMemVT.getStoreSize();
-
-    MMO = DAG.getMachineFunction().getMachineMemOperand(
-        MST->getPointerInfo().getWithOffset(HiOffset),
-        MachineMemOperand::MOStore, HiMemVT.getStoreSize(), Alignment,
-        MST->getAAInfo(), MST->getRanges());
-
-    Hi = DAG.getMaskedStore(Chain, DL, DataHi, Ptr, MaskHi, HiMemVT, MMO,
-                            MST->isTruncatingStore(),
-                            MST->isCompressingStore());
-
-    AddToWorklist(Lo.getNode());
-    AddToWorklist(Hi.getNode());
-
-    return DAG.getNode(ISD::TokenFactor, DL, MVT::Other, Lo, Hi);
-  }
   return SDValue();
 }
 
@@ -8644,76 +8552,7 @@ SDValue DAGCombiner::visitMGATHER(SDNode *N) {
   if (ISD::isBuildVectorAllZeros(Mask.getNode()))
     return CombineTo(N, MGT->getPassThru(), MGT->getChain());
 
-  if (Level >= AfterLegalizeTypes)
-    return SDValue();
-
-  // If the MGATHER result requires splitting and the mask is provided by a
-  // SETCC, then split both nodes and its operands before legalization. This
-  // prevents the type legalizer from unrolling SETCC into scalar comparisons
-  // and enables future optimizations (e.g. min/max pattern matching on X86).
-
-  if (Mask.getOpcode() != ISD::SETCC)
-    return SDValue();
-
-  EVT VT = N->getValueType(0);
-
-  // Check if any splitting is required.
-  if (TLI.getTypeAction(*DAG.getContext(), VT) !=
-      TargetLowering::TypeSplitVector)
-    return SDValue();
-
-  SDValue MaskLo, MaskHi, Lo, Hi;
-  std::tie(MaskLo, MaskHi) = SplitVSETCC(Mask.getNode(), DAG);
-
-  SDValue PassThru = MGT->getPassThru();
-  SDValue PassThruLo, PassThruHi;
-  std::tie(PassThruLo, PassThruHi) = DAG.SplitVector(PassThru, DL);
-
-  EVT LoVT, HiVT;
-  std::tie(LoVT, HiVT) = DAG.GetSplitDestVTs(VT);
-
-  SDValue Chain = MGT->getChain();
-  EVT MemoryVT = MGT->getMemoryVT();
-  unsigned Alignment = MGT->getOriginalAlignment();
-
-  EVT LoMemVT, HiMemVT;
-  std::tie(LoMemVT, HiMemVT) = DAG.GetSplitDestVTs(MemoryVT);
-
-  SDValue Scale = MGT->getScale();
-  SDValue BasePtr = MGT->getBasePtr();
-  SDValue Index = MGT->getIndex();
-  SDValue IndexLo, IndexHi;
-  std::tie(IndexLo, IndexHi) = DAG.SplitVector(Index, DL);
-
-  MachineMemOperand *MMO = DAG.getMachineFunction().
-    getMachineMemOperand(MGT->getPointerInfo(),
-                          MachineMemOperand::MOLoad,  LoMemVT.getStoreSize(),
-                          Alignment, MGT->getAAInfo(), MGT->getRanges());
-
-  SDValue OpsLo[] = { Chain, PassThruLo, MaskLo, BasePtr, IndexLo, Scale };
-  Lo = DAG.getMaskedGather(DAG.getVTList(LoVT, MVT::Other), LoVT, DL, OpsLo,
-                           MMO, MGT->getIndexType());
-
-  SDValue OpsHi[] = { Chain, PassThruHi, MaskHi, BasePtr, IndexHi, Scale };
-  Hi = DAG.getMaskedGather(DAG.getVTList(HiVT, MVT::Other), HiVT, DL, OpsHi,
-                           MMO, MGT->getIndexType());
-
-  AddToWorklist(Lo.getNode());
-  AddToWorklist(Hi.getNode());
-
-  // Build a factor node to remember that this load is independent of the
-  // other one.
-  Chain = DAG.getNode(ISD::TokenFactor, DL, MVT::Other, Lo.getValue(1),
-                      Hi.getValue(1));
-
-  // Legalized the chain result - switch anything that used the old chain to
-  // use the new one.
-  DAG.ReplaceAllUsesOfValueWith(SDValue(MGT, 1), Chain);
-
-  SDValue GatherRes = DAG.getNode(ISD::CONCAT_VECTORS, DL, VT, Lo, Hi);
-
-  SDValue RetOps[] = { GatherRes, Chain };
-  return DAG.getMergeValues(RetOps, DL);
+  return SDValue();
 }
 
 SDValue DAGCombiner::visitMLOAD(SDNode *N) {
@@ -8725,76 +8564,6 @@ SDValue DAGCombiner::visitMLOAD(SDNode *N) {
   if (ISD::isBuildVectorAllZeros(Mask.getNode()))
     return CombineTo(N, MLD->getPassThru(), MLD->getChain());
 
-  if (Level >= AfterLegalizeTypes)
-    return SDValue();
-
-  // If the MLOAD result requires splitting and the mask is provided by a
-  // SETCC, then split both nodes and its operands before legalization. This
-  // prevents the type legalizer from unrolling SETCC into scalar comparisons
-  // and enables future optimizations (e.g. min/max pattern matching on X86).
-  if (Mask.getOpcode() == ISD::SETCC) {
-    EVT VT = N->getValueType(0);
-
-    // Check if any splitting is required.
-    if (TLI.getTypeAction(*DAG.getContext(), VT) !=
-        TargetLowering::TypeSplitVector)
-      return SDValue();
-
-    SDValue MaskLo, MaskHi, Lo, Hi;
-    std::tie(MaskLo, MaskHi) = SplitVSETCC(Mask.getNode(), DAG);
-
-    SDValue PassThru = MLD->getPassThru();
-    SDValue PassThruLo, PassThruHi;
-    std::tie(PassThruLo, PassThruHi) = DAG.SplitVector(PassThru, DL);
-
-    EVT LoVT, HiVT;
-    std::tie(LoVT, HiVT) = DAG.GetSplitDestVTs(MLD->getValueType(0));
-
-    SDValue Chain = MLD->getChain();
-    SDValue Ptr   = MLD->getBasePtr();
-    EVT MemoryVT = MLD->getMemoryVT();
-    unsigned Alignment = MLD->getOriginalAlignment();
-
-    EVT LoMemVT, HiMemVT;
-    std::tie(LoMemVT, HiMemVT) = DAG.GetSplitDestVTs(MemoryVT);
-
-    MachineMemOperand *MMO = DAG.getMachineFunction().
-    getMachineMemOperand(MLD->getPointerInfo(),
-                         MachineMemOperand::MOLoad,  LoMemVT.getStoreSize(),
-                         Alignment, MLD->getAAInfo(), MLD->getRanges());
-
-    Lo = DAG.getMaskedLoad(LoVT, DL, Chain, Ptr, MaskLo, PassThruLo, LoMemVT,
-                           MMO, ISD::NON_EXTLOAD, MLD->isExpandingLoad());
-
-    Ptr = TLI.IncrementMemoryAddress(Ptr, MaskLo, DL, LoMemVT, DAG,
-                                     MLD->isExpandingLoad());
-    unsigned HiOffset = LoMemVT.getStoreSize();
-
-    MMO = DAG.getMachineFunction().getMachineMemOperand(
-        MLD->getPointerInfo().getWithOffset(HiOffset),
-        MachineMemOperand::MOLoad, HiMemVT.getStoreSize(), Alignment,
-        MLD->getAAInfo(), MLD->getRanges());
-
-    Hi = DAG.getMaskedLoad(HiVT, DL, Chain, Ptr, MaskHi, PassThruHi, HiMemVT,
-                           MMO, ISD::NON_EXTLOAD, MLD->isExpandingLoad());
-
-    AddToWorklist(Lo.getNode());
-    AddToWorklist(Hi.getNode());
-
-    // Build a factor node to remember that this load is independent of the
-    // other one.
-    Chain = DAG.getNode(ISD::TokenFactor, DL, MVT::Other, Lo.getValue(1),
-                        Hi.getValue(1));
-
-    // Legalized the chain result - switch anything that used the old chain to
-    // use the new one.
-    DAG.ReplaceAllUsesOfValueWith(SDValue(MLD, 1), Chain);
-
-    SDValue LoadRes = DAG.getNode(ISD::CONCAT_VECTORS, DL, VT, Lo, Hi);
-
-    SDValue RetOps[] = { LoadRes, Chain };
-    return DAG.getMergeValues(RetOps, DL);
-  }
   return SDValue();
 }
 
@@ -12305,10 +12074,6 @@ SDValue DAGCombiner::visitFMUL(SDNode *N) {
      !isConstantFPBuildVectorOrConstantFP(N1))
     return DAG.getNode(ISD::FMUL, DL, VT, N1, N0, Flags);
 
-  // fold (fmul A, 1.0) -> A
-  if (N1CFP && N1CFP->isExactlyValue(1.0))
-    return N0;
-
   if (SDValue NewSel = foldBinOpIntoSelect(N))
     return NewSel;
 
@@ -15657,7 +15422,7 @@ bool DAGCombiner::MergeConsecutiveStores(StoreSDNode *St) {
 
   bool RV = false;
   while (StoreNodes.size() > 1) {
-    unsigned StartIdx = 0;
+    size_t StartIdx = 0;
     while ((StartIdx + 1 < StoreNodes.size()) &&
            StoreNodes[StartIdx].OffsetFromBase + ElementSizeBytes !=
                StoreNodes[StartIdx + 1].OffsetFromBase)

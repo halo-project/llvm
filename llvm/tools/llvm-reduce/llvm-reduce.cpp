@@ -8,8 +8,9 @@
 //
 // This program tries to reduce an IR test case for a given interesting-ness
 // test. It runs multiple delta debugging passes in order to minimize the input
-// file. It's worth noting that this is a *temporary* tool that will eventually
-// be integrated into the bugpoint tool itself.
+// file. It's worth noting that this is a part of the bugpoint redesign
+// proposal, and thus a *temporary* tool that will eventually be integrated
+// into the bugpoint tool itself.
 //
 //===----------------------------------------------------------------------===//
 
@@ -70,22 +71,6 @@ static std::unique_ptr<Module> parseInputFile(StringRef Filename,
   return Result;
 }
 
-/// Gets Current Working Directory and tries to create a Tmp Directory
-static SmallString<128> initializeTmpDirectory() {
-  SmallString<128> CWD;
-  if (std::error_code EC = sys::fs::current_path(CWD)) {
-    errs() << "Error getting current directory: " << EC.message() << "!\n";
-    exit(1);
-  }
-
-  SmallString<128> TmpDirectory;
-  sys::path::append(TmpDirectory, CWD, "tmp");
-  if (std::error_code EC = sys::fs::create_directory(TmpDirectory))
-    errs() << "Error creating tmp directory: " << EC.message() << "!\n";
-
-  return TmpDirectory;
-}
-
 int main(int argc, char **argv) {
   InitLLVM X(argc, argv);
 
@@ -96,26 +81,30 @@ int main(int argc, char **argv) {
       parseInputFile(InputFilename, Context);
 
   // Initialize test environment
-  SmallString<128> TmpDirectory = initializeTmpDirectory();
-  TestRunner Tester(TestFilename, TestArguments, InputFilename, TmpDirectory);
+  TestRunner Tester(TestFilename, TestArguments, InputFilename);
   Tester.setProgram(std::move(OriginalProgram));
 
   // Try to reduce code
   runDeltaPasses(Tester);
   StringRef ReducedFilename = sys::path::filename(Tester.getReducedFilepath());
 
-  if (ReducedFilename == InputFilename) {
-    outs() << "\nCouldnt reduce input :/\n";
+  if (ReducedFilename == sys::path::filename(InputFilename)) {
+    errs() << "\nCouldnt reduce input :/\n";
   } else {
-    if (ReplaceInput) // In-place
-      OutputFilename = InputFilename.c_str();
-    else if (OutputFilename.empty())
-      OutputFilename = "reduced.ll";
-    else
-      OutputFilename += ".ll";
+    // Print reduced file to STDOUT
+    if (OutputFilename == "-")
+      Tester.getProgram()->print(outs(), nullptr);
+    else {
+      if (ReplaceInput) // In-place
+        OutputFilename = InputFilename.c_str();
+      else if (OutputFilename.empty())
+        OutputFilename = "reduced.ll";
+      else
+        OutputFilename += ".ll";
 
-    sys::fs::copy_file(Tester.getReducedFilepath(), OutputFilename);
-    outs() << "\nDone reducing! Reduced IR to file: " << OutputFilename << "\n";
+      sys::fs::copy_file(Tester.getReducedFilepath(), OutputFilename);
+      errs() << "\nDone reducing! Reduced testcase: " << OutputFilename << "\n";
+    }
   }
 
   return 0;
