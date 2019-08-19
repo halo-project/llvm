@@ -133,9 +133,11 @@ void MonitorState::gather_module_info(std::string ObjPath, pb::ModuleInfo *MI) {
     }
 
     // test by section name
-    llvm::StringRef Name;
-    Sec.getName(Name);
+    auto MaybeName = Sec.getName();
+    if (!MaybeName)
+      continue;
 
+    auto Name = MaybeName.get();
     if (Name == ".llvmcmd") {
       llvm::Expected<llvm::StringRef> MaybeData = Sec.getContents();
       if (!MaybeData) halo::fatal_error("unable get cmd section contents.");

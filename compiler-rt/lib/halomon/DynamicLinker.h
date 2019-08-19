@@ -26,14 +26,14 @@ class DynamicLinker {
 
 public:
   DynamicLinker()
-  : ObjectLayer(ES, []() { return llvm::make_unique<llvm::SectionMemoryManager>(); }),
-    Ctx(llvm::make_unique<llvm::LLVMContext>()) {}
+  : ObjectLayer(ES, []() { return std::make_unique<llvm::SectionMemoryManager>(); }),
+    Ctx(std::make_unique<llvm::LLVMContext>()) {}
 
   void run(pb::CodeReplacement &CR) {
     llvm::DataLayout DL(CR.data_layout());
 
     // TODO: this might be a one-time-only action.
-    ES.getMainJITDylib().setGenerator( // became addGenerator, since now it supports more than 1?
+    ES.getMainJITDylib().addGenerator(
         cantFail(orc::DynamicLibrarySearchGenerator::GetForCurrentProcess(
             DL.getGlobalPrefix())));
 
