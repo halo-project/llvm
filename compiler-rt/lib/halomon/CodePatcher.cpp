@@ -1,5 +1,5 @@
 
-#include "halomon/Patcher.h"
+#include "halomon/CodePatcher.h"
 #include "halomon/Error.h"
 #include "xray/xray_interface_internal.h"
 
@@ -143,7 +143,7 @@ void timingHandler(int32_t FuncID, XRayEntryType Kind) {
   };
 }
 
-Patcher::Patcher() {
+CodePatcher::CodePatcher() {
   __xray_init();
 
   // populate the initial map of addrs to IDs.
@@ -153,10 +153,14 @@ Patcher::Patcher() {
   }
 }
 
-void Patcher::measureRunningTime(uint64_t FnPtr) {
+void CodePatcher::measureRunningTime(uint64_t FnPtr) {
   auto id = AddrToID[FnPtr];
   __xray_set_handler(timingHandler);
   __xray_patch_function(id);
+}
+
+void CodePatcher::replace(pb::CodeReplacement const& CR, DynamicLinker const& DL) {
+  // TODO:
 }
 
 } // end namespace

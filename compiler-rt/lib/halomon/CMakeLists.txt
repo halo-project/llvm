@@ -43,7 +43,7 @@ set(HALOMON_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/LinuxPerfEvents.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/Monitor.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/MonitorState.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/Patcher.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/CodePatcher.cpp
 )
 
 include_directories(..)

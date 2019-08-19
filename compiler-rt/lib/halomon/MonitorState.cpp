@@ -49,7 +49,7 @@ void MonitorState::server_listen_loop() {
         if (LOG) log << "Recieved request to measure perf of func "
                   << Req.func_addr() << "\n";
 
-        Patch.measureRunningTime(Req.func_addr());
+        Patcher.measureRunningTime(Req.func_addr());
 
       } break;
 
@@ -58,7 +58,12 @@ void MonitorState::server_listen_loop() {
         pb::CodeReplacement CR;
         CR.ParseFromString(Blob);
 
-        Linker.run(CR);
+        msg::print_proto(CR);
+
+        std::unique_ptr<std::string> ObjFile(CR.release_objfile());
+        Linker.add(std::move(ObjFile));
+
+        Patcher.replace(CR, Linker);
 
       } break;
 

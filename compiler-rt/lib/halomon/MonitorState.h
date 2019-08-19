@@ -8,7 +8,7 @@
 #endif
 
 #include "halomon/Client.h"
-#include "halomon/Patcher.h"
+#include "halomon/CodePatcher.h"
 #include "halomon/DynamicLinker.h"
 
 // NOTE: we are Linux only right now, but the public interface
@@ -44,7 +44,7 @@ private:
 
 public:
   Client Net;
-  Patcher Patch;
+  CodePatcher Patcher;
   DynamicLinker Linker;
 
   // information about this process

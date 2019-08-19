@@ -2,13 +2,18 @@
 
 #include <unordered_map>
 
+#include "halomon/DynamicLinker.h"
+
+
+
 namespace halo {
 
-class Patcher {
+class CodePatcher {
 public:
-  Patcher();
+  CodePatcher();
 
 void measureRunningTime(uint64_t FnPtr);
+void replace(pb::CodeReplacement const&, DynamicLinker const&);
 
 private:
   size_t MaxID;

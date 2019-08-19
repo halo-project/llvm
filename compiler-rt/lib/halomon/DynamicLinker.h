@@ -23,22 +23,34 @@ class DynamicLinker {
   orc::ExecutionSession ES;
   orc::RTDyldObjectLinkingLayer ObjectLayer;
   orc::ThreadSafeContext Ctx;
+  char GlobalSymbolPrefix;
 
 public:
   DynamicLinker()
   : ObjectLayer(ES, []() { return std::make_unique<llvm::SectionMemoryManager>(); }),
-    Ctx(std::make_unique<llvm::LLVMContext>()) {}
+    Ctx(std::make_unique<llvm::LLVMContext>()) {
 
-  void run(pb::CodeReplacement &CR) {
-    llvm::DataLayout DL(CR.data_layout());
+      // FIXME: obtain the target triple from the .llvmcmd section
+      // and pass that into this ctor.
 
-    // TODO: this might be a one-time-only action.
-    ES.getMainJITDylib().addGenerator(
-        cantFail(orc::DynamicLibrarySearchGenerator::GetForCurrentProcess(
-            DL.getGlobalPrefix())));
+      // llvm::Triple Triple;
+      // Triple.setOS(llvm::Triple::OSType::Linux);
+      // Triple.setObjectFormat(llvm::Triple::ObjectFormatType::ELF);
+      //
+      // orc::JITTargetMachineBuilder JTMB(Triple);
+      // auto Layout = cantFail(JTMB.getDefaultDataLayoutForTarget());
+      // GlobalSymbolPrefix = Layout.getGlobalPrefix();
 
-    // TODO: add the object file from the CR to the dylib.
+      GlobalSymbolPrefix = '\0'; // ELF ONLY RIGHT NOW. FIX THE ABOVE
 
+      ES.getMainJITDylib().addGenerator(
+          cantFail(orc::DynamicLibrarySearchGenerator::GetForCurrentProcess(
+              GlobalSymbolPrefix)));
+    }
+
+  void add(std::unique_ptr<std::string> ObjFile) {
+    auto Buffer = llvm::MemoryBuffer::getMemBuffer(llvm::StringRef(*ObjFile));
+    ObjectLayer.add(ES.getMainJITDylib(), std::move(Buffer));
   }
 
   llvm::Expected<llvm::JITEvaluatedSymbol> lookup(llvm::StringRef MangledName) {
