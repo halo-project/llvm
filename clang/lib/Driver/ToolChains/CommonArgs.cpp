@@ -810,7 +810,9 @@ void tools::linkHaloRuntimeDeps(const ToolChain &TC, const ArgList &Args,
   // NOTE: -L (install or build)/lib is already passed on the command line
   CmdArgs.push_back("-rpath");
   CmdArgs.push_back(Args.MakeArgString(PathStr.c_str()));
-  CmdArgs.push_back("-lLLVM");
+  // TODO: there doesn't seem to be a build target for libLLVM.so, only
+  // an install target, so we link with libLLVM-Nsvn.so for now.
+  CmdArgs.push_back("-lLLVM-10svn");
 
   CmdArgs.push_back("--no-as-needed");
 }
