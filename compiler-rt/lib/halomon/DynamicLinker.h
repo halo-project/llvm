@@ -45,13 +45,13 @@ public:
 
       GlobalSymbolPrefix = '\0'; // ELF ONLY RIGHT NOW. FIX THE ABOVE
 
-      ES.getMainJITDylib().addGenerator(
-          cantFail(orc::DynamicLibrarySearchGenerator::GetForCurrentProcess(
-              GlobalSymbolPrefix)));
+      // ES.getMainJITDylib().addGenerator(
+      //     cantFail(orc::DynamicLibrarySearchGenerator::GetForCurrentProcess(
+      //         GlobalSymbolPrefix)));
     }
 
   // All lookups performed after adding the object file must happen before
-  // the string ref here goes out of scope!
+  // the ObjFile passed in here goes out of scope!
   std::string add(llvm::StringRef ObjFile) {
     // NOTE: testing here. We need a mechanism to unload / deallocate these dylibs!
 
@@ -59,8 +59,12 @@ public:
     // addresses in the later lib become invalid?
     std::string Name = "newCode";
     Name += std::to_string(LibTicker++);
-    // auto &NewDylib = ES.createJITDylib(Name); // UNCOMMENT TO TRY ADDING TO NEW DYLIB INSTEAD
-    auto &NewDylib = ES.getMainJITDylib();
+    auto &NewDylib = ES.createJITDylib(Name); // UNCOMMENT TO TRY ADDING TO NEW DYLIB INSTEAD
+    // auto &NewDylib = ES.getMainJITDylib();
+
+    NewDylib.addGenerator(
+        cantFail(orc::DynamicLibrarySearchGenerator::GetForCurrentProcess(
+            GlobalSymbolPrefix)));
 
     auto Buffer = llvm::MemoryBuffer::getMemBuffer(ObjFile);
     ObjectLayer.add(NewDylib, std::move(Buffer));
@@ -69,14 +73,11 @@ public:
   }
 
   llvm::Expected<llvm::JITEvaluatedSymbol> lookup(llvm::StringRef LibName, llvm::StringRef MangledName) {
-    orc::JITDylibSearchList SearchOrder;
+    return ES.lookup(ES.getJITDylibByName(LibName), ES.intern(MangledName));
+  }
 
-    // UNCOMMENT TO TRY RESOLVING FROM NEW DYLIB INSTEAD
-    // SearchOrder.emplace_back(ES.getJITDylibByName(LibName), /* MatchWithInternalSymbols */ true);
-
-    SearchOrder.emplace_back(&ES.getMainJITDylib(), /* MatchWithInternalSymbols */ true);
-
-    return ES.lookup(SearchOrder, ES.intern(MangledName));
+  void dump(llvm::raw_ostream &OS) {
+    ES.dump(OS);
   }
 
 };

@@ -67,7 +67,9 @@ void MonitorState::server_listen_loop() {
         auto Error = Patcher.replaceAll(CR, DylibName, ObjFile, Linker, Net.Chan);
 
         if (Error)
-          llvm::outs() << "Code patching failed: " << Error << "\n";
+          llvm::report_fatal_error(std::move(Error));
+
+        Linker.dump(llvm::errs());
 
       } break;
 

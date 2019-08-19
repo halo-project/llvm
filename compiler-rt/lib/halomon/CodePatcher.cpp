@@ -166,7 +166,7 @@ llvm::Error CodePatcher::replaceAll(pb::CodeReplacement const& CR,
   // perform linking on all requested symbols and collect those
   // new addresses.
 
-  llvm::outs() << "DylibName = " << DylibName << "\n";
+  llvm::errs() << "DylibName = " << DylibName << "\n";
 
   for (pb::FunctionSymbol const& Request : CR.symbols()) {
     auto &Label = Request.label();
@@ -177,7 +177,7 @@ llvm::Error CodePatcher::replaceAll(pb::CodeReplacement const& CR,
 
     llvm::JITEvaluatedSymbol Symb = MaybeSymbol.get();
 
-    llvm::outs() << Label << " --> " << Symb.getAddress() << "\n";
+    llvm::errs() << Label << " --> " << Symb.getAddress() << "\n";
 
     // find the size of the label from the object file.
 
