@@ -25,7 +25,7 @@ namespace halo {
 
 void MonitorState::server_listen_loop() {
   Net.Chan.async_recv([this](msg::Kind Kind, std::vector<char>& Body) {
-    if (LOG) log() << "got msg ID " << (uint32_t) Kind << "\n";
+    if (LOG) log() << "recv msg ID " << (uint32_t) Kind << "\n";
 
     switch (Kind) {
       case msg::Shutdown: {
@@ -61,15 +61,17 @@ void MonitorState::server_listen_loop() {
         // msg::print_proto(CR);
 
         std::unique_ptr<std::string> ObjFileStorage(CR.release_objfile());
-        llvm::StringRef ObjFile(*ObjFileStorage);
-        auto DylibName = Linker.add(ObjFile);
+        auto MaybeDylib = Linker.run(std::move(ObjFileStorage));
 
-        auto Error = Patcher.replaceAll(CR, DylibName, ObjFile, Linker, Net.Chan);
+        if (!MaybeDylib)
+          llvm::report_fatal_error(std::move(MaybeDylib.takeError()));
+
+        auto Dylib = std::move(MaybeDylib.get());
+
+        auto Error = Patcher.replaceAll(CR, std::move(Dylib), Net.Chan);
 
         if (Error)
           llvm::report_fatal_error(std::move(Error));
-
-        Linker.dump(log());
 
       } break;
 

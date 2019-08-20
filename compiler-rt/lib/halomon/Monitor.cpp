@@ -12,7 +12,7 @@ namespace halo {
 void monitor_loop(MonitorState &M, std::atomic<bool> &ShutdownRequested) {
   /////////////////
   // Setup
-  
+
   Client &C = M.Net;
 
   {
@@ -32,6 +32,9 @@ void monitor_loop(MonitorState &M, std::atomic<bool> &ShutdownRequested) {
     CE.set_process_triple(llvm::sys::getProcessTriple());
     CE.set_host_cpu(llvm::sys::getHostCPUName());
     M.gather_module_info(M.ExePath, CE.mutable_module());
+
+    // obtain our data layout from the bitcode.
+    M.Linker.setLayout(CE.module().bitcode());
 
     C.Chan.send_proto(msg::ClientEnroll, CE);
   }

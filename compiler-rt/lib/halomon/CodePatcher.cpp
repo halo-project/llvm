@@ -160,31 +160,30 @@ void CodePatcher::measureRunningTime(uint64_t FnPtr) {
 }
 
 llvm::Error CodePatcher::replaceAll(pb::CodeReplacement const& CR,
-                                      std::string const& DylibName,
-                                      llvm::StringRef &ObjFile,
-                                      DynamicLinker &DL, Channel &Chan) {
+                                      std::unique_ptr<Dylib> Dylib, Channel &Chan) {
   // perform linking on all requested symbols and collect those
   // new addresses.
 
-  // FIXME: skip linking for now so regression tests pass.
-  return llvm::Error::success();
-
-  if (LOG) log() << "DylibName = " << DylibName << "\n";
-
+  bool NeedDylib = false;
   for (pb::FunctionSymbol const& Request : CR.symbols()) {
     auto &Label = Request.label();
-    auto MaybeSymbol = DL.lookup(DylibName, Label);
+    auto MaybeSymbol = Dylib->lookup(Label);
 
     if (!MaybeSymbol)
       return MaybeSymbol.takeError();
 
+    NeedDylib = true;
+
     llvm::JITEvaluatedSymbol Symb = MaybeSymbol.get();
 
-  if (LOG) log() << Label << " --> " << Symb.getAddress() << "\n";
+    if (LOG) log() << Label << " --> " << Symb.getAddress() << "\n";
 
     // find the size of the label from the object file.
 
   }
+
+  if (LOG) Dylib->dump(log());
+
 
   // send a message to server containing the new address information
 
@@ -193,6 +192,9 @@ llvm::Error CodePatcher::replaceAll(pb::CodeReplacement const& CR,
   // generates the corresponding perf_event or something? research is needed.
 
   // patch in the new functions!
+
+  if (NeedDylib)
+    Dylibs.push_back(std::move(Dylib));
 
   return llvm::Error::success();
 }

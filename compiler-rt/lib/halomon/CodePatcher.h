@@ -15,12 +15,12 @@ public:
   CodePatcher();
 
 void measureRunningTime(uint64_t FnPtr);
-llvm::Error replaceAll(pb::CodeReplacement const&, std::string const& DylibName,
-                        llvm::StringRef &ObjFile, DynamicLinker &, Channel &);
+llvm::Error replaceAll(pb::CodeReplacement const&, std::unique_ptr<Dylib>, Channel &);
 
 private:
   size_t MaxID;
   std::unordered_map<uintptr_t, int32_t> AddrToID;
+  std::list<std::unique_ptr<Dylib>> Dylibs;
 };
 
 } // end namespace
