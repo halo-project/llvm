@@ -3,6 +3,7 @@
 #include "Messages.pb.h"
 
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/ExecutionEngine/JITSymbol.h"
 #include "llvm/ExecutionEngine/Orc/CompileUtils.h"
@@ -24,9 +25,16 @@ namespace orc = llvm::orc;
 
 namespace halo {
 
-class Dylib {
+
+struct DySymbol {
+  llvm::JITEvaluatedSymbol Symbol;
+  // TODO: provide symbol size information from the unresolved object file.
+};
+
+class DyLib {
+
 public:
-  Dylib (llvm::DataLayout DataLayout, std::unique_ptr<std::string> ObjFile)
+  DyLib (llvm::DataLayout DataLayout, std::unique_ptr<std::string> ObjFile)
     : DL(DataLayout),
       Mangle(ES, DL),
       ObjectLayer(ES, []() { return std::make_unique<llvm::SectionMemoryManager>(); }),
@@ -50,8 +58,32 @@ public:
       ObjectLayer.add(MainDylib, std::move(Buffer));
     }
 
-    llvm::Expected<llvm::JITEvaluatedSymbol> lookup(llvm::StringRef MangledName) {
-      return ES.lookup({&ES.getMainJITDylib()}, MangledName);
+    llvm::Expected<DySymbol> requireSymbol(llvm::StringRef MangledName) {
+      if (providesSymbol(MangledName))
+        return RequiredSymbols.lookup(MangledName);
+
+      auto MaybeEvalSymb = ES.lookup({&ES.getMainJITDylib()}, MangledName);
+      if (!MaybeEvalSymb)
+        return MaybeEvalSymb.takeError();
+
+      auto &NewEntry = RequiredSymbols[MangledName];
+      NewEntry.Symbol = MaybeEvalSymb.get();
+
+      NumRequiredSymbols++;
+      return NewEntry;
+    }
+
+    bool providesSymbol(llvm::StringRef MangledName) const {
+      return RequiredSymbols.find(MangledName) != RequiredSymbols.end();
+    }
+
+    size_t numRequiredSymbols() const {
+      return NumRequiredSymbols;
+    }
+
+    void dropSymbol(llvm::StringRef MangledName) {
+      if (RequiredSymbols.erase(MangledName))
+        NumRequiredSymbols--;
     }
 
     void dump(llvm::raw_ostream &OS) {
@@ -67,6 +99,8 @@ private:
   // could delete RawObjFile once all symbols we need have been looked up,
   // since the memory for the linked code is kept inside the ExecutionSession,
   // i.e., the ES only has read-only access to the RawObjFile.
+  llvm::StringMap<DySymbol> RequiredSymbols;
+  size_t NumRequiredSymbols = 0;
 };
 
 class DynamicLinker {
@@ -102,11 +136,11 @@ public:
     setLayout(DL);
   }
 
-  llvm::Expected<std::unique_ptr<Dylib>> run(std::unique_ptr<std::string> ObjFile) const {
+  llvm::Expected<std::unique_ptr<DyLib>> run(std::unique_ptr<std::string> ObjFile) const {
     if (!Valid)
       return makeError("Dynamic linker's DataLayout was not set properly!");
 
-    return std::make_unique<Dylib>(Layout, std::move(ObjFile));
+    return std::make_unique<DyLib>(Layout, std::move(ObjFile));
   }
 
 };

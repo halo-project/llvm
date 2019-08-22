@@ -160,41 +160,55 @@ void CodePatcher::measureRunningTime(uint64_t FnPtr) {
 }
 
 llvm::Error CodePatcher::replaceAll(pb::CodeReplacement const& CR,
-                                      std::unique_ptr<Dylib> Dylib, Channel &Chan) {
+                                      std::unique_ptr<DyLib> Dylib, Channel &Chan) {
   // perform linking on all requested symbols and collect those
   // new addresses.
 
-  bool NeedDylib = false;
+  llvm::SmallVector<std::pair<llvm::StringRef, DySymbol>, 10> NewCode;
+
   for (pb::FunctionSymbol const& Request : CR.symbols()) {
     auto &Label = Request.label();
-    auto MaybeSymbol = Dylib->lookup(Label);
+    auto MaybeSymbol = Dylib->requireSymbol(Label);
 
     if (!MaybeSymbol)
       return MaybeSymbol.takeError();
 
-    NeedDylib = true;
-
-    llvm::JITEvaluatedSymbol Symb = MaybeSymbol.get();
-
-    if (LOG) log() << Label << " --> " << Symb.getAddress() << "\n";
-
-    // find the size of the label from the object file.
-
+    NewCode.push_back({Label, MaybeSymbol.get()});
   }
+
+  // Nothing to do!
+  if (NewCode.empty())
+    return llvm::Error::success();
 
   if (LOG) Dylib->dump(log());
 
+  // save the dylib since we definitely need it.
+  Dylibs.push_back(std::move(Dylib));
 
-  // send a message to server containing the new address information
+  // TODO: send a message to server containing the new address & size information.
 
-  // inform perf-events of these new code addresses so we recieve samples
-  // from them. NOTE: it might be the case that any pages mapped as executable
+  // TODO: inform perf-events of these new code addresses so we recieve samples
+  // from them. it might be the case that any pages mapped as executable
   // generates the corresponding perf_event or something? research is needed.
 
-  // patch in the new functions!
+  // TODO: update XRay's function information table so that we can instrument
+  // the new code, etc.
+  // I believe the way we need to do this is to have the DyLib
+  // resolve its XRay function entry table. Then, in this code patcher, we
+  // translate requests to say, instrument a function, to the right XRaySledEntry
+  // based on whether the process's version has been overridden / redirected.
+  // If it has been redirected, we obtain the SledEntry from the Dylib instead
+  // of XRay's table.
 
-  if (NeedDylib)
-    Dylibs.push_back(std::move(Dylib));
+
+  // for now, let's try patching in the new functions.
+  for (auto &Func : NewCode) {
+
+  }
+
+
+
+
 
   return llvm::Error::success();
 }
