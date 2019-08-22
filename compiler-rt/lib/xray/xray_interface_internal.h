@@ -75,6 +75,7 @@ extern void __xray_FunctionTailExit();
 extern void __xray_ArgLoggerEntry();
 extern void __xray_CustomEvent();
 extern void __xray_TypedEvent();
+extern void __xray_FunctionRedirection();
 }
 
 #endif

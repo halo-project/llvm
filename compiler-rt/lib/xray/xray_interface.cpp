@@ -68,6 +68,9 @@ atomic_uintptr_t XRayPatchedCustomEvent{0};
 // This is the function to call when we encounter a typed event log call.
 atomic_uintptr_t XRayPatchedTypedEvent{0};
 
+// This is the function address table to use when performing a redirect.
+atomic_uintptr_t XRayRedirectTable{0};
+
 // This is the global status to determine whether we are currently
 // patching/unpatching.
 atomic_uint8_t XRayPatching{0};
@@ -147,11 +150,13 @@ public:
 namespace {
 
 bool patchSled(const XRaySledEntry &Sled, bool Enable,
-               int32_t FuncId) XRAY_NEVER_INSTRUMENT {
+               int32_t FuncId, bool Redirect = false) XRAY_NEVER_INSTRUMENT {
   bool Success = false;
   switch (Sled.Kind) {
   case XRayEntryType::ENTRY:
-    Success = patchFunctionEntry(Enable, FuncId, Sled, __xray_FunctionEntry);
+    Success = patchFunctionEntry(Enable, FuncId, Sled, Redirect ?
+                                                     __xray_FunctionRedirection
+                                                   : __xray_FunctionEntry);
     break;
   case XRayEntryType::EXIT:
     Success = patchFunctionExit(Enable, FuncId, Sled);
@@ -176,7 +181,8 @@ bool patchSled(const XRaySledEntry &Sled, bool Enable,
 }
 
 XRayPatchingStatus patchFunction(int32_t FuncId,
-                                 bool Enable) XRAY_NEVER_INSTRUMENT {
+                                 bool Enable,
+                                 bool Redirect = false) XRAY_NEVER_INSTRUMENT {
   if (!atomic_load(&XRayInitialized,
                                 memory_order_acquire))
     return XRayPatchingStatus::NOT_INITIALIZED; // Not initialized.
@@ -211,7 +217,7 @@ XRayPatchingStatus patchFunction(int32_t FuncId,
 
   bool SucceedOnce = false;
   while (f != e)
-    SucceedOnce |= patchSled(*f++, Enable, FuncId);
+    SucceedOnce |= patchSled(*f++, Enable, FuncId, Redirect);
 
   atomic_store(&XRayPatching, false,
                             memory_order_release);
@@ -310,7 +316,8 @@ XRayPatchingStatus controlPatching(bool Enable) XRAY_NEVER_INSTRUMENT {
 }
 
 XRayPatchingStatus mprotectAndPatchFunction(int32_t FuncId,
-                                            bool Enable) XRAY_NEVER_INSTRUMENT {
+                                            bool Enable,
+                                            bool Redirect = false) XRAY_NEVER_INSTRUMENT {
   XRaySledMap InstrMap;
   {
     SpinMutexLock Guard(&XRayInstrMapMutex);
@@ -356,7 +363,7 @@ XRayPatchingStatus mprotectAndPatchFunction(int32_t FuncId,
     Report("Failed mprotect: %d\n", errno);
     return XRayPatchingStatus::FAILED;
   }
-  return patchFunction(FuncId, Enable);
+  return patchFunction(FuncId, Enable, Redirect);
 }
 
 } // namespace
@@ -405,6 +412,17 @@ int __xray_set_typedevent_handler(void (*entry)(
   return 0;
 }
 
+int __xray_set_redirection_table(uintptr_t* table) XRAY_NEVER_INSTRUMENT {
+  if (atomic_load(&XRayInitialized,
+                               memory_order_acquire)) {
+    atomic_store(&__xray::XRayRedirectTable,
+                              reinterpret_cast<uintptr_t>(table),
+                              memory_order_release);
+    return 1;
+  }
+  return 0;
+}
+
 int __xray_remove_handler() XRAY_NEVER_INSTRUMENT {
   return __xray_set_handler(nullptr);
 }
@@ -415,6 +433,10 @@ int __xray_remove_customevent_handler() XRAY_NEVER_INSTRUMENT {
 
 int __xray_remove_typedevent_handler() XRAY_NEVER_INSTRUMENT {
   return __xray_set_typedevent_handler(nullptr);
+}
+
+int __xray_remove_redirection_table() XRAY_NEVER_INSTRUMENT {
+  return __xray_set_redirection_table(nullptr);
 }
 
 uint16_t __xray_register_event_type(
@@ -443,6 +465,10 @@ XRayPatchingStatus __xray_patch_function(int32_t FuncId) XRAY_NEVER_INSTRUMENT {
 XRayPatchingStatus
 __xray_unpatch_function(int32_t FuncId) XRAY_NEVER_INSTRUMENT {
   return mprotectAndPatchFunction(FuncId, false);
+}
+
+XRayPatchingStatus __xray_redirect_function(int32_t FuncId) XRAY_NEVER_INSTRUMENT {
+  return mprotectAndPatchFunction(FuncId, true, /*Redirect = */ true);
 }
 
 int __xray_set_handler_arg1(void (*entry)(int32_t, XRayEntryType, uint64_t)) {
