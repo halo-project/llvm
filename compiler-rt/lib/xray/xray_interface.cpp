@@ -215,9 +215,15 @@ XRayPatchingStatus patchFunction(int32_t FuncId,
   auto *f = SledRange.Begin;
   auto *e = SledRange.End;
 
+  bool ShouldEnable = Enable;
   bool SucceedOnce = false;
-  while (f != e)
-    SucceedOnce |= patchSled(*f++, Enable, FuncId, Redirect);
+  for (; f != e; f++) {
+    // When enabling redirection, we only patch the entry & unpatch all others
+    if (Redirect)
+      ShouldEnable = Enable && f->Kind == XRayEntryType::ENTRY;
+
+    SucceedOnce |= patchSled(*f, ShouldEnable, FuncId, Redirect);
+  }
 
   atomic_store(&XRayPatching, false,
                             memory_order_release);
