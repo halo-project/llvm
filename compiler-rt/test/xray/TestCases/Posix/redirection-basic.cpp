@@ -57,13 +57,19 @@ int main() {
   original(4, 5, 6);
   // CHECK-NEXT: BAR -- 4, 5, 6.000000
 
+  // disable redirection with just a write to the table.
+  table[id] = 0;
+
+  original(7, 8, 9);
+  // CHECK-NEXT: ORIG -- 7, 8, 9.000000
+
   // change redirection with just a write to the table.
   table[id] = (uintptr_t) &buzz;
 
   original(7, 8, 9);
   // CHECK-NEXT: BUZZ -- 7, 8, 9.000000
 
-  // undo patching
+  // undo patching entirely
   __xray_unpatch_function(id);
 
   original(10, 11, 12);

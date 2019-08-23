@@ -286,13 +286,10 @@ ASM_SYMBOL(__xray_TypedEvent):
 	# LLVM-MCA-BEGIN __xray_FunctionRedirection
 	ASM_SYMBOL(__xray_FunctionRedirection):
 		CFI_STARTPROC
-		// adjust stack so we return the original function's caller, not the sled.
-		// R11 is safe to clobber in SysV and Windows conventions.
-		popq %r11
-
 		// This load has to be atomic, it's concurrent with
 		// __xray_set_redirection_table().
 		// On x86/amd64, a simple (type-aligned) MOV instruction is enough.
+		// R11 is safe to clobber in SysV and Windows conventions.
 		movq	ASM_SYMBOL(_ZN6__xray17XRayRedirectTableE)(%rip), %r11
 
 		// compute function pointer offset in the table:
@@ -303,7 +300,19 @@ ASM_SYMBOL(__xray_TypedEvent):
 		// to the table by the user program. This mov should be sufficient
 		// because synchronization is up to the writer.
 		movq	(%r11), %r10
+
+		// test if the fn ptr is zero
+		testq	%r10, %r10
+		je .LnoRedirect
+
+		// adjust stack so we return the original function's caller, not the sled.
+		popq %r11
 		jmpq *%r10
+
+// no redirection is needed at this time.
+.LnoRedirect:
+		retq
+
 	# LLVM-MCA-END
 		ASM_SIZE(__xray_FunctionRedirection)
 		CFI_ENDPROC
