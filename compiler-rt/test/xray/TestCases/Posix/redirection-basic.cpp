@@ -15,16 +15,19 @@
 // if `original` is inlined, xray will not be used.
 #define NO_INLINE __attribute__((noinline))
 
-[[clang::xray_always_instrument]] NO_INLINE void original(int x, int y, float z) {
+[[clang::xray_always_instrument]] NO_INLINE int original(int x, int y, float z) {
   printf("ORIG -- %d, %d, %f\n", x, y, z);
+  return x;
 }
 
-void bar(int x, int y, float z) {
+int bar(int x, int y, float z) {
   printf("BAR -- %d, %d, %f\n", x, y, z);
+  return y;
 }
 
-void buzz(int x, int y, float z) {
+int buzz(int x, int y, float z) {
   printf("BUZZ -- %d, %d, %f\n", x, y, z);
+  return x + y;
 }
 
 int main() {
@@ -47,33 +50,40 @@ int main() {
   // set the entry before redirection
   table[id] = (uintptr_t) &bar;
 
-  original(1, 2, 3);
-  // CHECK: ORIG -- 1, 2, 3.000000
+  int res = original(2, 3, 4);
+  // CHECK: ORIG -- 2, 3, 4.000000
+  if (res != 2)
+    printf("bad return value\n");
 
   // perform the redirect
-  if (__xray_redirect_function(id) != SUCCESS)
-    return 3;
+  __xray_redirect_function(id);
 
-  original(4, 5, 6);
-  // CHECK-NEXT: BAR -- 4, 5, 6.000000
+  res = original(2, 3, 4);
+  // CHECK-NEXT: BAR -- 2, 3, 4.000000
+  if (res != 3)
+    printf("bad return value\n");
 
   // disable redirection with just a write to the table.
   table[id] = 0;
-
-  original(7, 8, 9);
-  // CHECK-NEXT: ORIG -- 7, 8, 9.000000
+  res = original(2, 3, 4);
+  // CHECK-NEXT: ORIG -- 2, 3, 4.000000
+  if (res != 2)
+    printf("bad return value\n");
 
   // change redirection with just a write to the table.
   table[id] = (uintptr_t) &buzz;
-
-  original(7, 8, 9);
-  // CHECK-NEXT: BUZZ -- 7, 8, 9.000000
+  res = original(2, 3, 4);
+  // CHECK-NEXT: BUZZ -- 2, 3, 4.000000
+  if (res != 5)
+    printf("bad return value\n");
 
   // undo patching entirely
   __xray_unpatch_function(id);
 
-  original(10, 11, 12);
-  // CHECK-NEXT: ORIG -- 10, 11, 12.000000
+  res = original(2, 3, 4);
+  // CHECK-NEXT: ORIG -- 2, 3, 4.000000
+  if (res != 2)
+    printf("bad return value\n");
 
   return 0;
 }
