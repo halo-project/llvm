@@ -33,6 +33,11 @@ struct DySymbol {
 
 class DyLib {
 
+  struct RefCountedSymbol {
+    DySymbol Value;
+    int32_t Uses;
+  };
+
 public:
   DyLib (llvm::DataLayout DataLayout, std::unique_ptr<std::string> ObjFile)
     : DL(DataLayout),
@@ -58,32 +63,59 @@ public:
       ObjectLayer.add(MainDylib, std::move(Buffer));
     }
 
+    // Obtains the JITEvaluated symbol for this mangled symbol name.
+    // Each call to this method increases the reference count of this
+    // symbol in the dylib. use dropSymbol to release uses of the symbol.
     llvm::Expected<DySymbol> requireSymbol(llvm::StringRef MangledName) {
-      if (providesSymbol(MangledName))
-        return RequiredSymbols.lookup(MangledName);
+      if (haveSymbol(MangledName)) {
+        auto &Info = RequiredSymbols[MangledName];
+        Info.Uses++;
+        return Info.Value;
+      }
 
       auto MaybeEvalSymb = ES.lookup({&ES.getMainJITDylib()}, MangledName);
       if (!MaybeEvalSymb)
         return MaybeEvalSymb.takeError();
 
+      auto EvalSymb = MaybeEvalSymb.get();
+      if (!EvalSymb)
+        return makeError("evaluated symbol has value zero!");
+
       auto &NewEntry = RequiredSymbols[MangledName];
-      NewEntry.Symbol = MaybeEvalSymb.get();
+      NewEntry.Value.Symbol = EvalSymb;
+      NewEntry.Uses = 1;
 
-      NumRequiredSymbols++;
-      return NewEntry;
-    }
-
-    bool providesSymbol(llvm::StringRef MangledName) const {
-      return RequiredSymbols.find(MangledName) != RequiredSymbols.end();
+      return NewEntry.Value;
     }
 
     size_t numRequiredSymbols() const {
-      return NumRequiredSymbols;
+      size_t UsedSymbols = 0;
+      for (auto const& Entry : RequiredSymbols)
+        if (Entry.second.Uses > 0)
+          UsedSymbols++;
+
+      return UsedSymbols;
     }
 
-    void dropSymbol(llvm::StringRef MangledName) {
-      if (RequiredSymbols.erase(MangledName))
-        NumRequiredSymbols--;
+    // returns true if this symbol was contained in the dylib and a use was dropped.
+    bool dropSymbol(llvm::StringRef Value) {
+      if (haveSymbol(Value)) {
+        auto &RefCountSymb = RequiredSymbols[Value];
+        RefCountSymb.Uses = std::max(RefCountSymb.Uses-1, 0);
+        return true;
+      }
+      return false;
+    }
+
+    // returns true if this symbol was contained in the dylib and a use was dropped.
+    bool dropSymbol(uint64_t Addr) {
+      auto Maybe = findByAddr(Addr);
+      if (Maybe) {
+        auto &RefCountSymb = Maybe.get();
+        RefCountSymb.Uses = std::max(RefCountSymb.Uses-1, 0);
+        return true;
+      }
+      return false;
     }
 
     void dump(llvm::raw_ostream &OS) {
@@ -91,6 +123,35 @@ public:
     }
 
 private:
+  bool haveSymbol(llvm::StringRef MangledName) const {
+    return RequiredSymbols.find(MangledName) != RequiredSymbols.end();
+  }
+
+  bool haveSymbol(uint64_t Address) const {
+    // not sure how to convert to bool in return
+    if (findByAddr(Address))
+      return true;
+    return false;
+  }
+
+  llvm::Expected<RefCountedSymbol&> findByAddr(uint64_t Addr) {
+    for (llvm::StringMapEntry<RefCountedSymbol> &Entry : RequiredSymbols) {
+      auto &RefCntSym = Entry.getValue();
+      if (RefCntSym.Value.Symbol.getAddress() == Addr)
+        return RefCntSym;
+    }
+    return makeError("not found");
+  }
+
+  llvm::Expected<RefCountedSymbol const&> findByAddr(uint64_t Addr) const {
+    for (llvm::StringMapEntry<RefCountedSymbol> const& Entry : RequiredSymbols) {
+      auto const& RefCntSym = Entry.getValue();
+      if (RefCntSym.Value.Symbol.getAddress() == Addr)
+        return RefCntSym;
+    }
+    return makeError("not found");
+  }
+
   llvm::DataLayout DL;
   orc::ExecutionSession ES;
   orc::MangleAndInterner Mangle; // this will be needed for linking C++ symbols later.
@@ -99,8 +160,7 @@ private:
   // could delete RawObjFile once all symbols we need have been looked up,
   // since the memory for the linked code is kept inside the ExecutionSession,
   // i.e., the ES only has read-only access to the RawObjFile.
-  llvm::StringMap<DySymbol> RequiredSymbols;
-  size_t NumRequiredSymbols = 0;
+  llvm::StringMap<RefCountedSymbol> RequiredSymbols;
 };
 
 class DynamicLinker {

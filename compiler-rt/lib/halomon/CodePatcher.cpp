@@ -146,17 +146,71 @@ void timingHandler(int32_t FuncID, XRayEntryType Kind) {
 CodePatcher::CodePatcher() {
   __xray_init();
 
-  // populate the initial map of addrs to IDs.
+  // populate the initial map of addrs to IDs and initialize the function table
   MaxID = __xray_max_function_id();
+  RedirectionTable.resize(MaxID);
+  Status.resize(MaxID);
+
   for (size_t i = 0; i < MaxID; i++) {
     AddrToID[__xray_function_address(i)] = i;
+    RedirectionTable[i] = 0;
+    Status[i] = Unpatched;
+  }
+
+  __xray_set_redirection_table(RedirectionTable.data());
+
+  // the only handler we use
+  __xray_set_handler(timingHandler);
+
+}
+
+// NOTE: it will not be safe to garbage collect until you can ensure that
+// no threads are executing in the function!
+// void CodePatcher::garbageCollect() {
+//   auto Cur = Dylibs.begin();
+//   while (Cur != Dylibs.end()) {
+//     if ((*Cur)->numRequiredSymbols() == 0)
+//       Cur = Dylibs.erase(Cur);
+//     else
+//       Cur++;
+//   }
+// }
+
+void CodePatcher::measureRunningTime(uint64_t FnPtr) {
+  auto id = llvm::cantFail(getXRayID(FnPtr));
+
+  if (Status[id] != Measuring) {
+    __xray_patch_function(id);
+    Status[id] = Measuring;
   }
 }
 
-void CodePatcher::measureRunningTime(uint64_t FnPtr) {
-  auto id = AddrToID[FnPtr];
-  __xray_set_handler(timingHandler);
-  __xray_patch_function(id);
+void CodePatcher::redirectTo(uint64_t OldFnPtr, uint64_t NewFnPtr) {
+  auto XRayID = llvm::cantFail(getXRayID(OldFnPtr));
+
+  // TODO: might need to become an atomic write!
+  auto PrevRedirect = RedirectionTable[XRayID];
+  RedirectionTable[XRayID] = NewFnPtr;
+
+  if (Status[XRayID] != Redirected) {
+    // patch in the redirect
+    __xray_redirect_function(XRayID);
+    Status[XRayID] = Redirected;
+  } else {
+    // we don't need the old redirect anymore.
+    for (auto &Lib : Dylibs)
+      if (Lib->dropSymbol(PrevRedirect))
+        break;
+  }
+}
+
+
+llvm::Expected<int32_t> CodePatcher::getXRayID(uint64_t FnPtr) {
+  auto Result = AddrToID.find(FnPtr);
+  if (Result == AddrToID.end())
+    return makeError("function ptr has no known xray id");
+
+  return Result->second;
 }
 
 llvm::Error CodePatcher::replaceAll(pb::CodeReplacement const& CR,
@@ -164,7 +218,7 @@ llvm::Error CodePatcher::replaceAll(pb::CodeReplacement const& CR,
   // perform linking on all requested symbols and collect those
   // new addresses.
 
-  llvm::SmallVector<std::pair<llvm::StringRef, DySymbol>, 10> NewCode;
+  llvm::SmallVector<std::pair<pb::FunctionSymbol const&, DySymbol>, 10> NewCode;
 
   for (pb::FunctionSymbol const& Request : CR.symbols()) {
     auto &Label = Request.label();
@@ -173,7 +227,11 @@ llvm::Error CodePatcher::replaceAll(pb::CodeReplacement const& CR,
     if (!MaybeSymbol)
       return MaybeSymbol.takeError();
 
-    NewCode.push_back({Label, MaybeSymbol.get()});
+    auto DySym = MaybeSymbol.get();
+    if (!DySym.Symbol.getFlags().isCallable())
+      return makeError("JITed function symbol is not callable.");
+
+    NewCode.push_back({Request, DySym});
   }
 
   // Nothing to do!
@@ -202,13 +260,12 @@ llvm::Error CodePatcher::replaceAll(pb::CodeReplacement const& CR,
 
 
   // for now, let's try patching in the new functions.
-  for (auto &Func : NewCode) {
+  for (auto &Info : NewCode) {
+    auto &OrigSymb = Info.first;
+    auto &NewSymb = Info.second;
 
+    redirectTo(OrigSymb.addr(), NewSymb.Symbol.getAddress());
   }
-
-
-
-
 
   return llvm::Error::success();
 }

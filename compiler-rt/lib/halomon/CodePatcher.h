@@ -10,17 +10,31 @@
 
 namespace halo {
 
+enum PatchingStatus {
+  Unpatched,
+  Redirected,
+  Measuring,
+};
+
 class CodePatcher {
 public:
   CodePatcher();
 
 void measureRunningTime(uint64_t FnPtr);
 llvm::Error replaceAll(pb::CodeReplacement const&, std::unique_ptr<DyLib>, Channel &);
+void garbageCollect();
 
 private:
+  llvm::Expected<int32_t> getXRayID(uint64_t FnPtr);
+  void redirectTo(uint64_t OldFnPtr, uint64_t NewFnPtr);
+
   size_t MaxID;
   std::unordered_map<uintptr_t, int32_t> AddrToID;
   std::list<std::unique_ptr<DyLib>> Dylibs;
+
+  // These are indexed by XRay function ID.
+  std::vector<uintptr_t> RedirectionTable;
+  std::vector<enum PatchingStatus> Status;
 };
 
 } // end namespace
