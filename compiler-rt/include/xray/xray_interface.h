@@ -132,7 +132,7 @@ extern size_t __xray_max_function_id();
 extern int __xray_set_redirection_table(uintptr_t*);
 
 /// Removes the currently set redirection table.
-// Returns 1 on success, 0 on error.
+/// Returns 1 on success, 0 on error.
 extern int __xray_remove_redirection_table(uintptr_t*);
 
 /// This function will patch the function's ENTRY sled with a redirection
