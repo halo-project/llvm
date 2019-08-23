@@ -12,7 +12,10 @@
 #include <cstdlib>
 #include "xray/xray_interface.h"
 
-[[clang::xray_always_instrument]] void original(int x, int y, float z) {
+// if `original` is inlined, xray will not be used.
+#define NO_INLINE __attribute__((noinline))
+
+[[clang::xray_always_instrument]] NO_INLINE void original(int x, int y, float z) {
   printf("ORIG -- %d, %d, %f\n", x, y, z);
 }
 
