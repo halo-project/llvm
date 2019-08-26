@@ -176,17 +176,26 @@ CodePatcher::CodePatcher() {
 //   }
 // }
 
-void CodePatcher::measureRunningTime(uint64_t FnPtr) {
-  auto id = llvm::cantFail(getXRayID(FnPtr));
+llvm::Error CodePatcher::measureRunningTime(uint64_t FnPtr) {
+  auto Maybe = getXRayID(FnPtr);
+  if (!Maybe)
+    return Maybe.takeError();
 
+  auto id = Maybe.get();
   if (Status[id] != Measuring) {
     __xray_patch_function(id);
     Status[id] = Measuring;
   }
+
+  return llvm::Error::success();
 }
 
-void CodePatcher::redirectTo(uint64_t OldFnPtr, uint64_t NewFnPtr) {
-  auto XRayID = llvm::cantFail(getXRayID(OldFnPtr));
+llvm::Error CodePatcher::redirectTo(uint64_t OldFnPtr, uint64_t NewFnPtr) {
+  auto Maybe = getXRayID(OldFnPtr);
+  if (!Maybe)
+    return Maybe.takeError();
+
+  auto XRayID = Maybe.get();
 
   // TODO: might need to become an atomic write!
   auto PrevRedirect = RedirectionTable[XRayID];
@@ -202,6 +211,8 @@ void CodePatcher::redirectTo(uint64_t OldFnPtr, uint64_t NewFnPtr) {
       if (Lib->dropSymbol(PrevRedirect))
         break;
   }
+
+  return llvm::Error::success();
 }
 
 
@@ -217,8 +228,6 @@ llvm::Error CodePatcher::replaceAll(pb::CodeReplacement const& CR,
                                       std::unique_ptr<DyLib> Dylib, Channel &Chan) {
   // perform linking on all requested symbols and collect those
   // new addresses.
-
-  return llvm::Error::success(); // FIXME the code below causes segfaults.
 
   llvm::SmallVector<std::pair<pb::FunctionSymbol const&, DySymbol>, 10> NewCode;
 

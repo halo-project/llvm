@@ -20,13 +20,13 @@ class CodePatcher {
 public:
   CodePatcher();
 
-void measureRunningTime(uint64_t FnPtr);
+llvm::Error measureRunningTime(uint64_t FnPtr);
 llvm::Error replaceAll(pb::CodeReplacement const&, std::unique_ptr<DyLib>, Channel &);
 void garbageCollect();
 
 private:
   llvm::Expected<int32_t> getXRayID(uint64_t FnPtr);
-  void redirectTo(uint64_t OldFnPtr, uint64_t NewFnPtr);
+  llvm::Error redirectTo(uint64_t OldFnPtr, uint64_t NewFnPtr);
 
   size_t MaxID;
   std::unordered_map<uintptr_t, int32_t> AddrToID;
