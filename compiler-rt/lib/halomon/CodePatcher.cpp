@@ -166,6 +166,9 @@ CodePatcher::CodePatcher() {
 
 // NOTE: it will not be safe to garbage collect until you can ensure that
 // no threads are executing in the function!
+// One possible way to handle this is to ptrace ourselves to pause all of
+// the threads, and inspect their state: https://en.wikipedia.org/wiki/Ptrace
+//
 // void CodePatcher::garbageCollect() {
 //   auto Cur = Dylibs.begin();
 //   while (Cur != Dylibs.end()) {
