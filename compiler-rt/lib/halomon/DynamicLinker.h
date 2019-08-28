@@ -60,7 +60,7 @@ public:
 
 
       auto Buffer = llvm::MemoryBuffer::getMemBuffer(*RawObjFile);
-      ObjectLayer.add(MainDylib, std::move(Buffer));
+      cantFail(ObjectLayer.add(MainDylib, std::move(Buffer)));
     }
 
     // Obtains the JITEvaluated symbol for this mangled symbol name.
@@ -111,8 +111,8 @@ public:
     bool dropSymbol(uint64_t Addr) {
       auto Maybe = findByAddr(Addr);
       if (Maybe) {
-        auto &RefCountSymb = Maybe.get();
-        RefCountSymb.Uses = std::max(RefCountSymb.Uses-1, 0);
+        auto RefCountSymb = Maybe.getValue();
+        RefCountSymb->Uses = std::max(RefCountSymb->Uses-1, 0);
         return true;
       }
       return false;
@@ -134,22 +134,22 @@ private:
     return false;
   }
 
-  llvm::Expected<RefCountedSymbol&> findByAddr(uint64_t Addr) {
+  llvm::Optional<RefCountedSymbol*> findByAddr(uint64_t Addr) {
     for (llvm::StringMapEntry<RefCountedSymbol> &Entry : RequiredSymbols) {
       auto &RefCntSym = Entry.getValue();
       if (RefCntSym.Value.Symbol.getAddress() == Addr)
-        return RefCntSym;
+        return &RefCntSym;
     }
-    return makeError("not found");
+    return llvm::None;
   }
 
-  llvm::Expected<RefCountedSymbol const&> findByAddr(uint64_t Addr) const {
+  llvm::Optional<RefCountedSymbol const*> findByAddr(uint64_t Addr) const {
     for (llvm::StringMapEntry<RefCountedSymbol> const& Entry : RequiredSymbols) {
       auto const& RefCntSym = Entry.getValue();
       if (RefCntSym.Value.Symbol.getAddress() == Addr)
-        return RefCntSym;
+        return &RefCntSym;
     }
-    return makeError("not found");
+    return llvm::None;
   }
 
   llvm::DataLayout DL;
