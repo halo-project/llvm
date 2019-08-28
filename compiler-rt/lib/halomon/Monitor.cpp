@@ -31,7 +31,9 @@ void monitor_loop(MonitorState &M, std::atomic<bool> &ShutdownRequested) {
     pb::ClientEnroll CE;
     CE.set_process_triple(llvm::sys::getProcessTriple());
     CE.set_host_cpu(llvm::sys::getHostCPUName());
-    M.gather_module_info(M.ExePath, CE.mutable_module());
+    auto Error = M.gather_module_info(M.ExePath, CE.mutable_module());
+    if (Error)
+      warning(Error, true);
 
     // obtain our data layout from the bitcode.
     M.Linker.setLayout(CE.module().bitcode());

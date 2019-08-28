@@ -85,14 +85,14 @@ void MonitorState::server_listen_loop() {
   });
 }
 
-void MonitorState::gather_module_info(std::string ObjPath, pb::ModuleInfo *MI) {
+llvm::Error MonitorState::gather_module_info(std::string ObjPath, pb::ModuleInfo *MI) {
   MI->set_obj_path(ObjPath);
 
   ///////////
   // initialize the code map
 
   auto ResOrErr = object::ObjectFile::createObjectFile(ObjPath);
-  if (!ResOrErr) halo::fatal_error("error opening object file!");
+  if (!ResOrErr) return ResOrErr.takeError();
 
   object::OwningBinary<object::ObjectFile> OB = std::move(ResOrErr.get());
   object::ObjectFile *Obj = OB.getBinary();
@@ -100,14 +100,21 @@ void MonitorState::gather_module_info(std::string ObjPath, pb::ModuleInfo *MI) {
   // find the range of this object file in the process.
   san::uptr VMAStart, VMAEnd;
   bool res = san::GetCodeRangeForFile(ObjPath.data(), &VMAStart, &VMAEnd);
-  if (!res) halo::fatal_error("unable to read proc map for VMA range");
+  if (!res) return makeError("unable to read proc map for VMA range");
+
+  // Because the generic ObjectFile class is pessimistic about the availability
+  // of size information for symbols (i.e., there is an assert checking that
+  // size info is only available for symbols with common linkage),
+  // we down cast to the specific object file we expect to be using.
+
+  object::ELFObjectFileBase* ELF = llvm::dyn_cast_or_null<object::ELFObjectFileBase>(Obj);
+  if (ELF == nullptr)
+    return makeError("Only ELF object files are currently supported by Halo Monitor.");
 
   uint64_t Delta = VMAStart; // Assume PIE is enabled.
-  if (auto *ELF = llvm::dyn_cast<object::ELFObjectFileBase>(Obj)) {
-    // https://stackoverflow.com/questions/30426383/what-does-pie-do-exactly#30426603
-    if (ELF->getEType() == ET_EXEC) {
-      Delta = 0; // This is a non-PIE executable.
-    }
+  // https://stackoverflow.com/questions/30426383/what-does-pie-do-exactly#30426603
+  if (ELF->getEType() == ET_EXEC) {
+    Delta = 0; // Then this is a non-PIE executable.
   }
 
   MI->set_vma_start(VMAStart);
@@ -115,7 +122,7 @@ void MonitorState::gather_module_info(std::string ObjPath, pb::ModuleInfo *MI) {
   MI->set_vma_delta(Delta);
 
   // Gather function information from the object file
-  for (const object::SymbolRef &Symb : Obj->symbols()) {
+  for (const object::ELFSymbolRef &Symb : ELF->symbols()) {
     auto MaybeType = Symb.getType();
 
     if (!MaybeType || MaybeType.get() != object::SymbolRef::Type::ST_Function)
@@ -123,7 +130,7 @@ void MonitorState::gather_module_info(std::string ObjPath, pb::ModuleInfo *MI) {
 
     auto MaybeName = Symb.getName();
     auto MaybeAddr = Symb.getAddress();
-    uint64_t Size = Symb.getCommonSize();
+    uint64_t Size = Symb.getSize();
     if (MaybeName && MaybeAddr && Size > 0) {
       uint64_t Start = MaybeAddr.get();
       assert(Size > 0 && "size 0 function in object file?");
@@ -163,6 +170,8 @@ void MonitorState::gather_module_info(std::string ObjPath, pb::ModuleInfo *MI) {
         MI->add_build_flags(Flag.str());
     }
   }
+
+  return llvm::Error::success();
 }
 
 void MonitorState::send_samples() {

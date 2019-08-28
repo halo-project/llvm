@@ -61,7 +61,7 @@ public:
   void set_sampling_period(uint64_t period);
   void stop_sampling();
 
-  void gather_module_info(std::string ObjPath, pb::ModuleInfo*);
+  llvm::Error gather_module_info(std::string ObjPath, pb::ModuleInfo*);
 
   // methods related to client-server communication
   void server_listen_loop();
