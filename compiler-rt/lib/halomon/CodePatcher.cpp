@@ -1,6 +1,6 @@
 
 #include "halomon/CodePatcher.h"
-#include "halomon/Logging.h"
+#include "Logging.h"
 #include "xray/xray_interface_internal.h"
 
 #include <time.h>

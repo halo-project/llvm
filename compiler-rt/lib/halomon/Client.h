@@ -7,7 +7,7 @@
 #include "Channel.h"
 
 #include <cinttypes>
-#include "halomon/Logging.h"
+#include "Logging.h"
 
 namespace asio = boost::asio;
 namespace ip = boost::asio::ip;

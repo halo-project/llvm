@@ -1,6 +1,6 @@
 #include <thread>
 #include <atomic>
-#include "halomon/Logging.h"
+#include "Logging.h"
 
 #include "halomon/MonitorState.h"
 #include "llvm/Support/Host.h"

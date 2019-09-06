@@ -33,14 +33,17 @@ if (NOT HALO_NET_DIR)
   message( FATAL_ERROR "Please set HALO_NET_DIR to a directory containing networking files." )
 endif()
 
-# find protobuf files and generate C++ code for them.
-file(GLOB PROTO_FILES ${HALO_NET_DIR}/*.proto)
+# generate C++ code for proto files them.
+
+set(PROTO_FILES
+  ${HALO_NET_DIR}/Messages.proto
+)
 protobuf_generate_cpp(PROTO_SRCS PROTO_HDRS ${PROTO_FILES})
 
-# enumerate files in our local dir
+# enumerate files in our local dir and the shared net dir
 set(HALOMON_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/LinuxPerfEvents.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/Logging.cpp
+  ${HALO_NET_DIR}/Logging.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/Monitor.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/MonitorState.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/CodePatcher.cpp

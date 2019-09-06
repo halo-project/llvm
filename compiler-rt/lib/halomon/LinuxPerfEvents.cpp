@@ -3,7 +3,7 @@
 #include <cassert>
 #include <cstdlib>
 #include <string>
-#include "halomon/Logging.h"
+#include "Logging.h"
 #include <atomic>
 #include <thread>
 
@@ -31,7 +31,7 @@
 #endif
 
 #include "halomon/LinuxPerfEvents.h"
-#include "halomon/Logging.h"
+#include "Logging.h"
 
 #define IS_POW_TWO(num)  (num) != 0 && (((num) & ((num) - 1)) == 0)
 

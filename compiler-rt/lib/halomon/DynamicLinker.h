@@ -15,7 +15,7 @@
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/LLVMContext.h"
 
-#include "halomon/Logging.h"
+#include "Logging.h"
 
 #include <memory>
 

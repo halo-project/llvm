@@ -1,7 +1,7 @@
 
 #include "halomon/MonitorState.h"
 #include "halomon/LinuxPerfEvents.h"
-#include "halomon/Logging.h"
+#include "Logging.h"
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
