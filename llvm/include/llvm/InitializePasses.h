@@ -163,6 +163,7 @@ void initializeGlobalOptLegacyPassPass(PassRegistry&);
 void initializeGlobalSplitPass(PassRegistry&);
 void initializeGlobalsAAWrapperPassPass(PassRegistry&);
 void initializeGuardWideningLegacyPassPass(PassRegistry&);
+void initializeHaloPrepareLegacyPassPass(PassRegistry&);
 void initializeHardwareLoopsPass(PassRegistry&);
 void initializeHotColdSplittingLegacyPassPass(PassRegistry&);
 void initializeHWAddressSanitizerLegacyPassPass(PassRegistry &);

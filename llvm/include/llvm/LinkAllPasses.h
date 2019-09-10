@@ -46,6 +46,7 @@
 #include "llvm/Transforms/InstCombine/InstCombine.h"
 #include "llvm/Transforms/Instrumentation.h"
 #include "llvm/Transforms/Instrumentation/BoundsChecking.h"
+#include "llvm/Transforms/Instrumentation/Halo.h"
 #include "llvm/Transforms/ObjCARC.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Scalar/GVN.h"
@@ -101,6 +102,7 @@ namespace {
       (void) llvm::createDomOnlyViewerPass();
       (void) llvm::createDomViewerPass();
       (void) llvm::createGCOVProfilerPass();
+      (void) llvm::createHaloPrepareLegacyPass();
       (void) llvm::createPGOInstrumentationGenLegacyPass();
       (void) llvm::createPGOInstrumentationUseLegacyPass();
       (void) llvm::createPGOInstrumentationGenCreateVarLegacyPass();

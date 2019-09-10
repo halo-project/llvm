@@ -58,6 +58,7 @@
 #include "llvm/Transforms/Instrumentation/AddressSanitizer.h"
 #include "llvm/Transforms/Instrumentation/BoundsChecking.h"
 #include "llvm/Transforms/Instrumentation/GCOVProfiler.h"
+#include "llvm/Transforms/Instrumentation/Halo.h"
 #include "llvm/Transforms/Instrumentation/HWAddressSanitizer.h"
 #include "llvm/Transforms/Instrumentation/InstrProfiling.h"
 #include "llvm/Transforms/Instrumentation/MemorySanitizer.h"
@@ -337,6 +338,11 @@ static void addDataFlowSanitizerPass(const PassManagerBuilder &Builder,
   PM.add(createDataFlowSanitizerPass(LangOpts.SanitizerBlacklistFiles));
 }
 
+static void addHaloPreparePass(const PassManagerBuilder &Builder,
+                                     legacy::PassManagerBase &PM) {
+  PM.add(createHaloPrepareLegacyPass());
+}
+
 static TargetLibraryInfoImpl *createTLII(llvm::Triple &TargetTriple,
                                          const CodeGenOptions &CodeGenOpts) {
   TargetLibraryInfoImpl *TLII = new TargetLibraryInfoImpl(TargetTriple);
@@ -356,7 +362,7 @@ static TargetLibraryInfoImpl *createTLII(llvm::Triple &TargetTriple,
     break;
   case CodeGenOptions::MASSV:
     TLII->addVectorizableFunctionsFromVecLib(TargetLibraryInfoImpl::MASSV);
-    break;    
+    break;
   case CodeGenOptions::SVML:
     TLII->addVectorizableFunctionsFromVecLib(TargetLibraryInfoImpl::SVML);
     break;
@@ -681,6 +687,13 @@ void EmitAssemblyHelper::CreatePasses(legacy::PassManager &MPM,
                            addDataFlowSanitizerPass);
     PMBuilder.addExtension(PassManagerBuilder::EP_EnabledOnOptLevel0,
                            addDataFlowSanitizerPass);
+  }
+
+  if (CodeGenOpts.UseHalo) {
+    PMBuilder.addExtension(PassManagerBuilder::EP_OptimizerLast,
+                           addHaloPreparePass);
+    PMBuilder.addExtension(PassManagerBuilder::EP_EnabledOnOptLevel0,
+                           addHaloPreparePass);
   }
 
   // Set up the per-function pass manager.

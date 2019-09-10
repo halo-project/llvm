@@ -107,6 +107,7 @@ void llvm::initializeInstrumentation(PassRegistry &Registry) {
   initializeBoundsCheckingLegacyPassPass(Registry);
   initializeControlHeightReductionLegacyPassPass(Registry);
   initializeGCOVProfilerLegacyPassPass(Registry);
+  initializeHaloPrepareLegacyPassPass(Registry);
   initializePGOInstrumentationGenLegacyPassPass(Registry);
   initializePGOInstrumentationUseLegacyPassPass(Registry);
   initializePGOIndirectCallPromotionLegacyPassPass(Registry);
