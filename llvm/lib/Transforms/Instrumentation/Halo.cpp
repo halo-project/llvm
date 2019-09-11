@@ -29,7 +29,7 @@ struct HaloPrepare {
     // that are global, and perform a renaming during JIT compilation to
     // prevent a name clash.
     for (GlobalVariable &Global : M.globals()) {
-      if (Global.isDeclaration() || Global.isConstant())
+      if (Global.isDeclaration())
         continue;
 
       if (Global.getName().startswith("llvm."))
