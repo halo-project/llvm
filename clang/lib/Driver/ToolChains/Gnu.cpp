@@ -521,7 +521,11 @@ void tools::gnutools::Linker::ConstructJob(Compilation &C, const JobAction &JA,
 
   bool NeedsSanitizerDeps = addSanitizerRuntimes(ToolChain, Args, CmdArgs);
   bool NeedsXRayDeps = addXRayRuntime(ToolChain, Args, CmdArgs);
-  bool NeedsHaloDeps = addHaloRuntime(ToolChain, Args, CmdArgs);
+  bool UsingHalo = addHaloRuntime(ToolChain, Args, CmdArgs);
+
+  // halomon needs access to all global symbols in the executable
+  if (UsingHalo) CmdArgs.push_back("--export-dynamic");
+
   AddLinkerInputs(ToolChain, Inputs, Args, CmdArgs, JA);
   // The profile runtime also needs access to system libraries.
   getToolChain().addProfileRTLibs(Args, CmdArgs);
@@ -553,7 +557,7 @@ void tools::gnutools::Linker::ConstructJob(Compilation &C, const JobAction &JA,
       if (NeedsXRayDeps)
         linkXRayRuntimeDeps(ToolChain, CmdArgs);
 
-      if (NeedsHaloDeps)
+      if (UsingHalo)
         linkHaloRuntimeDeps(ToolChain, Args, CmdArgs);
 
       bool WantPthread = Args.hasArg(options::OPT_pthread) ||

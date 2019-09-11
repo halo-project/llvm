@@ -785,7 +785,7 @@ bool tools::addHaloRuntime(const ToolChain &TC, const ArgList &Args,
     addSanitizerRuntime(TC, Args, CmdArgs, "halomon",
                                       /*Shared*/ false, /*Whole*/ true);
 
-    return true; // currently always need to link DSO dependencies.
+    return true;
 }
 
 void tools::linkHaloRuntimeDeps(const ToolChain &TC, const ArgList &Args,
