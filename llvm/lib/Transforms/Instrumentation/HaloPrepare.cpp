@@ -38,7 +38,6 @@ struct HaloPrepare {
       LLVM_DEBUG(dbgs() << "before: \n\t" << Global << "\n");
 
       Global.setLinkage(GlobalValue::ExternalLinkage);
-      Global.setDSOLocal(false);
 
       LLVM_DEBUG(dbgs() << "after: \n\t" << Global << "\n\n");
     }
@@ -50,11 +49,10 @@ struct HaloPrepare {
 
       // FIXME: this is a really bad heuristic. consult the CG and look for
       // properties such as loops, etc.
-      if (Func.getInstructionCount() > 1) {
+      // if (Func.getInstructionCount() > 1) {
         Func.setLinkage(GlobalValue::ExternalLinkage);
-        Func.setDSOLocal(false);
         Func.addFnAttr("xray-instruction-threshold", "1");
-      }
+      // }
     }
 
     // TODO: add a new data section that indicates which functions are
