@@ -16,12 +16,15 @@ void monitor_loop(MonitorState &M, std::atomic<bool> &ShutdownRequested) {
   Client &C = M.Net;
 
   {
+    unsigned Attempts = 0;
     // try to establish a connection with the optimization server.
     while (!C.connect()) {
-      if (ShutdownRequested)
+      Attempts += 1;
+
+      if (ShutdownRequested || Attempts >= 4)
         return;
 
-      std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+      std::this_thread::sleep_for(std::chrono::milliseconds(250));
     }
 
     // start listening for messages
