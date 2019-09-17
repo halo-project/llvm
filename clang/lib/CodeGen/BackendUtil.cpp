@@ -690,7 +690,7 @@ void EmitAssemblyHelper::CreatePasses(legacy::PassManager &MPM,
   }
 
   if (CodeGenOpts.UseHalo) {
-    PMBuilder.addExtension(PassManagerBuilder::EP_OptimizerLast,
+    PMBuilder.addExtension(PassManagerBuilder::EP_EarlyAsPossible,
                            addHaloPreparePass);
     PMBuilder.addExtension(PassManagerBuilder::EP_EnabledOnOptLevel0,
                            addHaloPreparePass);

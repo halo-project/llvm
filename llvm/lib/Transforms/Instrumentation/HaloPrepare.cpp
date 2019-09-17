@@ -43,10 +43,23 @@ struct HaloPrepare {
       LLVM_DEBUG(dbgs() << "after: \n\t" << Global << "\n\n");
     }
 
-    // TODO: embed information about the calling convention used by
-    // each function in this module. We might be saved by the fact that
-    // all XRay-instrumented functions might end up using the default C
-    // calling convention?
+    // choose which functions will be patchable.
+    for (Function &Func : M.functions()) {
+      if (Func.isDeclaration())
+        continue;
+
+      // FIXME: this is a really bad heuristic. consult the CG and look for
+      // properties such as loops, etc.
+      if (Func.getInstructionCount() > 1) {
+        Func.setLinkage(GlobalValue::ExternalLinkage);
+        Func.setDSOLocal(false);
+        Func.addFnAttr("xray-instruction-threshold", "1");
+      }
+    }
+
+    // TODO: add a new data section that indicates which functions are
+    // patchable. a list of names will work, since the functions marked
+    // external can't be dropped.
 
     return PreservedAnalyses::none(); // conservative guess for now
   }
