@@ -21,6 +21,7 @@
 #include "llvm/Support/Error.h"
 #include "llvm/Transforms/Instrumentation.h"
 #include "llvm/Transforms/Scalar/LoopPassManager.h"
+#include "llvm/Analysis/InlineCost.h"
 #include <vector>
 
 namespace llvm {
@@ -99,6 +100,10 @@ public:
   /// Tuning option to disable promotion to scalars in LICM with MemorySSA, if
   /// the number of access is too large.
   unsigned LicmMssaNoAccForPromotionCap;
+
+  /// Tuning option to control the parameters of the function inliner's
+  /// cost models.
+  Optional<InlineParams> Inlining;
 };
 
 /// This class provides access to building LLVM's passes.

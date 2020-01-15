@@ -226,6 +226,7 @@ PipelineTuningOptions::PipelineTuningOptions() {
   ForgetAllSCEVInLoopUnroll = ForgetSCEVInLoopUnroll;
   LicmMssaOptCap = SetLicmMssaOptCap;
   LicmMssaNoAccForPromotionCap = SetLicmMssaNoAccForPromotionCap;
+  Inlining = None;
 }
 
 extern cl::opt<bool> EnableHotColdSplit;
@@ -552,13 +553,17 @@ void PassBuilder::addPGOInstrPasses(ModulePassManager &MPM, bool DebugLogging,
   if (!isOptimizingForSize(Level) && !IsCS) {
     InlineParams IP;
 
-    // In the old pass manager, this is a cl::opt. Should still this be one?
-    IP.DefaultThreshold = 75;
+    if (PTO.Inlining.hasValue()) {
+      IP = PTO.Inlining.getValue();
+    } else {
+      // In the old pass manager, this is a cl::opt. Should still this be one?
+      IP.DefaultThreshold = 75;
 
-    // FIXME: The hint threshold has the same value used by the regular inliner.
-    // This should probably be lowered after performance testing.
-    // FIXME: this comment is cargo culted from the old pass manager, revisit).
-    IP.HintThreshold = 325;
+      // FIXME: The hint threshold has the same value used by the regular inliner.
+      // This should probably be lowered after performance testing.
+      // FIXME: this comment is cargo culted from the old pass manager, revisit).
+      IP.HintThreshold = 325;
+    }
 
     CGSCCPassManager CGPipeline(DebugLogging);
 
@@ -791,7 +796,9 @@ PassBuilder::buildModuleSimplificationPipeline(OptimizationLevel Level,
   // into the callers so that our optimizations can reflect that.
   // For PreLinkThinLTO pass, we disable hot-caller heuristic for sample PGO
   // because it makes profile annotation in the backend inaccurate.
-  InlineParams IP = getInlineParamsFromOptLevel(Level);
+  InlineParams IP = PTO.Inlining.hasValue()
+                      ? PTO.Inlining.getValue()
+                      : getInlineParamsFromOptLevel(Level);
   if (Phase == ThinLTOPhase::PreLink && PGOOpt &&
       PGOOpt->Action == PGOOptions::SampleUse)
     IP.HotCallSiteThreshold = 0;
@@ -1233,8 +1240,10 @@ PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level, bool DebugLogging,
   // valuable as the inliner doesn't currently care whether it is inlining an
   // invoke or a call.
   // Run the inliner now.
-  MPM.addPass(createModuleToPostOrderCGSCCPassAdaptor(
-      InlinerPass(getInlineParamsFromOptLevel(Level))));
+  InlineParams IP = PTO.Inlining.hasValue()
+                      ? PTO.Inlining.getValue()
+                      : getInlineParamsFromOptLevel(Level);
+  MPM.addPass(createModuleToPostOrderCGSCCPassAdaptor(InlinerPass(IP)));
 
   // Optimize globals again after we ran the inliner.
   MPM.addPass(GlobalOptPass());
