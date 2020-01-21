@@ -12,7 +12,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/Instrumentation/Halo.h"
-// #include "llvm/Analysis/CallGraph.h"
+#include "llvm/Analysis/CallGraph.h"
+#include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/GlobalValue.h"
 
 #define DEBUG_TYPE "halo-prepare"
@@ -20,14 +21,74 @@
 using namespace llvm;
 
 struct HaloPrepare {
-  PreservedAnalyses runOnModule(Module &M) {
+
+  // returns a pair of the analyses preserved by this function,
+  // and a bool indicating if the function was made patchable.
+  std::pair<PreservedAnalyses, bool> makePatchable(Function &Func, CallGraph &CG, LoopInfo &LI) {
+    const size_t INSTR_COUNT_THRESH = 50; // minimum number of instrs to not be considered small
+    std::pair<PreservedAnalyses, bool> Skip = {PreservedAnalyses::all(), false};
+
+    // skip if it has some odd attributes
+    if (Func.hasFnAttribute(Attribute::NoDuplicate) ||
+        Func.hasFnAttribute(Attribute::Naked) ||
+        Func.hasFnAttribute(Attribute::Builtin) ||
+        Func.hasFnAttribute(Attribute::ReturnsTwice))
+      return Skip;
+
+    // skip non-rentrant functions like 'main'
+    if (Func.hasFnAttribute(Attribute::NoRecurse))
+      return Skip;
+
+
+    auto CGNode = CG[&Func];
+    size_t NumCallees = CGNode->size();
+    bool IsLeaf = NumCallees == 0;
+    bool NoLoops = LI.empty(); // NOTE: this does NOT mean a cycle-free CFG!
+    bool IsSmall = Func.getInstructionCount() < INSTR_COUNT_THRESH;
+
+    LLVM_DEBUG(dbgs() << "\n" << Func.getName() << " calls " << NumCallees
+           << " funs;\n\t has loops = " << !NoLoops << ".\n");
+
+    // skip if it's a leaf with no loop and is small
+    if (IsLeaf && NoLoops && IsSmall)
+      return Skip;
+
+    // Otherwise we mark it as patchable.
+    Func.setLinkage(GlobalValue::ExternalLinkage);
+    Func.addFnAttr("xray-instruction-threshold", "1");
+
+    return {PreservedAnalyses::none(), true};
+  }
+
+
+
+  PreservedAnalyses recordPatchableFuncs(Module &M, SmallPtrSet<Function*, 32> &PatchedFuncs) {
+    SmallString<512> NameList;
+
+    for (Function *Func : PatchedFuncs) {
+      NameList += Func->getName();
+      NameList.append(1, ' ');
+    }
+
+    auto &Cxt = M.getContext();
+    Constant *Lit = ConstantDataArray::getString(Cxt, NameList, true);
+
+    GlobalVariable *Glob = dyn_cast<GlobalVariable>(
+                              M.getOrInsertGlobal("halo_metadata_patchableFuncs",
+                                                  Lit->getType()));
+    Glob->setInitializer(Lit);
+    Glob->setLinkage(GlobalVariable::ExternalLinkage);
+
+    // conservative guess. not sure if a new global invalidates anything
+    return PreservedAnalyses::none();
+  }
+
+
+  PreservedAnalyses fixGlobals(Module &M) {
+    bool MadeChange = false;
 
     // We need to expose mutable globals defined in this module to the
     // dynamic linker by marking them as external in this module.
-    //
-    // NOTE: we may need to do this via creating freshly-named aliases
-    // that are global, and perform a renaming during JIT compilation to
-    // prevent a name clash.
     for (GlobalVariable &Global : M.globals()) {
       if (Global.isDeclaration())
         continue;
@@ -40,26 +101,10 @@ struct HaloPrepare {
       Global.setLinkage(GlobalValue::ExternalLinkage);
 
       LLVM_DEBUG(dbgs() << "after: \n\t" << Global << "\n\n");
+      MadeChange = true;
     }
 
-    // choose which functions will be patchable.
-    for (Function &Func : M.functions()) {
-      if (Func.isDeclaration())
-        continue;
-
-      // FIXME: this is a really bad heuristic. consult the CG and look for
-      // properties such as loops, etc.
-      // if (Func.getInstructionCount() > 1) {
-        Func.setLinkage(GlobalValue::ExternalLinkage);
-        Func.addFnAttr("xray-instruction-threshold", "1");
-      // }
-    }
-
-    // TODO: add a new data section that indicates which functions are
-    // patchable. a list of names will work, since the functions marked
-    // external can't be dropped.
-
-    return PreservedAnalyses::none(); // conservative guess for now
+    return MadeChange ? PreservedAnalyses::none() : PreservedAnalyses::all();
   }
 };
 
@@ -75,13 +120,41 @@ public:
 
   // returns true if something changed to invalidate analyses.
   bool runOnModule(Module &M) override {
-    // auto &CG = getAnalysis<CallGraphWrapperPass>() ?? .getTLI();
-    auto Preserved = Prepare.runOnModule(M);
-    return !Preserved.areAllPreserved();
+    auto &CG = getAnalysis<CallGraphWrapperPass>().getCallGraph();
+
+    // STEP 1: fix up global linkages.
+    bool PreservedTotal = Prepare.fixGlobals(M).areAllPreserved();
+
+    // STEP 2: make (some) functions patchable by the runtime system.
+    SmallPtrSet<Function*, 32> PatchedFuncs;
+    for (Function &Func : M.functions()) {
+      if (Func.isDeclaration())
+        continue;
+
+      auto &LI = getAnalysis<LoopInfoWrapperPass>(Func).getLoopInfo();
+      auto Result = Prepare.makePatchable(Func, CG, LI);
+
+      PreservedTotal = PreservedTotal && Result.first.areAllPreserved();
+
+      LLVM_DEBUG(dbgs() << Func.getName() << " made patchable: " << Result.second << "\n");
+
+      // was it made patchable?
+      if (Result.second)
+        PatchedFuncs.insert(&Func);
+    }
+
+    // STEP 3: record in the module itself information about
+    // which functions were made patchable
+    auto Result = Prepare.recordPatchableFuncs(M, PatchedFuncs);
+    PreservedTotal = PreservedTotal && Result.areAllPreserved();
+
+
+    return !PreservedTotal;
   }
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
-    // AU.addRequired<CallGraphWrapperPass>();
+    AU.addRequired<CallGraphWrapperPass>();
+    AU.addRequired<LoopInfoWrapperPass>();
   }
 
 private:
@@ -92,7 +165,8 @@ char HaloPrepareLegacyPass::ID = 0;
 INITIALIZE_PASS_BEGIN(
     HaloPrepareLegacyPass, "halo-prepare",
     "Prepare the module for use with Halo.", false, false)
-// INITIALIZE_PASS_DEPENDENCY(CallGraphWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(CallGraphWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)
 INITIALIZE_PASS_END(
     HaloPrepareLegacyPass, "halo-prepare",
     "Prepare the module for use with Halo.", false, false)
@@ -108,12 +182,11 @@ ModulePass *llvm::createHaloPrepareLegacyPass() {
 
 /// A module pass for preparing the module for interfacing with the halomon
 /// runtime.
-///
-/// TODO: explain what it does
-///
 PreservedAnalyses HaloPreparePass::run(Module &M, ModuleAnalysisManager &MAM) {
-  HaloPrepare Prepare;
+  // HaloPrepare Prepare;
 
   // auto &CG = MAM.getResult<CallGraphAnalysis>(M);
-  return Prepare.runOnModule(M);
+  // auto &LI = MAM.getResult<LoopAnalysis>(M); // must be function specific!
+  // return Prepare.runOnModule(M, CG, LI);
+  report_fatal_error("TODO: implement HaloPrepare for new PM!");
 }
