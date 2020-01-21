@@ -45,7 +45,6 @@ void MonitorState::server_listen_loop() {
         pb::ReqMeasureFunction Req;
         Req.ParseFromString(Blob);
 
-        // TODO: invoke patcher.
         if (LOG) log() << "Recieved request to measure perf of func "
                   << Req.func_addr() << "\n";
 

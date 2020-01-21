@@ -97,13 +97,13 @@ inline uint64_t getTimeStamp(clockid_t Kind = CLOCK_THREAD_CPUTIME_ID) {
 }
 
 void timingHandler(int32_t FuncID, XRayEntryType Kind) {
-  auto &Log = FunctionLogs[FuncID];
-  auto &EntryStack = Log.EntryStack;
+  auto &Times = FunctionLogs[FuncID];
+  auto &EntryStack = Times.EntryStack;
 
   switch(Kind) {
     case ENTRY: {
       if (EntryStack.size() >= MaxDepth) {
-        Log.Excess++;
+        Times.Excess++;
         return;
       }
 
@@ -113,8 +113,8 @@ void timingHandler(int32_t FuncID, XRayEntryType Kind) {
 
     case EXIT: case TAIL: {
 
-      if (Log.Excess > 0) {
-        Log.Excess--;
+      if (Times.Excess > 0) {
+        Times.Excess--;
         return;
       }
 
@@ -127,14 +127,14 @@ void timingHandler(int32_t FuncID, XRayEntryType Kind) {
 
       // NOTE: By taking the log, we're computing a geometric mean.
       uint64_t Elapsed = End - Start;
-      Log.record(Elapsed);
-      if (LOG) Log.dump(log()); // lol
+      Times.record(Elapsed);
+      if (LOG) Times.dump(log()); // lol
 
       // FIXME: this should NOT be done by the application thread.
       // I think we need a thread that wakes up on a periodic timer
       // (or can be woken up by the application thread?) that
       // periodically unpatches functions?
-      if (Log.samples() > 100)
+      if (Times.samples() > 100)
         __xray_unpatch_function(FuncID);
 
     } return;
