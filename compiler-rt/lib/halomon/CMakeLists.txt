@@ -34,7 +34,7 @@ if (NOT HALO_NET_DIR)
 endif()
 
 # TODO: remove this option later on once Halo is more mature.
-option(HALO_VERBOSE "If set to ON, then debug / logging will be output." ON)
+option(HALO_VERBOSE "If set to ON, then debug / logging will be output." OFF)
 if (HALO_VERBOSE)
   add_definitions(-DHALO_VERBOSE)
 endif()
