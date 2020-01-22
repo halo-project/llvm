@@ -39,6 +39,13 @@ struct HaloPrepare {
     if (Func.hasFnAttribute(Attribute::NoRecurse))
       return Skip;
 
+    // skip functions that are run only during startup
+    //
+    // NOTE: Ideally this would be transitive: if a function is only
+    // reachable in the call graph from a startup function, don't patch it.
+    if (Func.hasSection() && Func.getSection() == ".text.startup")
+      return Skip;
+
 
     auto CGNode = CG[&Func];
     size_t NumCallees = CGNode->size();
@@ -55,7 +62,7 @@ struct HaloPrepare {
 
     // Otherwise we mark it as patchable.
     Func.setLinkage(GlobalValue::ExternalLinkage);
-    Func.addFnAttr("xray-instruction-threshold", "1");
+    Func.addFnAttr("xray-instruction-threshold", "1"); // XRay force patching
 
     return {PreservedAnalyses::none(), true};
   }
@@ -74,12 +81,14 @@ struct HaloPrepare {
     Constant *Lit = ConstantDataArray::getString(Cxt, NameList, true);
 
     GlobalVariable *Glob = dyn_cast<GlobalVariable>(
-                              M.getOrInsertGlobal("halo_metadata_patchableFuncs",
+                              M.getOrInsertGlobal("halo.patchableFuncs",
                                                   Lit->getType()));
     Glob->setInitializer(Lit);
+    Glob->setSection(".halo.metadata");
+    // mark it extern so its not dropped. I am lazy to add it to @llvm.compiler.used
     Glob->setLinkage(GlobalVariable::ExternalLinkage);
 
-    // conservative guess. not sure if a new global invalidates anything
+    // conservative guess. not sure if a new global invalidates any analyses
     return PreservedAnalyses::none();
   }
 
