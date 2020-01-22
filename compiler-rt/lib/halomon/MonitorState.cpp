@@ -5,6 +5,7 @@
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Object/ELFObjectFile.h"
@@ -120,28 +121,8 @@ llvm::Error MonitorState::gather_module_info(std::string ObjPath, pb::ModuleInfo
   MI->set_vma_end(VMAEnd);
   MI->set_vma_delta(Delta);
 
-  // Gather function information from the object file
-  for (const object::ELFSymbolRef &Symb : ELF->symbols()) {
-    auto MaybeType = Symb.getType();
-
-    if (!MaybeType || MaybeType.get() != object::SymbolRef::Type::ST_Function)
-      continue;
-
-    auto MaybeName = Symb.getName();
-    auto MaybeAddr = Symb.getAddress();
-    uint64_t Size = Symb.getSize();
-    if (MaybeName && MaybeAddr && Size > 0) {
-      uint64_t Start = MaybeAddr.get();
-      assert(Size > 0 && "size 0 function in object file?");
-
-      pb::FunctionInfo *FI = MI->add_funcs();
-      FI->set_label(MaybeName.get());
-      FI->set_start(Start);
-      FI->set_size(Size);
-    }
-  }
-
   // Look for various sections in the object file
+  llvm::StringSet<> PatchableFuns;
   for (const object::SectionRef &Sec : Obj->sections()) {
     if (Sec.isBitcode()) {
       llvm::Expected<llvm::StringRef> MaybeData = Sec.getContents();
@@ -158,6 +139,7 @@ llvm::Error MonitorState::gather_module_info(std::string ObjPath, pb::ModuleInfo
 
     auto Name = MaybeName.get();
     if (Name == ".llvmcmd") {
+
       llvm::Expected<llvm::StringRef> MaybeData = Sec.getContents();
       if (!MaybeData) halo::fatal_error("unable get cmd section contents.");
 
@@ -167,6 +149,45 @@ llvm::Error MonitorState::gather_module_info(std::string ObjPath, pb::ModuleInfo
 
       for (auto &Flag : Cmds)
         MI->add_build_flags(Flag.str());
+
+
+    } else if (Name == ".halo.metadata") {
+
+      llvm::Expected<llvm::StringRef> MaybeData = Sec.getContents();
+      if (!MaybeData) halo::fatal_error("unable get halo metadata section contents.");
+
+      llvm::SmallVector<llvm::StringRef, 128> FuncNames;
+      MaybeData.get().split(FuncNames, '\0', /*MaxSplit*/ -1, /*KeepEmpty*/ false);
+
+      // insert the names into a set for faster lookup operations.
+      // otherwise the names should already be unique
+      for (auto &Fn : FuncNames)
+        PatchableFuns.insert(Fn);
+    }
+  }
+
+  // Gather function information from the object file
+  for (const object::ELFSymbolRef &Symb : ELF->symbols()) {
+    auto MaybeType = Symb.getType();
+
+    if (!MaybeType || MaybeType.get() != object::SymbolRef::Type::ST_Function)
+      continue;
+
+    auto MaybeName = Symb.getName();
+    auto MaybeAddr = Symb.getAddress();
+    uint64_t Size = Symb.getSize();
+    if (MaybeName && MaybeAddr && Size > 0) {
+      uint64_t Start = MaybeAddr.get();
+      assert(Size > 0 && "size 0 function in object file?");
+      auto Name = MaybeName.get();
+
+      bool IsPatchable = PatchableFuns.count(Name) == 1;
+
+      pb::FunctionInfo *FI = MI->add_funcs();
+      FI->set_label(Name);
+      FI->set_start(Start);
+      FI->set_size(Size);
+      FI->set_patchable(IsPatchable);
     }
   }
 

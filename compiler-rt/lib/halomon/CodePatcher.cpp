@@ -279,8 +279,11 @@ llvm::Error CodePatcher::replaceAll(pb::CodeReplacement const& CR,
     auto &NewSymb = Info.second;
 
     auto Error = redirectTo(OrigSymb.addr(), NewSymb.Symbol.getAddress());
-    if (Error)
+    if (Error) {
+      llvm::errs() << "Unable to redirect " << OrigSymb.label() << "\n";
       return Error;
+    }
+
   }
 
   return llvm::Error::success();

@@ -21,10 +21,10 @@ void monitor_loop(MonitorState &M, std::atomic<bool> &ShutdownRequested) {
     while (!C.connect()) {
       Attempts += 1;
 
-      if (ShutdownRequested || Attempts >= 4)
+      if (ShutdownRequested || Attempts >= 20)
         return;
 
-      std::this_thread::sleep_for(std::chrono::milliseconds(250));
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
     // start listening for messages

@@ -74,11 +74,15 @@ struct HaloPrepare {
 
     for (Function *Func : PatchedFuncs) {
       NameList += Func->getName();
-      NameList.append(1, ' ');
+      NameList.append(1, '\0'); // use NULL as delimiter
     }
 
+    // ensure it's at least got one NULL on the end
+    if (NameList == "")
+      NameList.append(1, '\0');
+
     auto &Cxt = M.getContext();
-    Constant *Lit = ConstantDataArray::getString(Cxt, NameList, true);
+    Constant *Lit = ConstantDataArray::getString(Cxt, NameList, false);
 
     GlobalVariable *Glob = dyn_cast<GlobalVariable>(
                               M.getOrInsertGlobal("halo.patchableFuncs",
