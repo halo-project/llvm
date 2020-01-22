@@ -147,11 +147,11 @@ CodePatcher::CodePatcher() {
   __xray_init();
 
   // populate the initial map of addrs to IDs and initialize the function table
-  MaxID = __xray_max_function_id();
-  RedirectionTable.resize(MaxID);
-  Status.resize(MaxID);
+  MaxValidID = __xray_max_function_id();
+  RedirectionTable.resize(MaxValidID+1);
+  Status.resize(MaxValidID+1);
 
-  for (size_t i = 0; i < MaxID; i++) {
+  for (size_t i = 0; i <= MaxValidID; i++) {
     AddrToID[__xray_function_address(i)] = i;
     RedirectionTable[i] = 0;
     Status[i] = Unpatched;

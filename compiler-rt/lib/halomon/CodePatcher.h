@@ -22,13 +22,18 @@ public:
 
 llvm::Error measureRunningTime(uint64_t FnPtr);
 llvm::Error replaceAll(pb::CodeReplacement const&, std::unique_ptr<DyLib>, Channel &);
+
+bool isPatchable(uint64_t FnPtr) const {
+  return AddrToID.find(FnPtr) != AddrToID.end();
+}
+
 void garbageCollect();
 
 private:
   llvm::Expected<int32_t> getXRayID(uint64_t FnPtr);
   llvm::Error redirectTo(uint64_t OldFnPtr, uint64_t NewFnPtr);
 
-  size_t MaxID;
+  size_t MaxValidID;
   std::unordered_map<uintptr_t, int32_t> AddrToID;
   std::list<std::unique_ptr<DyLib>> Dylibs;
 

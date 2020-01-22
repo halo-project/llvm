@@ -85,7 +85,7 @@ void MonitorState::server_listen_loop() {
   });
 }
 
-llvm::Error MonitorState::gather_module_info(std::string ObjPath, pb::ModuleInfo *MI) {
+llvm::Error MonitorState::gather_module_info(std::string ObjPath, CodePatcher const& Patcher, pb::ModuleInfo *MI) {
   MI->set_obj_path(ObjPath);
 
   ///////////
@@ -182,6 +182,9 @@ llvm::Error MonitorState::gather_module_info(std::string ObjPath, pb::ModuleInfo
       auto Name = MaybeName.get();
 
       bool IsPatchable = PatchableFuns.count(Name) == 1;
+
+      if (IsPatchable && !Patcher.isPatchable(Start))
+        return makeError("Function marked patchable but unknown to CodePatcher!\n");
 
       pb::FunctionInfo *FI = MI->add_funcs();
       FI->set_label(Name);
