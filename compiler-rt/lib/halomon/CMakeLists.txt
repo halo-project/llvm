@@ -48,11 +48,11 @@ protobuf_generate_cpp(PROTO_SRCS PROTO_HDRS ${PROTO_FILES})
 
 # enumerate files in our local dir and the shared net dir
 set(HALOMON_SOURCES
-  ${CMAKE_CURRENT_SOURCE_DIR}/LinuxPerfEvents.cpp
   ${HALO_NET_DIR}/Logging.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/Monitor.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/MonitorState.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/CodePatcher.cpp
+  LinuxPerfEvents.cpp
+  Monitor.cpp
+  MonitorState.cpp
+  CodePatcher.cpp
 )
 
 include_directories(..)

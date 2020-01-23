@@ -3,6 +3,7 @@
 #include <unordered_map>
 
 #include "halomon/DynamicLinker.h"
+#include "halomon/ThreadSafeContainer.h"
 
 #include "Channel.h"
 #include "Messages.pb.h"
