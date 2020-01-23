@@ -8,12 +8,13 @@
 #include <unordered_map>
 #include <cmath>
 #include <cassert>
+#include <thread>
 
 namespace xray = __xray;
 
 namespace halo {
 
-// FIXME
+// FIXME:
 // Need to come up with a mechanism whereby the TimeLog is stored
 // elsewhere (not in TLS), so that other threads can sample / read
 // the running values. Probably want to say:
@@ -26,6 +27,8 @@ thread_local std::unordered_map<int32_t, TimeLog> FunctionLogs;
 void timingHandler(int32_t FuncID, XRayEntryType Kind) {
   auto &Times = FunctionLogs[FuncID];
 
+  std::cerr << "Thread id = " << std::this_thread::get_id() << "\n";
+
   switch(Kind) {
     case ENTRY: {
       Times.entryEvent();
@@ -35,7 +38,7 @@ void timingHandler(int32_t FuncID, XRayEntryType Kind) {
     case EXIT: case TAIL: {
       Times.exitEvent();
 
-      if (LOG) Times.dump(log()); // lol
+      if (LOG) Times.dump(logs());
 
       // FIXME: this should NOT be done by the application thread.
       // I think we need a thread that wakes up on a periodic timer
@@ -159,7 +162,7 @@ llvm::Error CodePatcher::replaceAll(pb::CodeReplacement const& CR,
   if (NewCode.empty())
     return llvm::Error::success();
 
-  if (LOG) Dylib->dump(log());
+  if (LOG) Dylib->dump(logs());
 
   // save the dylib since we definitely need it.
   Dylibs.push_back(std::move(Dylib));

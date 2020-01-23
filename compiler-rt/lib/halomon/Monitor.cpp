@@ -36,7 +36,7 @@ void monitor_loop(MonitorState &M, std::atomic<bool> &ShutdownRequested) {
     CE.set_host_cpu(llvm::sys::getHostCPUName());
     auto Error = M.gather_module_info(M.ExePath, M.Patcher, CE.mutable_module());
     if (Error)
-      warning(Error, true);
+      warning(Error);
 
     // obtain our data layout from the bitcode.
     M.Linker.setLayout(CE.module().bitcode());
@@ -85,7 +85,7 @@ public:
     MonitorThread = std::thread(monitor_loop,
                                   std::ref(State), std::ref(ShutdownRequested));
 
-    if (LOG) log() << "Halo Running!\n";
+    logs() << "Halo Running!\n";
   }
 
   /////////////////////////////////////////////////////////////////////////

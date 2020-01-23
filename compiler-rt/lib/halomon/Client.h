@@ -44,14 +44,14 @@ public:
     Socket.connect(Endpoint, Err);
 
     if (Err) {
-      if (LOG) log() << "Failed to connect: " << Err.message() << "\n";
+      logs() << "Failed to connect: " << Err.message() << "\n";
       // we have to close the socket manually
       Socket.close();
       return false;
     } else {
       std::stringstream ss;
       ss << Endpoint;
-      if (LOG) log() << "Connected to: " << ss.str() << "\n";
+      logs() << "Connected to: " << ss.str() << "\n";
       return true;
     }
   }

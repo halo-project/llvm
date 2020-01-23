@@ -33,9 +33,8 @@ if (NOT HALO_NET_DIR)
   message( FATAL_ERROR "Please set HALO_NET_DIR to a directory containing networking files." )
 endif()
 
-# TODO: remove this option later on once Halo is more mature.
-option(HALO_VERBOSE "If set to ON, then debug / logging will be output." OFF)
-if (HALO_VERBOSE)
+option(HALOMON_VERBOSE "If set to ON, then debug / logging will be output." OFF)
+if (HALOMON_VERBOSE)
   add_definitions(-DHALO_VERBOSE)
 endif()
 

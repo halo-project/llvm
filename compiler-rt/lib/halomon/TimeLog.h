@@ -19,7 +19,7 @@ inline uint64_t getTimeStamp(clockid_t Kind = CLOCK_THREAD_CPUTIME_ID) {
   timespec TS;
   int result = clock_gettime(Kind, &TS);
   if (result != 0) {
-    if (LOG) log() << "clock_gettime errno=" << errno << "\n";
+    logs() << "clock_gettime errno=" << errno << "\n";
     TS = {0, 0};
   }
   return TS.tv_sec * NanosecondsPerSecond + TS.tv_nsec;
