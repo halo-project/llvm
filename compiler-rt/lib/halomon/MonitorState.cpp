@@ -26,22 +26,23 @@ namespace halo {
 
 void MonitorState::server_listen_loop() {
   Net.Chan.async_recv([this](msg::Kind Kind, std::vector<char>& Body) {
-    logs() << "recv msg ID " << (uint32_t) Kind << "\n";
-
     switch (Kind) {
       case msg::Shutdown: {
         logs() << "server session terminated.\n";
       } return; // NOTE: the return.
 
       case msg::StartSampling: {
+        logs() << "starting sampling\n";
         start_sampling();
       } break;
 
       case msg::StopSampling: {
+        logs() << "stopping sampling\n";
         stop_sampling();
       } break;
 
       case msg::ReqMeasureFunction: {
+        logs() << "got request to measure a function\n";
         llvm::StringRef Blob(Body.data(), Body.size());
         pb::ReqMeasureFunction Req;
         Req.ParseFromString(Blob);
@@ -56,6 +57,7 @@ void MonitorState::server_listen_loop() {
       } break;
 
       case msg::CodeReplacement: {
+        logs() << "got code replacement\n";
         llvm::StringRef Blob(Body.data(), Body.size());
         pb::CodeReplacement CR;
         CR.ParseFromString(Blob);
@@ -201,10 +203,16 @@ llvm::Error MonitorState::gather_module_info(std::string ObjPath, CodePatcher co
 
 void MonitorState::send_samples() {
   if (SamplingEnabled) {
+    size_t numSent = 0;
     for (const pb::RawSample &Sample : RawSamples) {
       Net.Chan.send_proto(msg::RawSample, Sample);
+      numSent++;
     }
-    RawSamples.clear();
+
+    if (numSent) {
+      RawSamples.clear();
+      logs() << "sent a batch of " << numSent << " samples.\n";
+    }
   }
 }
 
@@ -245,6 +253,7 @@ void MonitorState::stop_sampling() {
   if (SamplingEnabled) {
     linux::stop_sampling(PerfFD);
     SamplingEnabled = false;
+    RawSamples.clear();
   }
 }
 

@@ -66,7 +66,8 @@ void monitor_loop(MonitorState &M, std::atomic<bool> &ShutdownRequested) {
 
 
     // TODO: this should probably be a random interval.
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    // NOTE: I set this to 100 ms so that batches of 2+ samples are normally sent
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
   } // end of event loop
 }

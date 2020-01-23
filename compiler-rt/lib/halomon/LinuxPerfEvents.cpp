@@ -45,6 +45,8 @@ namespace linux {
 void handle_perf_event(MonitorState *MS, perf_event_header *EvtHeader) {
 
   if (EvtHeader->type == PERF_RECORD_SAMPLE) {
+    // logs() << "PERF_RECORD_SAMPLE event.\n";
+
     struct SInfo {
       perf_event_header header;
       uint64_t sample_id;           // PERF_SAMPLE_IDENTIFIER
@@ -106,7 +108,7 @@ void handle_perf_event(MonitorState *MS, perf_event_header *EvtHeader) {
     }
 
   } else {
-    // logs() << "some other perf event was encountered.\n";
+    logs() << "some unhandled perf event was encountered.\n";
   }
 
 }
