@@ -49,7 +49,9 @@ void MonitorState::server_listen_loop() {
         if (LOG) log() << "Recieved request to measure perf of func "
                   << Req.func_addr() << "\n";
 
-        Patcher.measureRunningTime(Req.func_addr());
+        auto Error = Patcher.measureRunningTime(Req.func_addr());
+        if (Error)
+          llvm::report_fatal_error(std::move(Error));
 
       } break;
 
