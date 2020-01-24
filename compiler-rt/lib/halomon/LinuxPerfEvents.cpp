@@ -115,11 +115,7 @@ void handle_perf_event(MonitorState *MS, perf_event_header *EvtHeader) {
 }
 
 // reads the ring-buffer of perf data from perf_events for a single handle
-void process_new_samples(MonitorState *MS, PerfHandle *Handle) {
-  uint8_t *EventBuf = Handle->EventBuf;
-  size_t EventBufSz = Handle->EventBufSz;
-  size_t PageSz = Handle->PageSz;
-
+void PerfHandle::process_new_samples() {
   perf_event_mmap_page *Header = (perf_event_mmap_page *) EventBuf;
   uint8_t *DataPtr = EventBuf + PageSz;
   const size_t NumEventBufPages = EventBufSz / PageSz;
@@ -186,7 +182,7 @@ void process_new_samples(MonitorState *MS, PerfHandle *Handle) {
                 TmpBuffer.begin() + (DataPagesSize - Offset));
     }
 
-    handle_perf_event(MS, (perf_event_header*) TmpBuffer.data());
+    handle_perf_event(Monitor, (perf_event_header*) TmpBuffer.data());
 
     TailProgress += EvtSz;
 
@@ -379,21 +375,21 @@ bool setup_sigio_fd(asio::io_service &PerfSignalService, asio::posix::stream_des
   return false;
 }
 
-void start_sampling(PerfHandle const& Handle) {
-  ioctl(Handle.FD, PERF_EVENT_IOC_ENABLE, PERF_IOC_FLAG_GROUP);
+void PerfHandle::start_sampling() {
+  ioctl(FD, PERF_EVENT_IOC_ENABLE, PERF_IOC_FLAG_GROUP);
 }
 
-void reset_sampling_counters(PerfHandle const& Handle) {
-  ioctl(Handle.FD, PERF_EVENT_IOC_RESET, PERF_IOC_FLAG_GROUP);
+void PerfHandle::reset_sampling_counters() {
+  ioctl(FD, PERF_EVENT_IOC_RESET, PERF_IOC_FLAG_GROUP);
 }
 
-void stop_sampling(PerfHandle const& Handle) {
-  ioctl(Handle.FD, PERF_EVENT_IOC_DISABLE, PERF_IOC_FLAG_GROUP);
+void PerfHandle::stop_sampling() {
+  ioctl(FD, PERF_EVENT_IOC_DISABLE, PERF_IOC_FLAG_GROUP);
 }
 
-void set_sampling_period(PerfHandle const& Handle, uint64_t Period) {
+void PerfHandle::set_sampling_period(uint64_t Period) {
   uint64_t NewPeriod = Period;
-  ioctl(Handle.FD, PERF_EVENT_IOC_PERIOD, &NewPeriod);
+  ioctl(FD, PERF_EVENT_IOC_PERIOD, &NewPeriod);
 }
 
 std::string get_self_exe() {
@@ -581,7 +577,7 @@ void PerfHandle::handle_signalfd_read(const boost::system::error_code &Error, si
     return;
   }
 
-  linux::process_new_samples(Monitor, this);
+  process_new_samples();
 
   // schedule another read.
   schedule_signalfd_read();

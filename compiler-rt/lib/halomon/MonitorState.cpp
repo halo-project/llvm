@@ -229,8 +229,8 @@ MonitorState::~MonitorState() {}
 void MonitorState::start_sampling() {
   if (!SamplingEnabled) {
     for (auto &Handle : Handles) {
-      linux::reset_sampling_counters(Handle);
-      linux::start_sampling(Handle);
+      Handle.reset_sampling_counters();
+      Handle.start_sampling();
     }
     SamplingEnabled = true;
   }
@@ -239,7 +239,7 @@ void MonitorState::start_sampling() {
 void MonitorState::stop_sampling() {
   if (SamplingEnabled) {
     for (auto &Handle : Handles)
-      linux::stop_sampling(Handle);
+      Handle.stop_sampling();
 
     SamplingEnabled = false;
     RawSamples.clear();
@@ -248,12 +248,12 @@ void MonitorState::stop_sampling() {
 
 void MonitorState::reset_sampling_counters() {
   for (auto &Handle : Handles)
-    linux::reset_sampling_counters(Handle);
+    Handle.reset_sampling_counters();
 }
 
 void MonitorState::set_sampling_period(uint64_t period) {
   for (auto &Handle : Handles)
-    linux::set_sampling_period(Handle, period);
+    Handle.set_sampling_period(period);
 }
 
 void MonitorState::poll_for_sample_data() {
