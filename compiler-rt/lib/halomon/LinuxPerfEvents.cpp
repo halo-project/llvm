@@ -31,6 +31,7 @@
 #endif
 
 #include "halomon/LinuxPerfEvents.h"
+#include "halomon/MonitorState.h"
 #include "Logging.h"
 
 #define IS_POW_TWO(num)  (num) != 0 && (((num) & ((num) - 1)) == 0)
@@ -113,8 +114,12 @@ void handle_perf_event(MonitorState *MS, perf_event_header *EvtHeader) {
 
 }
 
-// reads the ring-buffer of perf data from perf_events.
-void process_new_samples(MonitorState *MS, uint8_t *EventBuf, size_t EventBufSz, const size_t PageSz) {
+// reads the ring-buffer of perf data from perf_events for a single handle
+void process_new_samples(MonitorState *MS, PerfHandle *Handle) {
+  uint8_t *EventBuf = Handle->EventBuf;
+  size_t EventBufSz = Handle->EventBufSz;
+  size_t PageSz = Handle->PageSz;
+
   perf_event_mmap_page *Header = (perf_event_mmap_page *) EventBuf;
   uint8_t *DataPtr = EventBuf + PageSz;
   const size_t NumEventBufPages = EventBufSz / PageSz;
@@ -246,6 +251,14 @@ int get_perf_events_fd(const std::string &Name,
   // by ioctl(2), prctl(2), or enable_on_exec.
   Attr.disabled = 1;
 
+  // The inherit bit specifies that this counter should count events of child tasks as well as
+  // the  task  specified.  This applies only to new children, not to any existing children at
+  // the time the counter is created (nor to any new children of existing children).
+  //
+  // NOTE: this is used to ensure that any new threads spawned by the process are
+  // also tracked by perf.
+  // Attr.inherit = 1; FIXME: this should be enabled for pthread programs!
+
   // These must be set, or else this process would require sudo
   // We only want to know about this process's code.
   Attr.exclude_kernel = 1;
@@ -341,66 +354,6 @@ int get_perf_events_fd(const std::string &Name,
 
 
 
-///////////
-// initializer for Linux perf_events api and related for the monitor.
-// returns whether setup was successful.
-bool setup_perf_events(int &PerfFD, uint8_t* &EventBuf, size_t &EventBufSz, size_t &PageSz) {
-  pid_t MyPID = getpid();
-  PageSz = sysconf(_SC_PAGESIZE);
-  const int NumBufPages = 8+1;
-
-  int Ret = pfm_initialize();
-  if (Ret != PFM_SUCCESS) {
-    logs() << "Failed to initialize PFM library: " << pfm_strerror(Ret) << "\n";
-    return true;
-  }
-
-  //////////////
-  // open the perf_events file descriptor
-
-  // Here are some large prime numbers to help deter periodicity:
-  //
-  //   https://primes.utm.edu/lists/small/millions/
-  //
-  // We want to avoid having as many divisors as possible in case of
-  // repetitive behavior, e.g., a long-running loop executing exactly 323
-  // instructions per iteration. There's a (slim) chance we sample the
-  // same instruction every time because our period is a multiple of 323.
-  // In reality, CPUs have noticable non-constant skid, but we don't want to
-  // rely on that for good samples.
-
-  std::string EventName = "instructions";
-  uint64_t EventPeriod = 67867967;
-
-  PerfFD = get_perf_events_fd(EventName, EventPeriod,
-                                  MyPID, -1, NumBufPages, PageSz);
-  if (PerfFD == -1)
-    return true;
-
-  // The mmap size should be 1+2^n pages, where the first page is a metadata
-  // page (struct perf_event_mmap_page) that contains various bits of infor‐
-  // mation such as where the ring-buffer head is.
-  EventBufSz = NumBufPages*PageSz;
-  EventBuf = (uint8_t *) mmap(NULL, EventBufSz,
-                           PROT_READ|PROT_WRITE, MAP_SHARED, PerfFD, 0);
-  if (EventBuf == MAP_FAILED) {
-    if (errno == EPERM)
-      logs() << "Consider increasing /proc/sys/kernel/perf_event_mlock_kb or "
-                   "allocating less memory for events buffer.\n";
-    logs() << "Unable to map perf events pages: " << strerror(errno) << "\n";
-    return true;
-  }
-
-  // configure the file descriptor
-  (void) fcntl(PerfFD, F_SETFL, O_RDWR|O_NONBLOCK|O_ASYNC);
-  (void) fcntl(PerfFD, F_SETSIG, SIGIO);
-  (void) fcntl(PerfFD, F_SETOWN, MyPID);
-
-  return false;
-}
-
-
-
 // Since perf_events sends SIGIO signals periodically to notify us
 // of new profile data, we need to service these notifications.
 // This function directs such signals to the file descriptor.
@@ -426,38 +379,21 @@ bool setup_sigio_fd(asio::io_service &PerfSignalService, asio::posix::stream_des
   return false;
 }
 
-void start_sampling(int PerfFD) {
-  ioctl(PerfFD, PERF_EVENT_IOC_ENABLE, PERF_IOC_FLAG_GROUP);
+void start_sampling(PerfHandle const& Handle) {
+  ioctl(Handle.FD, PERF_EVENT_IOC_ENABLE, PERF_IOC_FLAG_GROUP);
 }
 
-void reset_sampling_counters(int PerfFD) {
-  ioctl(PerfFD, PERF_EVENT_IOC_RESET, PERF_IOC_FLAG_GROUP);
+void reset_sampling_counters(PerfHandle const& Handle) {
+  ioctl(Handle.FD, PERF_EVENT_IOC_RESET, PERF_IOC_FLAG_GROUP);
 }
 
-void stop_sampling(int PerfFD) {
-  ioctl(PerfFD, PERF_EVENT_IOC_DISABLE, PERF_IOC_FLAG_GROUP);
+void stop_sampling(PerfHandle const& Handle) {
+  ioctl(Handle.FD, PERF_EVENT_IOC_DISABLE, PERF_IOC_FLAG_GROUP);
 }
 
-void set_sampling_period(int PerfFD, uint64_t Period) {
+void set_sampling_period(PerfHandle const& Handle, uint64_t Period) {
   uint64_t NewPeriod = Period;
-  ioctl(PerfFD, PERF_EVENT_IOC_PERIOD, &NewPeriod);
-}
-
-// returns true if there was an error.
-bool close_perf_events(int PerfFD, uint8_t* EventBuf, size_t EventBufSz) {
-  int ret = munmap(EventBuf, EventBufSz);
-  if (ret) {
-    logs() << "Failed to unmap event buffer: " << strerror(errno) << "\n";
-    return true;
-  }
-
-  ret = close(PerfFD);
-  if (ret) {
-    logs() << "Failed to close perf_event file descriptor: " << strerror(errno) << "\n";
-    return true;
-  }
-
-  return false;
+  ioctl(Handle.FD, PERF_EVENT_IOC_PERIOD, &NewPeriod);
 }
 
 std::string get_self_exe() {
@@ -470,6 +406,193 @@ std::string get_self_exe() {
   }
   buf[len] = '\0'; // null terminate
   return std::string(buf.data());
+}
+
+
+void open_perf_handles(MonitorState *Mon, std::list<PerfHandle> &Handles) {
+  size_t PageSz = sysconf(_SC_PAGESIZE);
+  pid_t PID = getpid();
+
+  // FIXME: make this work for each cpu
+  Handles.emplace_back(Mon, -1, PID, PageSz);
+  return;
+  /////////////////////////////////
+
+  // Handle kernels built to support large CPU sets as suggested by the
+  // sched_setaffinity man page.
+  cpu_set_t *AffMask;
+  size_t AffSize;
+  int NumCPUs = CPU_SETSIZE;
+
+  AffMask = CPU_ALLOC(NumCPUs);
+  AffSize = CPU_ALLOC_SIZE(NumCPUs);
+  CPU_ZERO_S(AffSize, AffMask);
+
+  do {
+    if (sched_getaffinity(0, AffSize, AffMask) == -1) {
+      if (errno == EINVAL && NumCPUs < (CPU_SETSIZE << 8)) {
+        CPU_FREE(AffMask);
+        NumCPUs <<= 2;
+        continue;
+      }
+
+      clogs() << "Unable to get affinity mask: " << strerror(errno) << "\n";
+      fatal_error("error in open_perf_handles");
+    }
+
+    break;
+  } while(true);
+
+  for (int CPU = 0; CPU < NumCPUs; CPU++)
+    Handles.emplace_back(Mon, CPU, PID, PageSz);
+
+}
+
+
+
+PerfHandle::PerfHandle(MonitorState *mon, int CPU, int MyPID, size_t pagesz)
+          : PageSz(pagesz), SigSD(PerfSignalService), Monitor(mon) {
+
+  const int NumBufPages = 8+1;
+
+  int Ret = pfm_initialize();
+  if (Ret != PFM_SUCCESS) {
+    logs() << "Failed to initialize PFM library: " << pfm_strerror(Ret) << "\n";
+    fatal_error("error in initializing perf handle");
+  }
+
+  //////////////
+  // open the perf_events file descriptor
+
+  // Here are some large prime numbers to help deter periodicity:
+  //
+  //   https://primes.utm.edu/lists/small/millions/
+  //
+  // We want to avoid having as many divisors as possible in case of
+  // repetitive behavior, e.g., a long-running loop executing exactly 323
+  // instructions per iteration. There's a (slim) chance we sample the
+  // same instruction every time because our period is a multiple of 323.
+  // In reality, CPUs have noticable non-constant skid, but we don't want to
+  // rely on that for good samples.
+
+  std::string EventName = "instructions";
+  uint64_t EventPeriod = 67867967;
+
+  FD = get_perf_events_fd(EventName, EventPeriod,
+                                  MyPID, CPU, NumBufPages, PageSz);
+  if (FD == -1)
+    fatal_error("error in perf handle ctor");
+
+  // The mmap size should be 1+2^n pages, where the first page is a metadata
+  // page (struct perf_event_mmap_page) that contains various bits of infor‐
+  // mation such as where the ring-buffer head is.
+  EventBufSz = NumBufPages*PageSz;
+  EventBuf = (uint8_t *) mmap(NULL, EventBufSz,
+                           PROT_READ|PROT_WRITE, MAP_SHARED, FD, 0);
+  if (EventBuf == MAP_FAILED) {
+    if (errno == EPERM)
+      logs() << "Consider increasing /proc/sys/kernel/perf_event_mlock_kb or "
+                   "allocating less memory for events buffer.\n";
+    logs() << "Unable to map perf events pages: " << strerror(errno) << "\n";
+    fatal_error("error in perf handle ctor");
+  }
+
+  // configure the file descriptor
+  (void) fcntl(FD, F_SETFL, O_RDWR|O_NONBLOCK|O_ASYNC);
+  (void) fcntl(FD, F_SETSIG, SIGIO);
+  (void) fcntl(FD, F_SETOWN, MyPID);
+
+  // setup the SIGIO handler
+  if (linux::setup_sigio_fd(PerfSignalService, SigSD, SigFD) )
+    exit(EXIT_FAILURE);
+
+  // kick-off the chain of async read jobs for the signal file descriptor.
+  schedule_signalfd_read();
+}
+
+
+
+PerfHandle::~PerfHandle() {
+  int ret = munmap(EventBuf, EventBufSz);
+  if (ret) {
+    logs() << "Failed to unmap event buffer: " << strerror(errno) << "\n";
+    fatal_error("error in PerfHandle dtor 1");
+  }
+
+  ret = close(FD);
+  if (ret) {
+    logs() << "Failed to close perf_event file descriptor: " << strerror(errno) << "\n";
+    fatal_error("error in PerfHandle dtor 2");
+  }
+}
+
+
+void PerfHandle::handle_signalfd_read(const boost::system::error_code &Error, size_t BytesTransferred) {
+  bool IOError = false;
+  if (Error) {
+    logs() << "Error reading from signal file handle: " << Error.message() << "\n";
+    IOError = true;
+  }
+
+  if (BytesTransferred != sizeof(SigFDInfo)) {
+    logs() << "Read the wrong the number of bytes from the signal file handle: "
+                 "read " << BytesTransferred << " bytes\n";
+    IOError = true;
+  }
+
+  // TODO: convert this into a debug-mode assert.
+  if (SigFDInfo.ssi_signo != SIGIO) {
+    logs() << "Unexpected signal recieved on signal file handle: "
+              << SigFDInfo.ssi_signo << "\n";
+    IOError = true;
+  }
+
+
+  // SIGIO/SIGPOLL  (the two names are synonyms on Linux) fills in si_band
+  //  and si_fd.  The si_band event is a bit mask containing the same  val‐
+  //  ues  as  are filled in the revents field by poll(2).  The si_fd field
+  //  indicates the file descriptor for which the I/O event  occurred;  for
+  //  further details, see the description of F_SETSIG in fcntl(2).
+  //
+  //  See 'sigaction' man page for more information.
+
+
+
+  // TODO: is it actually an error if we get a SIGIO for a different FD?
+  // What if the process is doing IO? How do we forward the interrupt to
+  // the right place? What should we do?
+  if (SigFDInfo.ssi_fd != FD) {
+    logs() << "Unexpected file descriptor associated with SIGIO interrupt.\n";
+    IOError = true;
+  }
+
+  // TODO: it's possibly worth checking ssi_code field to find out what in particular
+  // is going on in this SIGIO.
+  //  The following values can be placed in si_code for a SIGIO/SIGPOLL  signal:
+  //
+  // POLL_IN
+  //        Data input available.
+  // .....
+  // see 'sigaction' man page
+
+  if (IOError) {
+    // stop the service and don't enqueue another read.
+    PerfSignalService.stop(); // TODO: is a stop command right if we only poll?
+    return;
+  }
+
+  linux::process_new_samples(Monitor, this);
+
+  // schedule another read.
+  schedule_signalfd_read();
+}
+
+void PerfHandle::schedule_signalfd_read() {
+  // read a signalfd_siginfo from the file descriptor
+  asio::async_read(SigSD, asio::buffer(&SigFDInfo, sizeof(SigFDInfo)),
+    [&](const boost::system::error_code &Error, size_t BytesTransferred) {
+      handle_signalfd_read(Error, BytesTransferred);
+    });
 }
 
 } // end namespace linux

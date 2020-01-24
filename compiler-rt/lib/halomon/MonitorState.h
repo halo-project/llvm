@@ -1,15 +1,10 @@
 #pragma once
 
-#include <boost/asio.hpp>
-#include <sys/signalfd.h>
-
-#ifndef BOOST_ASIO_HAS_POSIX_STREAM_DESCRIPTOR
-  #error "Boost ASIO POSIX support required"
-#endif
-
-#include "halomon/Client.h"
 #include "halomon/CodePatcher.h"
 #include "halomon/DynamicLinker.h"
+#include "halomon/LinuxPerfEvents.h"
+
+#include <list>
 
 // NOTE: we are Linux only right now, but the public interface
 // will try to remain OS independent.
@@ -23,20 +18,8 @@ namespace halo {
 // This is effectively the global state of the client-side Halo system.
 class MonitorState {
 private:
-  int PerfFD;       // a file descriptor used to control the sampling system
-  uint8_t* EventBuf;   // from mmapping the perf file descriptor.
-  size_t EventBufSz;
+  std::list<linux::PerfHandle> Handles;
   size_t PageSz;
-
-  // members related to reading from perf events FD
-  asio::io_service PerfSignalService;
-  asio::posix::stream_descriptor SigSD;
-  int SigFD; // TODO: do we need to close this, or will SigFD's destructor do that for us?
-  signalfd_siginfo SigFDInfo;
-
-  // Boost.Asio methods to enqueue async reads etc, for reading sampling info.
-  void handle_signalfd_read(const boost::system::error_code &Error, size_t BytesTransferred);
-  void schedule_signalfd_read();
 
   // data members related to sampling state
   bool SamplingEnabled;

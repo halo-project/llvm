@@ -13,7 +13,7 @@ endif()
 find_package(Boost 1.65 COMPONENTS system REQUIRED)
 find_package(Protobuf 3 REQUIRED)
 
-set(MAX_ERRORS "1")
+set(MAX_ERRORS "5")
 
 if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang")
   set(HALOMON_CFLAGS "-ferror-limit=${MAX_ERRORS}")

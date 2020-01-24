@@ -216,126 +216,50 @@ void MonitorState::send_samples() {
   }
 }
 
-MonitorState::MonitorState() : SigSD(PerfSignalService),
-                               SamplingEnabled(false),
+MonitorState::MonitorState() : SamplingEnabled(false),
                                // TODO: get the server addr from an env variable.
                                Net("localhost", "29000"),
-                               ExePath(linux::get_self_exe())
-                               {
+                               ExePath(linux::get_self_exe()) {
 
-  // setup the monitor's initial state.
-  // TODO: using a struct to hold the Linux Perf Events state with proper
-  // destructor etc would be a lot nicer to do. Mainly the PerfFD and EventBuf.
-  // and their setup, etc. It's a bit of a pain so I've left it alone for now.
-  if (linux::setup_perf_events(PerfFD, EventBuf, EventBufSz, PageSz) ||
-      linux::setup_sigio_fd(PerfSignalService, SigSD, SigFD) ) {
-    exit(EXIT_FAILURE);
-  }
-
-  // kick-off the chain of async read jobs for the signal file descriptor.
-  schedule_signalfd_read();
+  open_perf_handles(this, Handles);
 }
 
-MonitorState::~MonitorState() {
-  // clean-up
-  linux::close_perf_events(PerfFD, EventBuf, EventBufSz);
-}
+MonitorState::~MonitorState() {}
 
 void MonitorState::start_sampling() {
   if (!SamplingEnabled) {
-    linux::reset_sampling_counters(PerfFD);
-    linux::start_sampling(PerfFD);
+    for (auto &Handle : Handles) {
+      linux::reset_sampling_counters(Handle);
+      linux::start_sampling(Handle);
+    }
     SamplingEnabled = true;
   }
 }
 
 void MonitorState::stop_sampling() {
   if (SamplingEnabled) {
-    linux::stop_sampling(PerfFD);
+    for (auto &Handle : Handles)
+      linux::stop_sampling(Handle);
+
     SamplingEnabled = false;
     RawSamples.clear();
   }
 }
 
 void MonitorState::reset_sampling_counters() {
-  linux::reset_sampling_counters(PerfFD);
+  for (auto &Handle : Handles)
+    linux::reset_sampling_counters(Handle);
 }
 
 void MonitorState::set_sampling_period(uint64_t period) {
-    linux::set_sampling_period(PerfFD, period);
-}
-
-void MonitorState::handle_signalfd_read(const boost::system::error_code &Error, size_t BytesTransferred) {
-  bool IOError = false;
-  if (Error) {
-    logs() << "Error reading from signal file handle: " << Error.message() << "\n";
-    IOError = true;
-  }
-
-  if (BytesTransferred != sizeof(SigFDInfo)) {
-    logs() << "Read the wrong the number of bytes from the signal file handle: "
-                 "read " << BytesTransferred << " bytes\n";
-    IOError = true;
-  }
-
-  // TODO: convert this into a debug-mode assert.
-  if (SigFDInfo.ssi_signo != SIGIO) {
-    logs() << "Unexpected signal recieved on signal file handle: "
-              << SigFDInfo.ssi_signo << "\n";
-    IOError = true;
-  }
-
-
-  // SIGIO/SIGPOLL  (the two names are synonyms on Linux) fills in si_band
-  //  and si_fd.  The si_band event is a bit mask containing the same  val‐
-  //  ues  as  are filled in the revents field by poll(2).  The si_fd field
-  //  indicates the file descriptor for which the I/O event  occurred;  for
-  //  further details, see the description of F_SETSIG in fcntl(2).
-  //
-  //  See 'sigaction' man page for more information.
-
-
-
-  // TODO: is it actually an error if we get a SIGIO for a different FD?
-  // What if the process is doing IO? How do we forward the interrupt to
-  // the right place? What should we do?
-  if (SigFDInfo.ssi_fd != PerfFD) {
-    logs() << "Unexpected file descriptor associated with SIGIO interrupt.\n";
-    IOError = true;
-  }
-
-  // TODO: it's possibly worth checking ssi_code field to find out what in particular
-  // is going on in this SIGIO.
-  //  The following values can be placed in si_code for a SIGIO/SIGPOLL  signal:
-  //
-  // POLL_IN
-  //        Data input available.
-  // .....
-  // see 'sigaction' man page
-
-  if (IOError) {
-    // stop the service and don't enqueue another read.
-    PerfSignalService.stop(); // TODO: is a stop command right if we only poll?
-    return;
-  }
-
-  linux::process_new_samples(this, EventBuf, EventBufSz, PageSz);
-
-  // schedule another read.
-  schedule_signalfd_read();
-}
-
-void MonitorState::schedule_signalfd_read() {
-  // read a signalfd_siginfo from the file descriptor
-  asio::async_read(SigSD, asio::buffer(&SigFDInfo, sizeof(SigFDInfo)),
-    [&](const boost::system::error_code &Error, size_t BytesTransferred) {
-      handle_signalfd_read(Error, BytesTransferred);
-    });
+  for (auto &Handle : Handles)
+    linux::set_sampling_period(Handle, period);
 }
 
 void MonitorState::poll_for_sample_data() {
   if (SamplingEnabled)
-    PerfSignalService.poll(); // check for new data
+    for (auto &Handle : Handles)
+      Handle.poll();
 }
 
 void MonitorState::check_msgs() {
