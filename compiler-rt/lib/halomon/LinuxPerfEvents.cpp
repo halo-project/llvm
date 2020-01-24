@@ -460,7 +460,23 @@ void open_perf_handles(MonitorState *Mon, std::list<PerfHandle> &Handles) {
 PerfHandle::PerfHandle(MonitorState *mon, int CPU, int MyPID, size_t pagesz)
           :  Monitor(mon), PageSz(pagesz) {
 
+  // NOTE: By default on Ubuntu 18.04, /proc/sys/kernel/perf_event_mlock_kb
+  // is set to a 514KiB max of data for this buffer, aka, 512KiB + 4KiB or
+  // equivalently 128 + 1 pages *on the entire system*.
+  //
+  // Because we will end up creating one buffer *per core, per process*,
+  // it is very easy to exceed this limit if you launch many instances of
+  // the Halo-enabled program.
+  //
+  // The mmap size must be (2^n) + 1 pages, where the first page will be a metadata
+  // page (struct perf_event_mmap_page) that contains various bits of infor‐
+  // mation such as where the ring-buffer head is.
+  //
+  // FIXME: this ought to be a parameter of the binary that is obtained
+  // by inspecting the variable environment.
   const int NumBufPages = 8+1;
+
+  assert(IS_POW_TWO(NumBufPages - 1));
 
   int Ret = pfm_initialize();
   if (Ret != PFM_SUCCESS) {
@@ -490,9 +506,6 @@ PerfHandle::PerfHandle(MonitorState *mon, int CPU, int MyPID, size_t pagesz)
   if (FD == -1)
     fatal_error("error in perf handle ctor");
 
-  // The mmap size should be 1+2^n pages, where the first page is a metadata
-  // page (struct perf_event_mmap_page) that contains various bits of infor‐
-  // mation such as where the ring-buffer head is.
   EventBufSz = NumBufPages*PageSz;
   EventBuf = (uint8_t *) mmap(NULL, EventBufSz,
                            PROT_READ|PROT_WRITE, MAP_SHARED, FD, 0);
