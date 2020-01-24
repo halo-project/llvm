@@ -114,8 +114,14 @@ void handle_perf_event(MonitorState *MS, perf_event_header *EvtHeader) {
 
 }
 
-// reads the ring-buffer of perf data from perf_events for a single handle
-void PerfHandle::process_new_samples() {
+// reads the ring-buffer of perf data from perf_events for a single handle.
+// returns true if the readyFD matches this handle.
+bool PerfHandle::process_new_samples(int readyFD) {
+
+  // is it ours?
+  if (readyFD != FD)
+    return false;
+
   perf_event_mmap_page *Header = (perf_event_mmap_page *) EventBuf;
   uint8_t *DataPtr = EventBuf + PageSz;
   const size_t NumEventBufPages = EventBufSz / PageSz;
@@ -192,6 +198,8 @@ void PerfHandle::process_new_samples() {
   // issue a smp_store_release(header.data_tail, current_tail_position)
   __sync_synchronize();
   Header->data_tail = TailStart + TailProgress;
+
+  return true; // we performed a read
 }
 
 
@@ -253,7 +261,7 @@ int get_perf_events_fd(const std::string &Name,
   //
   // NOTE: this is used to ensure that any new threads spawned by the process are
   // also tracked by perf.
-  // Attr.inherit = 1; FIXME: this should be enabled for pthread programs!
+  Attr.inherit = 1;
 
   // These must be set, or else this process would require sudo
   // We only want to know about this process's code.
@@ -405,17 +413,16 @@ std::string get_self_exe() {
 }
 
 
+
 void open_perf_handles(MonitorState *Mon, std::list<PerfHandle> &Handles) {
   size_t PageSz = sysconf(_SC_PAGESIZE);
   pid_t PID = getpid();
 
-  // FIXME: make this work for each cpu
-  Handles.emplace_back(Mon, -1, PID, PageSz);
-  return;
-  /////////////////////////////////
-
   // Handle kernels built to support large CPU sets as suggested by the
   // sched_setaffinity man page.
+
+  // NOTE: a 'CPU' is equal to a 'core' in layman's terms.
+
   cpu_set_t *AffMask;
   size_t AffSize;
   int NumCPUs = CPU_SETSIZE;
@@ -425,6 +432,7 @@ void open_perf_handles(MonitorState *Mon, std::list<PerfHandle> &Handles) {
   CPU_ZERO_S(AffSize, AffMask);
 
   do {
+    // figure out how many CPUs are available to this process
     if (sched_getaffinity(0, AffSize, AffMask) == -1) {
       if (errno == EINVAL && NumCPUs < (CPU_SETSIZE << 8)) {
         CPU_FREE(AffMask);
@@ -439,15 +447,18 @@ void open_perf_handles(MonitorState *Mon, std::list<PerfHandle> &Handles) {
     break;
   } while(true);
 
-  for (int CPU = 0; CPU < NumCPUs; CPU++)
-    Handles.emplace_back(Mon, CPU, PID, PageSz);
+  for (int CPU = 0; CPU < NumCPUs; CPU++) {
+    if (!CPU_ISSET_S(CPU, AffSize, AffMask))
+          continue;
 
+    Handles.emplace_back(Mon, CPU, PID, PageSz);
+  }
 }
 
 
 
 PerfHandle::PerfHandle(MonitorState *mon, int CPU, int MyPID, size_t pagesz)
-          : PageSz(pagesz), SigSD(PerfSignalService), Monitor(mon) {
+          :  Monitor(mon), PageSz(pagesz) {
 
   const int NumBufPages = 8+1;
 
@@ -497,13 +508,6 @@ PerfHandle::PerfHandle(MonitorState *mon, int CPU, int MyPID, size_t pagesz)
   (void) fcntl(FD, F_SETFL, O_RDWR|O_NONBLOCK|O_ASYNC);
   (void) fcntl(FD, F_SETSIG, SIGIO);
   (void) fcntl(FD, F_SETOWN, MyPID);
-
-  // setup the SIGIO handler
-  if (linux::setup_sigio_fd(PerfSignalService, SigSD, SigFD) )
-    exit(EXIT_FAILURE);
-
-  // kick-off the chain of async read jobs for the signal file descriptor.
-  schedule_signalfd_read();
 }
 
 
@@ -520,75 +524,6 @@ PerfHandle::~PerfHandle() {
     logs() << "Failed to close perf_event file descriptor: " << strerror(errno) << "\n";
     fatal_error("error in PerfHandle dtor 2");
   }
-}
-
-
-void PerfHandle::handle_signalfd_read(const boost::system::error_code &Error, size_t BytesTransferred) {
-  bool IOError = false;
-  if (Error) {
-    logs() << "Error reading from signal file handle: " << Error.message() << "\n";
-    IOError = true;
-  }
-
-  if (BytesTransferred != sizeof(SigFDInfo)) {
-    logs() << "Read the wrong the number of bytes from the signal file handle: "
-                 "read " << BytesTransferred << " bytes\n";
-    IOError = true;
-  }
-
-  // TODO: convert this into a debug-mode assert.
-  if (SigFDInfo.ssi_signo != SIGIO) {
-    logs() << "Unexpected signal recieved on signal file handle: "
-              << SigFDInfo.ssi_signo << "\n";
-    IOError = true;
-  }
-
-
-  // SIGIO/SIGPOLL  (the two names are synonyms on Linux) fills in si_band
-  //  and si_fd.  The si_band event is a bit mask containing the same  val‐
-  //  ues  as  are filled in the revents field by poll(2).  The si_fd field
-  //  indicates the file descriptor for which the I/O event  occurred;  for
-  //  further details, see the description of F_SETSIG in fcntl(2).
-  //
-  //  See 'sigaction' man page for more information.
-
-
-
-  // TODO: is it actually an error if we get a SIGIO for a different FD?
-  // What if the process is doing IO? How do we forward the interrupt to
-  // the right place? What should we do?
-  if (SigFDInfo.ssi_fd != FD) {
-    logs() << "Unexpected file descriptor associated with SIGIO interrupt.\n";
-    IOError = true;
-  }
-
-  // TODO: it's possibly worth checking ssi_code field to find out what in particular
-  // is going on in this SIGIO.
-  //  The following values can be placed in si_code for a SIGIO/SIGPOLL  signal:
-  //
-  // POLL_IN
-  //        Data input available.
-  // .....
-  // see 'sigaction' man page
-
-  if (IOError) {
-    // stop the service and don't enqueue another read.
-    PerfSignalService.stop(); // TODO: is a stop command right if we only poll?
-    return;
-  }
-
-  process_new_samples();
-
-  // schedule another read.
-  schedule_signalfd_read();
-}
-
-void PerfHandle::schedule_signalfd_read() {
-  // read a signalfd_siginfo from the file descriptor
-  asio::async_read(SigSD, asio::buffer(&SigFDInfo, sizeof(SigFDInfo)),
-    [&](const boost::system::error_code &Error, size_t BytesTransferred) {
-      handle_signalfd_read(Error, BytesTransferred);
-    });
 }
 
 } // end namespace linux

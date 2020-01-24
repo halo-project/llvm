@@ -25,6 +25,18 @@ private:
   bool SamplingEnabled;
   std::vector<pb::RawSample> RawSamples;
 
+  // members related to reading from perf events FD
+  asio::io_service PerfSignalService;
+  asio::posix::stream_descriptor SigSD;
+  int SigFD; // TODO: do we need to close this, or will SigSD's destructor do that for us?
+  signalfd_siginfo SigFDInfo;
+
+  MonitorState *Monitor;
+
+  // Boost.Asio methods to enqueue async reads of the SIGIO signal to obtain sampling info.
+  void handle_signalfd_read(const boost::system::error_code &Error, size_t BytesTransferred);
+  void schedule_signalfd_read();
+
 public:
   Client Net;
   CodePatcher Patcher;

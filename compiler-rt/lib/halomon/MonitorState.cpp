@@ -217,10 +217,19 @@ void MonitorState::send_samples() {
 }
 
 MonitorState::MonitorState() : SamplingEnabled(false),
+                               SigSD(PerfSignalService),
                                // TODO: get the server addr from an env variable.
                                Net("localhost", "29000"),
                                ExePath(linux::get_self_exe()) {
 
+    // setup the SIGIO handler
+  if (linux::setup_sigio_fd(PerfSignalService, SigSD, SigFD) )
+    exit(EXIT_FAILURE);
+
+  // kick-off the chain of async read jobs for the signal file descriptor.
+  schedule_signalfd_read();
+
+  // initialize all of the PerfHandles.
   open_perf_handles(this, Handles);
 }
 
@@ -258,12 +267,82 @@ void MonitorState::set_sampling_period(uint64_t period) {
 
 void MonitorState::poll_for_sample_data() {
   if (SamplingEnabled)
-    for (auto &Handle : Handles)
-      Handle.poll();
+    PerfSignalService.poll();
 }
 
 void MonitorState::check_msgs() {
   Net.poll();
+}
+
+void MonitorState::schedule_signalfd_read() {
+  // read a signalfd_siginfo from the file descriptor
+  asio::async_read(SigSD, asio::buffer(&SigFDInfo, sizeof(SigFDInfo)),
+    [&](const boost::system::error_code &Error, size_t BytesTransferred) {
+      handle_signalfd_read(Error, BytesTransferred);
+    });
+}
+
+void MonitorState::handle_signalfd_read(const boost::system::error_code &Error, size_t BytesTransferred) {
+  bool IOError = false;
+  if (Error) {
+    logs() << "Error reading from signal file handle: " << Error.message() << "\n";
+    IOError = true;
+  }
+
+  if (BytesTransferred != sizeof(SigFDInfo)) {
+    logs() << "Read the wrong the number of bytes from the signal file handle: "
+                 "read " << BytesTransferred << " bytes\n";
+    IOError = true;
+  }
+
+  // TODO: convert this into a debug-mode assert.
+  if (SigFDInfo.ssi_signo != SIGIO) {
+    logs() << "Unexpected signal recieved on signal file handle: "
+              << SigFDInfo.ssi_signo << "\n";
+    IOError = true;
+  }
+
+
+  // SIGIO/SIGPOLL  (the two names are synonyms on Linux) fills in si_band
+  //  and si_fd.  The si_band event is a bit mask containing the same  val‐
+  //  ues  as  are filled in the revents field by poll(2).  The si_fd field
+  //  indicates the file descriptor for which the I/O event  occurred;  for
+  //  further details, see the description of F_SETSIG in fcntl(2).
+  //
+  //  See 'sigaction' man page for more information.
+
+
+  // Find the PerfHandle this signal's FD matches with and have it
+  // process the new data.
+  bool Matched = false;
+  for (auto &Handle : Handles) {
+    Matched = Handle.process_new_samples(SigFDInfo.ssi_fd);
+    if (Matched)
+      break;
+  }
+
+  if (!Matched) {
+    logs() << "Unexpected file descriptor associated with SIGIO interrupt.\n";
+    IOError = true;
+  }
+
+  // FIXME: it's possibly worth checking ssi_code field to find out what in particular
+  // is going on in this SIGIO.
+  //  The following values can be placed in si_code for a SIGIO/SIGPOLL  signal:
+  //
+  // POLL_IN
+  //        Data input available.
+  // .....
+  // see 'sigaction' man page
+
+  if (IOError) {
+    // stop the service and don't enqueue another read.
+    PerfSignalService.stop(); // TODO: is a 'stop' command right if we only poll?
+    return;
+  }
+
+  // schedule another read.
+  schedule_signalfd_read();
 }
 
 } // end namespace halo
