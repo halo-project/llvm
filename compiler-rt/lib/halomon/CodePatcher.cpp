@@ -27,7 +27,7 @@ thread_local std::unordered_map<int32_t, TimeLog> FunctionLogs;
 void timingHandler(int32_t FuncID, XRayEntryType Kind) {
   auto &Times = FunctionLogs[FuncID];
 
-  std::cerr << "Thread id = " << std::this_thread::get_id() << "\n";
+  // std::cerr << "Thread id = " << std::this_thread::get_id() << "\n";
 
   switch(Kind) {
     case ENTRY: {
