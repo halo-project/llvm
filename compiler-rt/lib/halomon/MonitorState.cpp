@@ -1,7 +1,9 @@
 
 #include "halomon/MonitorState.h"
 #include "halomon/LinuxPerfEvents.h"
+
 #include "Logging.h"
+#include "Messages.pb.h"
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
@@ -41,16 +43,32 @@ void MonitorState::server_listen_loop() {
         stop_sampling();
       } break;
 
-      case msg::ReqMeasureFunction: {
-        logs() << "got request to measure a function\n";
+      case msg::StartMeasureFunction: {
+        logs() << "got request to START measuring a function\n";
         llvm::StringRef Blob(Body.data(), Body.size());
-        pb::ReqMeasureFunction Req;
+        pb::FunctionAddress Req;
         Req.ParseFromString(Blob);
 
         logs() << "Recieved request to measure perf of func "
                   << Req.func_addr() << "\n";
 
-        auto Error = Patcher.measureRunningTime(Req.func_addr());
+        auto Error = Patcher.start_instrumenting(Req.func_addr());
+        if (Error)
+          llvm::report_fatal_error(std::move(Error));
+
+      } break;
+
+
+      case msg::StopMeasureFunction: {
+        logs() << "got request to STOP measuring a function\n";
+        llvm::StringRef Blob(Body.data(), Body.size());
+        pb::FunctionAddress Req;
+        Req.ParseFromString(Blob);
+
+        logs() << "Recieved request to STOP measuring perf of func "
+                  << Req.func_addr() << "\n";
+
+        auto Error = Patcher.stop_instrumenting(Req.func_addr());
         if (Error)
           llvm::report_fatal_error(std::move(Error));
 
@@ -87,6 +105,30 @@ void MonitorState::server_listen_loop() {
 
     server_listen_loop();
   });
+}
+
+// this method unpatches
+void MonitorState::poll_instrumented_fns() {
+  if (!Patcher.isInstrumenting())
+    return;
+
+  // flush the event queue
+
+  pb::FuncMeasurements Data;
+  std::hash<std::thread::id> Hasher;
+
+  size_t NumConsumed = Patcher.getEvents().consume_all([&](XRayEvent const& Evt) {
+    pb::XRayEvent* Entry = Data.add_events();
+    Entry->set_timestamp(Evt.Time);
+    Entry->set_thread(static_cast<uint64_t>(Hasher(Evt.Thread)));
+    Entry->set_func_addr(Patcher.getFnPtr(Evt.Func));
+    Entry->set_entry(Evt.Kind == XRayEntryType::ENTRY);
+  });
+
+  // send the data to server
+  Net.Chan.send_proto(msg::FunctionMeasurements, Data);
+  logs() << "sent " << NumConsumed << " function measurements.\n";
+
 }
 
 llvm::Error MonitorState::gather_module_info(std::string ObjPath, CodePatcher const& Patcher, pb::ModuleInfo *MI) {

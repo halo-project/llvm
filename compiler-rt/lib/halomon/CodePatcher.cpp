@@ -1,7 +1,10 @@
 
 #include "halomon/CodePatcher.h"
-#include "halomon/TimeLog.h"
+#include "halomon/XRayEvent.h"
+
 #include "xray/xray_interface_internal.h"
+
+#include "boost/lockfree/queue.hpp"
 
 #include "Logging.h"
 
@@ -14,43 +17,12 @@ namespace xray = __xray;
 
 namespace halo {
 
-// FIXME:
-// Need to come up with a mechanism whereby the TimeLog is stored
-// elsewhere (not in TLS), so that other threads can sample / read
-// the running values. Probably want to say:
-// if (FunctionLogs[FuncID] == nullptr)
-//    allocate timelog in global, thread-safe data structure where I have
-//    exclusive write-access.
-
-thread_local std::unordered_map<int32_t, TimeLog> FunctionLogs;
+// the initializer arg is the default number of elms in free list
+static boost::lockfree::queue<XRayEvent> GlobalEvents {4096};
 
 void timingHandler(int32_t FuncID, XRayEntryType Kind) {
-  auto &Times = FunctionLogs[FuncID];
-
-  // std::cerr << "Thread id = " << std::this_thread::get_id() << "\n";
-
-  switch(Kind) {
-    case ENTRY: {
-      Times.entryEvent();
-    } return;
-
-
-    case EXIT: case TAIL: {
-      Times.exitEvent();
-
-      if (LOG) Times.dump(logs());
-
-      // FIXME: this should NOT be done by the application thread.
-      // I think we need a thread that wakes up on a periodic timer
-      // (or can be woken up by the application thread?) that
-      // periodically unpatches functions?
-      if (Times.samples() > 100)
-        __xray_unpatch_function(FuncID);
-
-    } return;
-
-    default: return; // ignore
-  };
+  XRayEvent Evt {getTimeStamp(), std::this_thread::get_id(), FuncID, Kind};
+  GlobalEvents.push(Evt);
 }
 
 CodePatcher::CodePatcher() {
@@ -74,6 +46,14 @@ CodePatcher::CodePatcher() {
 
 }
 
+boost::lockfree::queue<XRayEvent>& CodePatcher::getEvents() {
+  return GlobalEvents;
+}
+
+uint64_t CodePatcher::getFnPtr(int32_t xrayID) {
+  return __xray_function_address(xrayID);
+}
+
 // NOTE: it will not be safe to garbage collect until you can ensure that
 // no threads are executing in the function!
 // One possible way to handle this is to ptrace ourselves to pause all of
@@ -89,7 +69,9 @@ CodePatcher::CodePatcher() {
 //   }
 // }
 
-llvm::Error CodePatcher::measureRunningTime(uint64_t FnPtr) {
+
+// START instrumenting
+llvm::Error CodePatcher::start_instrumenting(uint64_t FnPtr) {
   auto Maybe = getXRayID(FnPtr);
   if (!Maybe)
     return Maybe.takeError();
@@ -102,6 +84,24 @@ llvm::Error CodePatcher::measureRunningTime(uint64_t FnPtr) {
 
   return llvm::Error::success();
 }
+
+
+// STOP instrumenting
+llvm::Error CodePatcher::stop_instrumenting(uint64_t FnPtr) {
+  auto Maybe = getXRayID(FnPtr);
+  if (!Maybe)
+    return Maybe.takeError();
+
+  auto id = Maybe.get();
+  if (Status[id] == Measuring) {
+    // NOTE: we go back to unpatched instead of some previous status!
+    __xray_unpatch_function(id);
+    Status[id] = Unpatched;
+  }
+
+  return llvm::Error::success();
+}
+
 
 llvm::Error CodePatcher::redirectTo(uint64_t OldFnPtr, uint64_t NewFnPtr) {
   auto Maybe = getXRayID(OldFnPtr);

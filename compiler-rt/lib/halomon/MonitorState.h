@@ -48,6 +48,10 @@ public:
   MonitorState();
   ~MonitorState();
 
+  // tends to the instrumented functions by flushing the
+  // event queue and sending it to the server.
+  void poll_instrumented_fns();
+
   // methods related to sampling
   void start_sampling();
   void reset_sampling_counters();

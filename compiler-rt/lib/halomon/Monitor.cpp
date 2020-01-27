@@ -50,6 +50,8 @@ void monitor_loop(MonitorState &M, std::atomic<bool> &ShutdownRequested) {
 
   while (!ShutdownRequested) {
 
+    M.poll_instrumented_fns();
+
     M.check_msgs();
 
     M.poll_for_sample_data();

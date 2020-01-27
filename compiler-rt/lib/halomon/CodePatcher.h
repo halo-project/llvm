@@ -4,9 +4,12 @@
 
 #include "halomon/DynamicLinker.h"
 #include "halomon/ThreadSafeContainer.h"
+#include "halomon/XRayEvent.h"
 
 #include "Channel.h"
 #include "Messages.pb.h"
+
+#include "boost/lockfree/queue.hpp"
 
 
 namespace halo {
@@ -21,12 +24,25 @@ class CodePatcher {
 public:
   CodePatcher();
 
-llvm::Error measureRunningTime(uint64_t FnPtr);
+llvm::Error start_instrumenting(uint64_t FnPtr);
+llvm::Error stop_instrumenting(uint64_t FnPtr);
 llvm::Error replaceAll(pb::CodeReplacement const&, std::unique_ptr<DyLib>, Channel &);
 
 bool isPatchable(uint64_t FnPtr) const {
   return AddrToID.find(FnPtr) != AddrToID.end();
 }
+
+uint64_t getFnPtr(int32_t xrayID);
+
+bool isInstrumenting() const {
+  for (auto S : Status)
+    if (S == Measuring)
+      return true;
+  return false;
+}
+
+// access the thread-safe queue of instrumentation events
+boost::lockfree::queue<XRayEvent>& getEvents();
 
 void garbageCollect();
 
