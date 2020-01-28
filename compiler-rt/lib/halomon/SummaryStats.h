@@ -2,6 +2,9 @@
 
 #include <cmath>
 #include "llvm/Support/raw_ostream.h"
+#include "Messages.pb.h"
+
+namespace halo {
 
 template <typename ValType>
 class SummaryStats {
@@ -42,13 +45,32 @@ public:
                                 ? 0
                                 : deviation() / std::sqrt(Count); }
 
+  double error_pct() const {
+    return (error() / mean()) * 100.0;
+  }
+
   void dump(llvm::raw_ostream &out) const {
     auto Avg = mean();
     out << "mean = " << Avg
         << ", deviation = " << deviation()
-        << ", error_pct = " << (error() / Avg) * 100.0
+        << ", error_pct = " << error_pct()
         << ", samples = " << samples()
         << "\n";
+  }
+
+  void serialize(pb::SummaryStats *Out) const {
+    Out->set_samples(samples());
+    Out->set_mean(mean());
+    Out->set_population_variance(population_variance());
+    Out->set_variance(variance());
+    Out->set_deviation(deviation());
+    Out->set_error_pct(error_pct());
+  }
+
+  void clear() {
+    Mean = 0.0;
+    SumSqDistance = 0.0;
+    Count = 0;
   }
 
   private:
@@ -56,3 +78,5 @@ public:
     double SumSqDistance = 0.0;
     uint64_t Count = 0;
 };
+
+} // end namespace halo

@@ -11,8 +11,16 @@ namespace halo {
   struct XRayEvent {
     uint64_t Time;
     std::thread::id Thread;
-    int32_t Func;
-    XRayEntryType Kind;
+
+    // raw events from instrumentation are in the XRayID form,
+    // and when processed by the monitor they are converted
+    // to be FuncPtrs.
+    union {
+      int32_t XRayID;
+      uint64_t FuncPtr;
+    };
+
+    uint64_t EntryCount;
   };
 
 

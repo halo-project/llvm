@@ -17,13 +17,38 @@ namespace xray = __xray;
 
 namespace halo {
 
-// the initializer arg is the default number of elms in free list
-static boost::lockfree::queue<XRayEvent> GlobalEvents {4096};
+// NOTE: another handler to consider is 'runningtime'
+// which would time only the N'th function call
 
-void timingHandler(int32_t FuncID, XRayEntryType Kind) {
-  XRayEvent Evt {getTimeStamp(), std::this_thread::get_id(), FuncID, Kind};
-  GlobalEvents.push(Evt);
+namespace entrycount {
+
+// NOTE: with LIMIT = 1024, we see a ~30% overhead when patching one of
+// linear_hot's fibs
+
+using Data = uint64_t;
+using FuncID = int32_t;
+constexpr unsigned LIMIT = 1024;
+// the initializer arg is the default number of elms in free list
+static boost::lockfree::queue<XRayEvent> GlobalData {8192};
+thread_local std::unordered_map<FuncID, Data> LocalData; // NOTE: maybe a vector is better?
+
+void handler(int32_t FuncID, XRayEntryType Kind) {
+  if (Kind != XRayEntryType::ENTRY)
+    return;
+
+  auto &Data = LocalData[FuncID];
+
+  if (Data >= LIMIT) {
+    XRayEvent Evt {getTimeStamp(), std::this_thread::get_id(), FuncID, Data};
+    GlobalData.push(Evt);
+    Data = 0;
+  } else {
+    Data += 1;
+  }
 }
+
+} // end namespace entrycount
+
 
 CodePatcher::CodePatcher() {
   __xray_init();
@@ -42,12 +67,12 @@ CodePatcher::CodePatcher() {
   __xray_set_redirection_table(RedirectionTable.data());
 
   // the only handler we use
-  __xray_set_handler(timingHandler);
+  __xray_set_handler(entrycount::handler);
 
 }
 
 boost::lockfree::queue<XRayEvent>& CodePatcher::getEvents() {
-  return GlobalEvents;
+  return entrycount::GlobalData;
 }
 
 uint64_t CodePatcher::getFnPtr(int32_t xrayID) {

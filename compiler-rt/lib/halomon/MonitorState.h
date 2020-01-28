@@ -3,6 +3,7 @@
 #include "halomon/CodePatcher.h"
 #include "halomon/DynamicLinker.h"
 #include "halomon/LinuxPerfEvents.h"
+#include "halomon/XRayProfiler.h"
 
 #include <list>
 
@@ -41,6 +42,7 @@ public:
   Client Net;
   CodePatcher Patcher;
   DynamicLinker Linker;
+  XRayProfiler Profiler;
 
   // information about this process
   std::string ExePath;

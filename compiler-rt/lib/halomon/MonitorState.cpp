@@ -107,27 +107,29 @@ void MonitorState::server_listen_loop() {
   });
 }
 
-// this method unpatches
+
 void MonitorState::poll_instrumented_fns() {
   if (!Patcher.isInstrumenting())
     return;
 
   // flush the event queue
-
-  pb::FuncMeasurements Data;
-  std::hash<std::thread::id> Hasher;
-
-  size_t NumConsumed = Patcher.getEvents().consume_all([&](XRayEvent const& Evt) {
-    pb::XRayEvent* Entry = Data.add_events();
-    Entry->set_timestamp(Evt.Time);
-    Entry->set_thread(static_cast<uint64_t>(Hasher(Evt.Thread)));
-    Entry->set_func_addr(Patcher.getFnPtr(Evt.Func));
-    Entry->set_entry(Evt.Kind == XRayEntryType::ENTRY);
+  Patcher.getEvents().consume_all([&](XRayEvent& Evt) {
+    // convert from XRayID -> FuncPtr
+    Evt.FuncPtr = Patcher.getFnPtr(Evt.XRayID);
+    Profiler.addEvent(Evt);
   });
 
   // send the data to server
-  Net.Chan.send_proto(msg::FunctionMeasurements, Data);
-  logs() << "sent " << NumConsumed << " function measurements.\n";
+  auto NumEvents = Profiler.numEvents();
+  if (NumEvents) {
+    pb::XRayProfileData Data;
+    Profiler.serialize(Data);
+    Profiler.clear();
+
+    Net.Chan.send_proto(msg::FunctionMeasurements, Data);
+    logs() << "sent function measurements from "
+           << NumEvents << " events.\n";
+  }
 
 }
 
