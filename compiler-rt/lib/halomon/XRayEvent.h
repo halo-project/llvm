@@ -21,6 +21,9 @@ namespace halo {
     };
 
     uint64_t EntryCount;
+
+    XRayEvent(uint64_t time, std::thread::id thread, int32_t xrayID, uint64_t entries)
+      : Time(time), Thread(thread), XRayID(xrayID), EntryCount(entries) {}
   };
 
 

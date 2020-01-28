@@ -3,14 +3,11 @@
 #include <unordered_map>
 
 #include "halomon/DynamicLinker.h"
-#include "halomon/ThreadSafeContainer.h"
+#include "halomon/ThreadSafeContainers.h"
 #include "halomon/XRayEvent.h"
 
 #include "Channel.h"
 #include "Messages.pb.h"
-
-#include "boost/lockfree/queue.hpp"
-
 
 namespace halo {
 
@@ -42,7 +39,7 @@ bool isInstrumenting() const {
 }
 
 // access the thread-safe queue of instrumentation events
-boost::lockfree::queue<XRayEvent>& getEvents();
+ThreadSafeList<XRayEvent>& getEvents();
 
 void garbageCollect();
 

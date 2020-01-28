@@ -4,8 +4,6 @@
 
 #include "xray/xray_interface_internal.h"
 
-#include "boost/lockfree/queue.hpp"
-
 #include "Logging.h"
 
 #include <unordered_map>
@@ -28,8 +26,7 @@ namespace entrycount {
 using Data = uint64_t;
 using FuncID = int32_t;
 constexpr unsigned LIMIT = 1024;
-// the initializer arg is the default number of elms in free list
-static boost::lockfree::queue<XRayEvent> GlobalData {8192};
+static ThreadSafeList<XRayEvent> GlobalData;
 thread_local std::unordered_map<FuncID, Data> LocalData; // NOTE: maybe a vector is better?
 
 void handler(int32_t FuncID, XRayEntryType Kind) {
@@ -39,8 +36,7 @@ void handler(int32_t FuncID, XRayEntryType Kind) {
   auto &Data = LocalData[FuncID];
 
   if (Data >= LIMIT) {
-    XRayEvent Evt {getTimeStamp(), std::this_thread::get_id(), FuncID, Data};
-    GlobalData.push(Evt);
+    GlobalData.emplace_back(getTimeStamp(), std::this_thread::get_id(), FuncID, Data);
     Data = 0;
   } else {
     Data += 1;
@@ -71,7 +67,11 @@ CodePatcher::CodePatcher() {
 
 }
 
-boost::lockfree::queue<XRayEvent>& CodePatcher::getEvents() {
+// boost::lockfree::queue<XRayEvent>& CodePatcher::getEvents() {
+//   return entrycount::GlobalData;
+// }
+
+ThreadSafeList<XRayEvent>& CodePatcher::getEvents() {
   return entrycount::GlobalData;
 }
 
