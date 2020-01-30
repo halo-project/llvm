@@ -594,7 +594,8 @@ getFramePointerKind(const ArgList &Args, const llvm::Triple &Triple) {
                            options::OPT_fno_omit_frame_pointer);
   bool OmitFP = A && A->getOption().matches(options::OPT_fomit_frame_pointer);
   bool NoOmitFP =
-      A && A->getOption().matches(options::OPT_fno_omit_frame_pointer);
+      (A && A->getOption().matches(options::OPT_fno_omit_frame_pointer))
+      || Args.hasFlag(options::OPT_fhalo, options::OPT_fno_halo, false);
   bool KeepLeaf =
       Args.hasFlag(options::OPT_momit_leaf_frame_pointer,
                    options::OPT_mno_omit_leaf_frame_pointer, Triple.isPS4CPU());
