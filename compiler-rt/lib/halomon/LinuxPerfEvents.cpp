@@ -461,7 +461,7 @@ PerfHandle::PerfHandle(MonitorState *mon, int CPU, int MyPID, size_t pagesz)
           :  Monitor(mon), PageSz(pagesz) {
 
   // NOTE: By default on Ubuntu 18.04, /proc/sys/kernel/perf_event_mlock_kb
-  // is set to a 514KiB max of data for this buffer, aka, 512KiB + 4KiB or
+  // is set to a 516KiB max of data for this buffer, aka, 512KiB + 4KiB or
   // equivalently 128 + 1 pages *on the entire system*.
   //
   // Because we will end up creating one buffer *per core, per process*,
