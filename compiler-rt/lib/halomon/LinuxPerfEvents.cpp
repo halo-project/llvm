@@ -109,7 +109,7 @@ void handle_perf_event(MonitorState *MS, perf_event_header *EvtHeader) {
     }
 
   } else {
-    logs() << "some unhandled perf event was encountered.\n";
+    // logs() << "some unhandled perf event was encountered.\n";
   }
 
 }
@@ -499,7 +499,7 @@ PerfHandle::PerfHandle(MonitorState *mon, int CPU, int MyPID, size_t pagesz)
   // rely on that for good samples.
 
   std::string EventName = "instructions";
-  uint64_t EventPeriod = 67867967;
+  uint64_t EventPeriod = 15485867;
 
   FD = get_perf_events_fd(EventName, EventPeriod,
                                   MyPID, CPU, NumBufPages, PageSz);
