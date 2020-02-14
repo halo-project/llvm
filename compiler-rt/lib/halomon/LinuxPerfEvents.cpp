@@ -329,9 +329,11 @@ int get_perf_events_fd(const std::string &Name,
 
   // Note: For Intel hardware, these LBR records are only really associated
   // with the PEBS samples starting with Ice Lake, etc.
-  Attr.branch_sample_type = PERF_SAMPLE_BRANCH_USER | PERF_SAMPLE_BRANCH_ANY_CALL;
+  Attr.branch_sample_type = PERF_SAMPLE_BRANCH_USER
+                          | PERF_SAMPLE_BRANCH_ANY_CALL
+                          | PERF_SAMPLE_BRANCH_ANY_RETURN;
 
-  // FIXME: For Intel hardware at least, we could also include
+  // NOTE: For Intel hardware at least, we could also include
   // PERF_SAMPLE_BRANCH_ANY_RETURN along with the calls. For newer Intel
   // hardware, we can use PERF_SAMPLE_BRANCH_CALL_STACK.
   // NOTE that PERF_SAMPLE_BRANCH_ANY gives you everything, including local
