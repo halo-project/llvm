@@ -202,7 +202,49 @@ bool PerfHandle::process_new_samples(int readyFD) {
   return true; // we performed a read
 }
 
+/// Provides a type-safe and slightly robust interface to making
+/// a recoverable `syscall` to perf_event_open.
+///
+/// If a failure occurs, then the callback is invoked with the errno value
+/// and a modifiable reference to an attr struct that has the same contents
+/// as the original one passed in. Do NOT use the original pointer since
+/// this call might pass a different one to the call back!
+///
+/// @param attr which might be modified by the system call.
+///
+inline int try_perf_event_open(perf_event_attr *attr,
+                           pid_t pid, int cpu, int group_fd,
+                           unsigned long flags,
+                           std::function<int(int, perf_event_attr &)> Callback) {
 
+#ifndef NDEBUG
+  // In some scenarios, the attr struct is modified by the system call,
+  // e.g., if -1 is returned and errno is set to E2BIG.
+  // I'm sure there are other weird situations beyond that so when
+  // asserts / debugging is enabled, we check that the call is being sensible.
+  perf_event_attr attr_copy;
+  memcpy(&attr_copy, attr, sizeof(perf_event_attr));
+#endif
+
+  int FD = syscall(__NR_perf_event_open, attr, pid, cpu, group_fd, flags);
+  int ErrNo = errno;
+
+  if (FD == -1) {
+    // in this case, the syscall modified the struct so we fix it up.
+    if (ErrNo == E2BIG)
+      attr->size = sizeof(perf_event_attr);
+
+    #ifndef NDEBUG
+      // ensure that the contents are still the same.
+      if (memcmp(&attr_copy, attr, sizeof(perf_event_attr) != 0))
+        fatal_error("the perf_event_open modified the attr struct in an unexpected way!");
+    #endif
+
+    return Callback(ErrNo, *attr);
+  }
+
+  return FD;
+}
 
 
 ////////////////////
@@ -352,30 +394,38 @@ int get_perf_events_fd(const std::string &Name,
   // #endif
 
 
-  int NewPerfFD = syscall(__NR_perf_event_open, &Attr, TID, CPU, -1, 0);
-  if (NewPerfFD == -1) {
-    int ERR = errno;
-    std::string Msg = strerror(errno);
-    logs() << "Unsuccessful call to perf_event_open: " << Msg << "\n";
-    switch (ERR) {
-      case E2BIG: {logs() << "Code = E2BIG\n"; break;}
-      case EACCES: {logs() << "Code = EACCES\n"; break;}
-      case EBADF: {logs() << "Code = EBADF\n"; break;}
-      case EBUSY: {logs() << "Code = EBUSY\n"; break;}
-      case EFAULT: {logs() << "Code = EFAULT\n"; break;}
-      case EINVAL: {logs() << "Code = EINVAL\n"; break;}
-      case EMFILE: {logs() << "Code = EMFILE\n"; break;}
-      case ENODEV: {logs() << "Code = ENODEV\n"; break;}
-      case ENOSPC: {logs() << "Code = ENOSPC\n"; break;}
-      case ENOSYS: {logs() << "Code = ENOSYS\n"; break;}
-      case EOPNOTSUPP: {logs() << "Code = EOPNOTSUPP\n"; break;}
-      case EOVERFLOW: {logs() << "Code = EOVERFLOW\n"; break;}
-      case EPERM: {logs() << "Code = EPERM\n"; break;}
-      case ESRCH: {logs() << "Code = ESRCH\n"; break;}
-      default: {logs() << "Code = " << ERR << " (unknown name)"; break;}
-    };
-    return -1;
-  }
+  int NewPerfFD = try_perf_event_open(&Attr, TID, CPU, -1, 0, [&](int ErrNo, perf_event_attr &Attr) {
+    // Unfortunately, some older hardware (at least Ivybridge)
+    // does not support sampling the BTB in a specific capacity (i.e., asking
+    // for only CALL or RETURN) so we retry with just ANY branch.
+
+    Attr.branch_sample_type = PERF_SAMPLE_BRANCH_USER
+                            | PERF_SAMPLE_BRANCH_ANY;
+
+    return try_perf_event_open(&Attr, TID, CPU, -1, 0, [](int ErrNo, perf_event_attr &Attr) {
+
+      // okay then we give up. print an error and forward the invalid FD
+      logs() << "Unsuccessful call to perf_event_open: ";
+      switch (ErrNo) {
+        case E2BIG: {logs() << "E2BIG\n"; break;}
+        case EACCES: {logs() << "EACCES\n"; break;}
+        case EBADF: {logs() << "EBADF\n"; break;}
+        case EBUSY: {logs() << "EBUSY\n"; break;}
+        case EFAULT: {logs() << "EFAULT\n"; break;}
+        case EINVAL: {logs() << "EINVAL\n"; break;}
+        case EMFILE: {logs() << "EMFILE\n"; break;}
+        case ENODEV: {logs() << "ENODEV\n"; break;}
+        case ENOSPC: {logs() << "ENOSPC\n"; break;}
+        case ENOSYS: {logs() << "ENOSYS\n"; break;}
+        case EOPNOTSUPP: {logs() << "EOPNOTSUPP\n"; break;}
+        case EOVERFLOW: {logs() << "EOVERFLOW\n"; break;}
+        case EPERM: {logs() << "EPERM\n"; break;}
+        case ESRCH: {logs() << "ESRCH\n"; break;}
+        default: {logs() << "Code = " << ErrNo << " (unknown name)\n"; break;}
+      };
+      return -1;
+    });
+  });
 
   return NewPerfFD;
 }
