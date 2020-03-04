@@ -245,8 +245,9 @@ int get_perf_events_fd(const std::string &Name,
 
   int Ret = pfm_get_os_event_encoding(Name.c_str(), PFM_PLM3, PFM_OS_PERF_EVENT_EXT, &Arg);
   if (Ret != PFM_SUCCESS) {
+    std::string Msg = pfm_strerror(Ret);
     logs() << "Unable to get event encoding for " << Name << ": " <<
-                 pfm_strerror(Ret) << "\n";
+                Msg << "\n";
     return -1;
   }
 
@@ -353,7 +354,26 @@ int get_perf_events_fd(const std::string &Name,
 
   int NewPerfFD = syscall(__NR_perf_event_open, &Attr, TID, CPU, -1, 0);
   if (NewPerfFD == -1) {
-    logs() << "Unable to open perf events for this process: " << strerror(errno) << "\n";
+    int ERR = errno;
+    std::string Msg = strerror(errno);
+    logs() << "Unsuccessful call to perf_event_open: " << Msg << "\n";
+    switch (ERR) {
+      case E2BIG: {logs() << "Code = E2BIG\n"; break;}
+      case EACCES: {logs() << "Code = EACCES\n"; break;}
+      case EBADF: {logs() << "Code = EBADF\n"; break;}
+      case EBUSY: {logs() << "Code = EBUSY\n"; break;}
+      case EFAULT: {logs() << "Code = EFAULT\n"; break;}
+      case EINVAL: {logs() << "Code = EINVAL\n"; break;}
+      case EMFILE: {logs() << "Code = EMFILE\n"; break;}
+      case ENODEV: {logs() << "Code = ENODEV\n"; break;}
+      case ENOSPC: {logs() << "Code = ENOSPC\n"; break;}
+      case ENOSYS: {logs() << "Code = ENOSYS\n"; break;}
+      case EOPNOTSUPP: {logs() << "Code = EOPNOTSUPP\n"; break;}
+      case EOVERFLOW: {logs() << "Code = EOVERFLOW\n"; break;}
+      case EPERM: {logs() << "Code = EPERM\n"; break;}
+      case ESRCH: {logs() << "Code = ESRCH\n"; break;}
+      default: {logs() << "Code = " << ERR << " (unknown name)"; break;}
+    };
     return -1;
   }
 
@@ -372,13 +392,15 @@ bool setup_sigio_fd(asio::io_service &PerfSignalService, asio::posix::stream_des
   sigaddset(&SigMask, SIGIO);
 
   if (sigprocmask(SIG_BLOCK, &SigMask, NULL) == -1) {
-    logs() << "Unable to block signals: " << strerror(errno) << "\n";
+    std::string Msg = strerror(errno);
+    logs() << "Unable to block signals: " << Msg << "\n";
     return true;
   }
 
   SigFD = signalfd(-1, &SigMask, 0);
   if (SigFD == -1) {
-    logs() << "Unable create signal file handle: " << strerror(errno) << "\n";
+    std::string Msg = strerror(errno);
+    logs() << "Unable create signal file handle: " << Msg << "\n";
     return true;
   }
 
@@ -409,7 +431,8 @@ std::string get_self_exe() {
   std::vector<char> buf(PATH_MAX);
   ssize_t len = readlink("/proc/self/exe", buf.data(), buf.size()-1);
   if (len == -1) {
-    logs() << strerror(errno) << "\n";
+    std::string Msg = strerror(errno);
+    logs() << Msg << "\n";
     halo::fatal_error("path to process's executable not found.");
   }
   buf[len] = '\0'; // null terminate
@@ -443,8 +466,8 @@ void open_perf_handles(MonitorState *Mon, std::list<PerfHandle> &Handles) {
         NumCPUs <<= 2;
         continue;
       }
-
-      clogs() << "Unable to get affinity mask: " << strerror(errno) << "\n";
+      std::string Msg = strerror(errno);
+      clogs() << "Unable to get affinity mask: " << Msg << "\n";
       fatal_error("error in open_perf_handles");
     }
 
@@ -484,7 +507,8 @@ PerfHandle::PerfHandle(MonitorState *mon, int CPU, int MyPID, size_t pagesz)
 
   int Ret = pfm_initialize();
   if (Ret != PFM_SUCCESS) {
-    logs() << "Failed to initialize PFM library: " << pfm_strerror(Ret) << "\n";
+    std::string Msg = pfm_strerror(Ret);
+    logs() << "Failed to initialize PFM library: " << Msg << "\n";
     fatal_error("error in initializing perf handle");
   }
 
@@ -517,7 +541,8 @@ PerfHandle::PerfHandle(MonitorState *mon, int CPU, int MyPID, size_t pagesz)
     if (errno == EPERM)
       logs() << "Consider increasing /proc/sys/kernel/perf_event_mlock_kb or "
                    "allocating less memory for events buffer.\n";
-    logs() << "Unable to map perf events pages: " << strerror(errno) << "\n";
+    std::string Msg = strerror(errno);
+    logs() << "Unable to map perf events pages: " << Msg << "\n";
     fatal_error("error in perf handle ctor");
   }
 
@@ -532,13 +557,15 @@ PerfHandle::PerfHandle(MonitorState *mon, int CPU, int MyPID, size_t pagesz)
 PerfHandle::~PerfHandle() {
   int ret = munmap(EventBuf, EventBufSz);
   if (ret) {
-    logs() << "Failed to unmap event buffer: " << strerror(errno) << "\n";
+    std::string Msg = strerror(errno);
+    logs() << "Failed to unmap event buffer: " << Msg << "\n";
     fatal_error("error in PerfHandle dtor 1");
   }
 
   ret = close(FD);
   if (ret) {
-    logs() << "Failed to close perf_event file descriptor: " << strerror(errno) << "\n";
+    std::string Msg = strerror(errno);
+    logs() << "Failed to close perf_event file descriptor: " << Msg << "\n";
     fatal_error("error in PerfHandle dtor 2");
   }
 }
