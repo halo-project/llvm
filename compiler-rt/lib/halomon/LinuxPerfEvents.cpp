@@ -373,14 +373,20 @@ int get_perf_events_fd(const std::string &Name,
   // Note: For Intel hardware, these LBR records are only really associated
   // with the PEBS samples starting with Ice Lake, etc.
   Attr.branch_sample_type = PERF_SAMPLE_BRANCH_USER
+  // choose specific branch types if supported by kernel.
+  #if LINUX_VERSION_CODE >= KERNEL_VERSION(3,16,0)
                           | PERF_SAMPLE_BRANCH_ANY_CALL
-                          | PERF_SAMPLE_BRANCH_ANY_RETURN;
+                          | PERF_SAMPLE_BRANCH_ANY_RETURN
+                          | PERF_SAMPLE_BRANCH_COND;
+  #else
+                          // ask for whatever is available!
+                          | PERF_SAMPLE_BRANCH_ANY;
+  #endif
 
-  // NOTE: For Intel hardware at least, we could also include
-  // PERF_SAMPLE_BRANCH_ANY_RETURN along with the calls. For newer Intel
-  // hardware, we can use PERF_SAMPLE_BRANCH_CALL_STACK.
+
+  // NOTE: For newer Intel hardware, we can use PERF_SAMPLE_BRANCH_CALL_STACK.
   // NOTE that PERF_SAMPLE_BRANCH_ANY gives you everything, including local
-  // conditional branches etc. see the documentation.
+  // conditional branches and transactional memory stuff etc. see the documentation.
 
   // NOTE: we have to disable this because the libpfm attr field and
   // the system's kernel can be mismatched. on my system pfm is too old for this.
@@ -396,7 +402,7 @@ int get_perf_events_fd(const std::string &Name,
 
   int NewPerfFD = try_perf_event_open(&Attr, TID, CPU, -1, 0, [&](int ErrNo, perf_event_attr &Attr) {
     // Unfortunately, some older hardware (at least Ivybridge)
-    // does not support sampling the BTB in a specific capacity (i.e., asking
+    // does not support sampling the BTB in a specific capacity (e.g., asking
     // for only CALL or RETURN) so we retry with just ANY branch.
 
     Attr.branch_sample_type = PERF_SAMPLE_BRANCH_USER
