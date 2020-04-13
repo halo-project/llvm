@@ -26,30 +26,32 @@ namespace object = llvm::object;
 
 namespace halo {
 
+constexpr LoggingContext LC = LC_MonitorState;
+
 void MonitorState::server_listen_loop() {
   Net.Chan.async_recv([this](msg::Kind Kind, std::vector<char>& Body) {
     switch (Kind) {
       case msg::Shutdown: {
-        logs() << "server session terminated.\n";
+        logs(LC) << "server session terminated.\n";
       } return; // NOTE: the return.
 
       case msg::StartSampling: {
-        logs() << "starting sampling\n";
+        logs(LC) << "starting sampling\n";
         start_sampling();
       } break;
 
       case msg::StopSampling: {
-        logs() << "stopping sampling\n";
+        logs(LC) << "stopping sampling\n";
         stop_sampling();
       } break;
 
       case msg::StartMeasureFunction: {
-        logs() << "got request to START measuring a function\n";
+        logs(LC) << "got request to START measuring a function\n";
         llvm::StringRef Blob(Body.data(), Body.size());
         pb::FunctionAddress Req;
         Req.ParseFromString(Blob);
 
-        logs() << "Recieved request to measure perf of func "
+        logs(LC) << "Recieved request to measure perf of func "
                   << Req.func_addr() << "\n";
 
         auto Error = Patcher.start_instrumenting(Req.func_addr());
@@ -60,12 +62,12 @@ void MonitorState::server_listen_loop() {
 
 
       case msg::StopMeasureFunction: {
-        logs() << "got request to STOP measuring a function\n";
+        logs(LC) << "got request to STOP measuring a function\n";
         llvm::StringRef Blob(Body.data(), Body.size());
         pb::FunctionAddress Req;
         Req.ParseFromString(Blob);
 
-        logs() << "Recieved request to STOP measuring perf of func "
+        logs(LC) << "Recieved request to STOP measuring perf of func "
                   << Req.func_addr() << "\n";
 
         auto Error = Patcher.stop_instrumenting(Req.func_addr());
@@ -75,7 +77,7 @@ void MonitorState::server_listen_loop() {
       } break;
 
       case msg::CodeReplacement: {
-        logs() << "got code replacement\n";
+        logs(LC) << "got code replacement\n";
         llvm::StringRef Blob(Body.data(), Body.size());
         pb::CodeReplacement CR;
         CR.ParseFromString(Blob);
@@ -98,7 +100,7 @@ void MonitorState::server_listen_loop() {
       } break;
 
       default: {
-        logs() << "recieved unknown message from server: #"
+        logs(LC) << "recieved unknown message from server: #"
                   << (uint32_t) Kind << "\n";
       } break;
     };
@@ -127,7 +129,7 @@ void MonitorState::poll_instrumented_fns() {
     Profiler.clear();
 
     Net.Chan.send_proto(msg::FunctionMeasurements, Data);
-    logs() << "sent function measurements from "
+    logs(LC) << "sent function measurements from "
            << NumEvents << " events.\n";
   }
 
@@ -255,7 +257,7 @@ void MonitorState::send_samples() {
 
     if (numSent) {
       RawSamples.clear();
-      logs() << "sent a batch of " << numSent << " samples.\n";
+      logs(LC) << "sent a batch of " << numSent << " samples.\n";
     }
   }
 }
@@ -329,19 +331,19 @@ void MonitorState::schedule_signalfd_read() {
 void MonitorState::handle_signalfd_read(const boost::system::error_code &Error, size_t BytesTransferred) {
   bool IOError = false;
   if (Error) {
-    logs() << "Error reading from signal file handle: " << Error.message() << "\n";
+    logs(LC) << "Error reading from signal file handle: " << Error.message() << "\n";
     IOError = true;
   }
 
   if (BytesTransferred != sizeof(SigFDInfo)) {
-    logs() << "Read the wrong the number of bytes from the signal file handle: "
+    logs(LC) << "Read the wrong the number of bytes from the signal file handle: "
                  "read " << BytesTransferred << " bytes\n";
     IOError = true;
   }
 
   // TODO: convert this into a debug-mode assert.
   if (SigFDInfo.ssi_signo != SIGIO) {
-    logs() << "Unexpected signal recieved on signal file handle: "
+    logs(LC) << "Unexpected signal recieved on signal file handle: "
               << SigFDInfo.ssi_signo << "\n";
     IOError = true;
   }
@@ -366,7 +368,7 @@ void MonitorState::handle_signalfd_read(const boost::system::error_code &Error, 
   }
 
   if (!Matched) {
-    logs() << "Unexpected file descriptor associated with SIGIO interrupt.\n";
+    logs(LC) << "Unexpected file descriptor associated with SIGIO interrupt.\n";
     IOError = true;
   }
 

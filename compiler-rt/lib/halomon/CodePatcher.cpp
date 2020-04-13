@@ -187,7 +187,7 @@ llvm::Error CodePatcher::replaceAll(pb::CodeReplacement const& CR,
   if (NewCode.empty())
     return llvm::Error::success();
 
-  if (LOG) Dylib->dump(logs());
+  Dylib->dump(logs());
 
   // save the dylib since we definitely need it.
   Dylibs.push_back(std::move(Dylib));
