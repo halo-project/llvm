@@ -307,7 +307,11 @@ ASM_SYMBOL(__xray_TypedEvent):
 
 		// adjust stack so we return the original function's caller, not the sled.
 		popq %r11
-		jmpq *%r10
+		jmpq *%r10  // FIXME: this branch ends up being very unpredictable when there
+		            // are multiple function redirections. One idea to spread the
+								// prediction load across multiple jmp instructions would be to
+								// compute the modulo i of the xray id (by power-of-two so its cheap)
+								// and use the i'th jmp instruction listed here.
 
 // no redirection is needed at this time.
 .LnoRedirect:
