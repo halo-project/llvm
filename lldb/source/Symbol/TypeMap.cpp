@@ -1,4 +1,4 @@
-//===-- TypeMap.cpp --------------------------------------------*- C++ -*-===//
+//===-- TypeMap.cpp -------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -7,18 +7,6 @@
 //===----------------------------------------------------------------------===//
 
 #include <vector>
-
-#include "clang/AST/ASTConsumer.h"
-#include "clang/AST/ASTContext.h"
-#include "clang/AST/Decl.h"
-#include "clang/AST/DeclCXX.h"
-#include "clang/AST/DeclGroup.h"
-
-#include "clang/Basic/Builtins.h"
-#include "clang/Basic/IdentifierTable.h"
-#include "clang/Basic/LangOptions.h"
-#include "clang/Basic/SourceManager.h"
-#include "clang/Basic/TargetInfo.h"
 
 #include "llvm/Support/FormattedStream.h"
 #include "llvm/Support/raw_ostream.h"
@@ -30,7 +18,6 @@
 
 using namespace lldb;
 using namespace lldb_private;
-using namespace clang;
 
 TypeMap::TypeMap() : m_types() {}
 
@@ -150,7 +137,8 @@ void TypeMap::RemoveMismatchedTypes(const char *qualified_typename,
     type_basename = qualified_typename;
     type_scope = "";
   }
-  return RemoveMismatchedTypes(type_scope, type_basename, type_class,
+  return RemoveMismatchedTypes(std::string(type_scope),
+                               std::string(type_basename), type_class,
                                exact_match);
 }
 

@@ -302,7 +302,7 @@ void InstrBuilder::populateWrites(InstrDesc &ID, const MCInst &MCI,
   unsigned NumVariadicOps = MCI.getNumOperands() - MCDesc.getNumOperands();
   ID.Writes.resize(TotalDefs + NumVariadicOps);
   // Iterate over the operands list, and skip non-register operands.
-  // The first NumExplictDefs register operands are expected to be register
+  // The first NumExplicitDefs register operands are expected to be register
   // definitions.
   unsigned CurrentDef = 0;
   unsigned i = 0;
@@ -458,9 +458,8 @@ void InstrBuilder::populateReads(InstrDesc &ID, const MCInst &MCI,
 
   // FIXME: If an instruction opcode is marked as 'mayLoad', and it has no
   // "unmodeledSideEffects", then this logic optimistically assumes that any
-  // extra register operands in the variadic sequence are not register
+  // extra register operand in the variadic sequence is not a register
   // definition.
-
   bool AssumeDefsOnly = !MCDesc.mayStore() && MCDesc.mayLoad() &&
                         !MCDesc.hasUnmodeledSideEffects();
   for (unsigned I = 0, OpIndex = MCDesc.getNumOperands();
@@ -486,24 +485,16 @@ Error InstrBuilder::verifyInstrDesc(const InstrDesc &ID,
   if (ID.NumMicroOps != 0)
     return ErrorSuccess();
 
-  bool UsesMemory = ID.MayLoad || ID.MayStore;
   bool UsesBuffers = ID.UsedBuffers;
   bool UsesResources = !ID.Resources.empty();
-  if (!UsesMemory && !UsesBuffers && !UsesResources)
+  if (!UsesBuffers && !UsesResources)
     return ErrorSuccess();
 
-  StringRef Message;
-  if (UsesMemory) {
-    Message = "found an inconsistent instruction that decodes "
-              "into zero opcodes and that consumes load/store "
-              "unit resources.";
-  } else {
-    Message = "found an inconsistent instruction that decodes "
-              "to zero opcodes and that consumes scheduler "
-              "resources.";
-  }
-
-  return make_error<InstructionError<MCInst>>(Message, MCI);
+  // FIXME: see PR44797. We should revisit these checks and possibly move them
+  // in CodeGenSchedule.cpp.
+  StringRef Message = "found an inconsistent instruction that decodes to zero "
+                      "opcodes and that consumes scheduler resources.";
+  return make_error<InstructionError<MCInst>>(std::string(Message), MCI);
 }
 
 Expected<const InstrDesc &>
@@ -630,8 +621,8 @@ InstrBuilder::createInstruction(const MCInst &MCI) {
   }
 
   // Initialize Reads first.
+  MCPhysReg RegID = 0;
   for (const ReadDescriptor &RD : D.Reads) {
-    int RegID = -1;
     if (!RD.isImplicitRead()) {
       // explicit read.
       const MCOperand &Op = MCI.getOperand(RD.OpIndex);
@@ -649,7 +640,6 @@ InstrBuilder::createInstruction(const MCInst &MCI) {
       continue;
 
     // Okay, this is a register operand. Create a ReadState for it.
-    assert(RegID > 0 && "Invalid register ID found!");
     NewIS->getUses().emplace_back(RD, RegID);
     ReadState &RS = NewIS->getUses().back();
 
@@ -690,8 +680,8 @@ InstrBuilder::createInstruction(const MCInst &MCI) {
   // Initialize writes.
   unsigned WriteIndex = 0;
   for (const WriteDescriptor &WD : D.Writes) {
-    unsigned RegID = WD.isImplicitWrite() ? WD.RegisterID
-                                          : MCI.getOperand(WD.OpIndex).getReg();
+    RegID = WD.isImplicitWrite() ? WD.RegisterID
+                                 : MCI.getOperand(WD.OpIndex).getReg();
     // Check if this is a optional definition that references NoReg.
     if (WD.IsOptionalDef && !RegID) {
       ++WriteIndex;

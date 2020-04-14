@@ -1,4 +1,4 @@
-//===-- RegularExpression.cpp -----------------------------------*- C++ -*-===//
+//===-- RegularExpression.cpp ---------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -12,29 +12,23 @@
 
 using namespace lldb_private;
 
-RegularExpression::RegularExpression(llvm::StringRef str) { Compile(str); }
+RegularExpression::RegularExpression(llvm::StringRef str)
+    : m_regex_text(std::string(str)),
+      // m_regex does not reference str anymore after it is constructed.
+      m_regex(llvm::Regex(str)) {}
 
 RegularExpression::RegularExpression(const RegularExpression &rhs)
-    : RegularExpression() {
-  Compile(rhs.GetText());
-}
-
-bool RegularExpression::Compile(llvm::StringRef str) {
-  m_regex_text = str;
-  m_regex = llvm::Regex(str);
-  return IsValid();
-}
+    : RegularExpression(rhs.GetText()) {}
 
 bool RegularExpression::Execute(
     llvm::StringRef str,
     llvm::SmallVectorImpl<llvm::StringRef> *matches) const {
+  if (!IsValid())
+    return false;
   return m_regex.match(str, matches);
 }
 
-bool RegularExpression::IsValid() const {
-  std::string discarded;
-  return m_regex.isValid(discarded);
-}
+bool RegularExpression::IsValid() const { return m_regex.isValid(); }
 
 llvm::StringRef RegularExpression::GetText() const { return m_regex_text; }
 

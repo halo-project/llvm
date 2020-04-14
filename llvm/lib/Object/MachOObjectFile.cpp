@@ -128,6 +128,10 @@ static unsigned getCPUType(const MachOObjectFile &O) {
   return O.getHeader().cputype;
 }
 
+static unsigned getCPUSubType(const MachOObjectFile &O) {
+  return O.getHeader().cpusubtype;
+}
+
 static uint32_t
 getPlainRelocationAddress(const MachO::any_relocation_info &RE) {
   return RE.r_word0;
@@ -1945,6 +1949,11 @@ uint64_t MachOObjectFile::getSectionSize(DataRefImpl Sec) const {
   return SectSize;
 }
 
+ArrayRef<uint8_t> MachOObjectFile::getSectionContents(uint32_t Offset,
+                                                      uint64_t Size) const {
+  return arrayRefFromStringRef(getData().substr(Offset, Size));
+}
+
 Expected<ArrayRef<uint8_t>>
 MachOObjectFile::getSectionContents(DataRefImpl Sec) const {
   uint32_t Offset;
@@ -1960,7 +1969,7 @@ MachOObjectFile::getSectionContents(DataRefImpl Sec) const {
     Size = Sect.size;
   }
 
-  return arrayRefFromStringRef(getData().substr(Offset, Size));
+  return getSectionContents(Offset, Size);
 }
 
 uint64_t MachOObjectFile::getSectionAlignment(DataRefImpl Sec) const {
@@ -2019,6 +2028,11 @@ bool MachOObjectFile::isSectionBSS(DataRefImpl Sec) const {
   return !(Flags & MachO::S_ATTR_PURE_INSTRUCTIONS) &&
          (SectionType == MachO::S_ZEROFILL ||
           SectionType == MachO::S_GB_ZEROFILL);
+}
+
+bool MachOObjectFile::isDebugSection(StringRef SectionName) const {
+  return SectionName.startswith("__debug") ||
+         SectionName.startswith("__zdebug") || SectionName == "__gdb_index";
 }
 
 unsigned MachOObjectFile::getSectionID(SectionRef Sec) const {
@@ -2560,7 +2574,7 @@ StringRef MachOObjectFile::getFileFormatName() const {
   }
 }
 
-Triple::ArchType MachOObjectFile::getArch(uint32_t CPUType) {
+Triple::ArchType MachOObjectFile::getArch(uint32_t CPUType, uint32_t CPUSubType) {
   switch (CPUType) {
   case MachO::CPU_TYPE_I386:
     return Triple::x86;
@@ -2722,17 +2736,17 @@ bool MachOObjectFile::isValidArch(StringRef ArchFlag) {
 }
 
 ArrayRef<StringRef> MachOObjectFile::getValidArchs() {
-  static const std::array<StringRef, 17> validArchs = {
+  static const std::array<StringRef, 17> validArchs = {{
       "i386",   "x86_64", "x86_64h",  "armv4t",  "arm",    "armv5e",
       "armv6",  "armv6m", "armv7",    "armv7em", "armv7k", "armv7m",
       "armv7s", "arm64",  "arm64_32", "ppc",     "ppc64",
-  };
+  }};
 
   return validArchs;
 }
 
 Triple::ArchType MachOObjectFile::getArch() const {
-  return getArch(getCPUType(*this));
+  return getArch(getCPUType(*this), getCPUSubType(*this));
 }
 
 Triple MachOObjectFile::getArchTriple(const char **McpuDefault) const {
@@ -3205,24 +3219,13 @@ void MachORebaseEntry::moveNext() {
                                        SegmentOffset) << "\n");
       break;
     case MachO::REBASE_OPCODE_ADD_ADDR_IMM_SCALED:
+      SegmentOffset += ImmValue * PointerSize;
       error = O->RebaseEntryCheckSegAndOffsets(SegmentIndex, SegmentOffset,
                                                PointerSize);
       if (error) {
         *E = malformedError("for REBASE_OPCODE_ADD_ADDR_IMM_SCALED " +
                             Twine(error) + " for opcode at: 0x" +
                             Twine::utohexstr(OpcodeStart - Opcodes.begin()));
-        moveToEnd();
-        return;
-      }
-      SegmentOffset += ImmValue * PointerSize;
-      error = O->RebaseEntryCheckSegAndOffsets(SegmentIndex, SegmentOffset,
-                                               PointerSize);
-      if (error) {
-        *E =
-            malformedError("for REBASE_OPCODE_ADD_ADDR_IMM_SCALED "
-                           " (after adding immediate times the pointer size) " +
-                           Twine(error) + " for opcode at: 0x" +
-                           Twine::utohexstr(OpcodeStart - Opcodes.begin()));
         moveToEnd();
         return;
       }
@@ -3794,15 +3797,6 @@ void MachOBindEntry::moveNext() {
         moveToEnd();
         return;
       }
-      error = O->BindEntryCheckSegAndOffsets(SegmentIndex, SegmentOffset,
-                                             PointerSize);
-      if (error) {
-        *E = malformedError("for BIND_OPCODE_DO_BIND_ADD_ADDR_IMM_SCALED " +
-                            Twine(error) + " for opcode at: 0x" +
-                            Twine::utohexstr(OpcodeStart - Opcodes.begin()));
-        moveToEnd();
-        return;
-      }
       if (SymbolName == StringRef()) {
         *E = malformedError(
             "for BIND_OPCODE_DO_BIND_ADD_ADDR_IMM_SCALED "
@@ -3826,11 +3820,9 @@ void MachOBindEntry::moveNext() {
       error = O->BindEntryCheckSegAndOffsets(SegmentIndex, SegmentOffset +
                                              AdvanceAmount, PointerSize);
       if (error) {
-        *E =
-            malformedError("for BIND_OPCODE_DO_BIND_ADD_ADDR_IMM_SCALED "
-                           " (after adding immediate times the pointer size) " +
-                           Twine(error) + " for opcode at: 0x" +
-                           Twine::utohexstr(OpcodeStart - Opcodes.begin()));
+        *E = malformedError("for BIND_OPCODE_DO_BIND_ADD_ADDR_IMM_SCALED " +
+                            Twine(error) + " for opcode at: 0x" +
+                            Twine::utohexstr(OpcodeStart - Opcodes.begin()));
         moveToEnd();
         return;
       }

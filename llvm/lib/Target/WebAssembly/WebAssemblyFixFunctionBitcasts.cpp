@@ -70,6 +70,8 @@ static void findUses(Value *V, Function &F,
   for (Use &U : V->uses()) {
     if (auto *BC = dyn_cast<BitCastOperator>(U.getUser()))
       findUses(BC, F, Uses, ConstantBCs);
+    else if (auto *A = dyn_cast<GlobalAlias>(U.getUser()))
+      findUses(A, F, Uses, ConstantBCs);
     else if (U.get()->getType() != F.getType()) {
       CallSite CS(U.getUser());
       if (!CS)
@@ -242,6 +244,10 @@ bool FixFunctionBitcasts::runOnModule(Module &M) {
 
   // Collect all the places that need wrappers.
   for (Function &F : M) {
+    // Skip to fix when the function is swiftcc because swiftcc allows
+    // bitcast type difference for swiftself and swifterror.
+    if (F.getCallingConv() == CallingConv::Swift)
+      continue;
     findUses(&F, F, Uses, ConstantBCs);
 
     // If we have a "main" function, and its type isn't

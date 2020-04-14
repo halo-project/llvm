@@ -157,7 +157,7 @@ define i2 @v2i8(<2 x i8> %a, <2 x i8> %b) {
 ; SSSE3-LABEL: v2i8:
 ; SSSE3:       # %bb.0:
 ; SSSE3-NEXT:    pcmpgtb %xmm1, %xmm0
-; SSSE3-NEXT:    pshufb {{.*#+}} xmm0 = xmm0[u,u,0,0,u,u,0,0,u,u,1,1,u,u,1,1]
+; SSSE3-NEXT:    pshufb {{.*#+}} xmm0 = xmm0[u,u,u,0,u,u,u,0,u,u,u,1,u,u,u,1]
 ; SSSE3-NEXT:    movmskpd %xmm0, %eax
 ; SSSE3-NEXT:    # kill: def $al killed $al killed $eax
 ; SSSE3-NEXT:    retq
@@ -482,7 +482,6 @@ define i64 @v16i8_widened_with_zeroes(<16 x i8> %a, <16 x i8> %b) {
 ; AVX512F-NEXT:    vpmovsxbd %xmm0, %zmm0
 ; AVX512F-NEXT:    vptestmd %zmm0, %zmm0, %k0
 ; AVX512F-NEXT:    kmovw %k0, %eax
-; AVX512F-NEXT:    movzwl %ax, %eax
 ; AVX512F-NEXT:    vzeroupper
 ; AVX512F-NEXT:    retq
 ;

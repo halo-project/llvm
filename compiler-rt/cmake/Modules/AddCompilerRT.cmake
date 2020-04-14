@@ -1,5 +1,6 @@
 include(ExternalProject)
 include(CompilerRTUtils)
+include(HandleCompilerRT)
 
 function(set_target_output_directories target output_dir)
   # For RUNTIME_OUTPUT_DIRECTORY variable, Multi-configuration generators
@@ -162,6 +163,19 @@ function(add_compiler_rt_runtime name type)
     set(NO_LTO_FLAGS "")
   endif()
 
+  # By default do not instrument or use profdata for compiler-rt.
+  set(NO_PGO_FLAGS "")
+  if(NOT COMPILER_RT_ENABLE_PGO)
+    if(LLVM_PROFDATA_FILE AND COMPILER_RT_HAS_FNO_PROFILE_INSTR_USE_FLAG)
+      list(APPEND NO_PGO_FLAGS "-fno-profile-instr-use")
+    endif()
+    if(LLVM_BUILD_INSTRUMENTED MATCHES IR AND COMPILER_RT_HAS_FNO_PROFILE_GENERATE_FLAG)
+      list(APPEND NO_PGO_FLAGS "-fno-profile-generate")
+    elseif(LLVM_BUILD_INSTRUMENTED AND COMPILER_RT_HAS_FNO_PROFILE_INSTR_GENERATE_FLAG)
+      list(APPEND NO_PGO_FLAGS "-fno-profile-instr-generate")
+    endif()
+  endif()
+
   list(LENGTH LIB_SOURCES LIB_SOURCES_LENGTH)
   if (${LIB_SOURCES_LENGTH} GREATER 0)
     # Add headers to LIB_SOURCES for IDEs. It doesn't make sense to
@@ -190,7 +204,7 @@ function(add_compiler_rt_runtime name type)
       list_intersect(LIB_ARCHS_${libname} DARWIN_${os}_ARCHS LIB_ARCHS)
       if(LIB_ARCHS_${libname})
         list(APPEND libnames ${libname})
-        set(extra_cflags_${libname} ${DARWIN_${os}_CFLAGS} ${NO_LTO_FLAGS} ${LIB_CFLAGS})
+        set(extra_cflags_${libname} ${DARWIN_${os}_CFLAGS} ${NO_LTO_FLAGS} ${NO_PGO_FLAGS} ${LIB_CFLAGS})
         set(output_name_${libname} ${libname}${COMPILER_RT_OS_SUFFIX})
         set(sources_${libname} ${LIB_SOURCES})
         format_object_libs(sources_${libname} ${os} ${LIB_OBJECT_LIBS})
@@ -220,10 +234,14 @@ function(add_compiler_rt_runtime name type)
           set_output_name(output_name_${libname} ${name} ${arch})
         endif()
       endif()
+      if(COMPILER_RT_USE_BUILTINS_LIBRARY AND NOT type STREQUAL "OBJECT")
+        get_compiler_rt_target(${arch} target)
+        find_compiler_rt_library(builtins ${target} builtins_${libname})
+      endif()
       set(sources_${libname} ${LIB_SOURCES})
       format_object_libs(sources_${libname} ${arch} ${LIB_OBJECT_LIBS})
       set(libnames ${libnames} ${libname})
-      set(extra_cflags_${libname} ${TARGET_${arch}_CFLAGS} ${NO_LTO_FLAGS} ${LIB_CFLAGS})
+      set(extra_cflags_${libname} ${TARGET_${arch}_CFLAGS} ${NO_LTO_FLAGS} ${NO_PGO_FLAGS} ${LIB_CFLAGS})
       get_compiler_rt_output_dir(${arch} output_dir_${libname})
       get_compiler_rt_install_dir(${arch} install_dir_${libname})
     endforeach()
@@ -313,6 +331,9 @@ function(add_compiler_rt_runtime name type)
     if(LIB_LINK_LIBS)
       target_link_libraries(${libname} PRIVATE ${LIB_LINK_LIBS})
     endif()
+    if(builtins_${libname})
+      target_link_libraries(${libname} PRIVATE ${builtins_${libname}})
+    endif()
     if(${type} STREQUAL "SHARED")
       if(COMMAND llvm_setup_rpath)
         llvm_setup_rpath(${libname})
@@ -360,7 +381,7 @@ set(COMPILER_RT_UNITTEST_LINK_FLAGS ${COMPILER_RT_UNITTEST_CFLAGS})
 set(COMPILER_RT_GTEST_PATH ${LLVM_MAIN_SRC_DIR}/utils/unittest/googletest)
 set(COMPILER_RT_GTEST_SOURCE ${COMPILER_RT_GTEST_PATH}/src/gtest-all.cc)
 set(COMPILER_RT_GTEST_CFLAGS
-  -DGTEST_NO_LLVM_RAW_OSTREAM=1
+  -DGTEST_NO_LLVM_SUPPORT=1
   -DGTEST_HAS_RTTI=0
   -I${COMPILER_RT_GTEST_PATH}/include
   -I${COMPILER_RT_GTEST_PATH}
@@ -370,7 +391,7 @@ set(COMPILER_RT_GTEST_CFLAGS
 set(COMPILER_RT_GMOCK_PATH ${LLVM_MAIN_SRC_DIR}/utils/unittest/googlemock)
 set(COMPILER_RT_GMOCK_SOURCE ${COMPILER_RT_GMOCK_PATH}/src/gmock-all.cc)
 set(COMPILER_RT_GMOCK_CFLAGS
-  -DGTEST_NO_LLVM_RAW_OSTREAM=1
+  -DGTEST_NO_LLVM_SUPPORT=1
   -DGTEST_HAS_RTTI=0
   -I${COMPILER_RT_GMOCK_PATH}/include
   -I${COMPILER_RT_GMOCK_PATH}
@@ -464,6 +485,11 @@ function(add_compiler_rt_test test_suite test_name arch)
   if(NOT MSVC)
     set(TEST_LINK_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${TEST_LINK_FLAGS}")
     separate_arguments(TEST_LINK_FLAGS)
+  endif()
+  if(NOT COMPILER_RT_STANDALONE_BUILD AND COMPILER_RT_HAS_LLD AND "lld" IN_LIST LLVM_ENABLE_PROJECTS)
+    # CMAKE_EXE_LINKER_FLAGS may contain -fuse=lld
+    # FIXME: -DLLVM_ENABLE_LLD=ON and -DLLVM_ENABLE_PROJECTS without lld case.
+    list(APPEND TEST_DEPS lld)
   endif()
   add_custom_command(
     OUTPUT "${output_bin}"
@@ -618,6 +644,7 @@ macro(add_custom_libcxx name prefix)
     USES_TERMINAL_BUILD 1
     USES_TERMINAL_INSTALL 1
     EXCLUDE_FROM_ALL TRUE
+    BUILD_BYPRODUCTS "${prefix}/lib/libc++.a" "${prefix}/lib/libc++abi.a"
     )
 
   if (CMAKE_GENERATOR MATCHES "Make")

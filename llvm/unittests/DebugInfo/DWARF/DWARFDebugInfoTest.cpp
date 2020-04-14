@@ -2506,7 +2506,7 @@ TEST(DWARFDebugInfo, TestDwarfVerifyCUDontShareLineTable) {
               "offset:");
 }
 
-TEST(DWARFDebugInfo, TestErrorReportingPolicy) {
+TEST(DWARFDebugInfo, TestErrorReporting) {
   Triple Triple("x86_64-pc-linux");
   if (!isConfigurationSupported(Triple))
       return;
@@ -2520,35 +2520,23 @@ TEST(DWARFDebugInfo, TestErrorReportingPolicy) {
   // Emit two compressed sections with broken headers.
   AP->OutStreamer->SwitchSection(
       MC->getELFSection(".zdebug_foo", 0 /*Type*/, 0 /*Flags*/));
-  AP->OutStreamer->EmitBytes("0");
+  AP->OutStreamer->emitBytes("0");
   AP->OutStreamer->SwitchSection(
       MC->getELFSection(".zdebug_bar", 0 /*Type*/, 0 /*Flags*/));
-  AP->OutStreamer->EmitBytes("0");
+  AP->OutStreamer->emitBytes("0");
 
   MemoryBufferRef FileBuffer(DG->generate(), "dwarf");
   auto Obj = object::ObjectFile::createObjectFile(FileBuffer);
   EXPECT_TRUE((bool)Obj);
 
-  // Case 1: error handler handles all errors. That allows
-  // DWARFContext to parse whole file and find both two errors we know about.
+  // DWARFContext parses whole file and finds the two errors we expect.
   int Errors = 0;
   std::unique_ptr<DWARFContext> Ctx1 =
-      DWARFContext::create(**Obj, nullptr, [&](Error E) {
+      DWARFContext::create(**Obj, nullptr, "", [&](Error E) {
         ++Errors;
         consumeError(std::move(E));
-        return ErrorPolicy::Continue;
       });
   EXPECT_TRUE(Errors == 2);
-
-  // Case 2: error handler stops parsing of object after first error.
-  Errors = 0;
-  std::unique_ptr<DWARFContext> Ctx2 =
-      DWARFContext::create(**Obj, nullptr, [&](Error E) {
-        ++Errors;
-        consumeError(std::move(E));
-        return ErrorPolicy::Halt;
-      });
-  EXPECT_TRUE(Errors == 1);
 }
 
 TEST(DWARFDebugInfo, TestDwarfVerifyCURangesIncomplete) {
@@ -3156,6 +3144,48 @@ TEST(DWARFDebugInfo, TestDWARFDieRangeInfoIntersects) {
 
   AssertRangesDontIntersect(Ranges, {{0x20, 0x21}, {0x2f, 0x30}});
   AssertRangesIntersect(Ranges, {{0x20, 0x21}, {0x2f, 0x31}});
+}
+
+TEST(DWARFDebugInfo, TestDWARF64UnitLength) {
+  static const char DebugInfoSecRaw[] =
+      "\xff\xff\xff\xff"                 // DWARF64 mark
+      "\x88\x77\x66\x55\x44\x33\x22\x11" // Length
+      "\x05\x00"                         // Version
+      "\x01"                             // DW_UT_compile
+      "\x04"                             // Address size
+      "\0\0\0\0\0\0\0\0";                // Offset Into Abbrev. Sec.
+  StringMap<std::unique_ptr<MemoryBuffer>> Sections;
+  Sections.insert(std::make_pair(
+      "debug_info", MemoryBuffer::getMemBuffer(StringRef(
+                        DebugInfoSecRaw, sizeof(DebugInfoSecRaw) - 1))));
+  auto Context = DWARFContext::create(Sections, /* AddrSize = */ 4,
+                                      /* isLittleEndian = */ true);
+  const auto &Obj = Context->getDWARFObj();
+  Obj.forEachInfoSections([&](const DWARFSection &Sec) {
+    DWARFUnitHeader Header;
+    DWARFDataExtractor Data(Obj, Sec, /* IsLittleEndian = */ true,
+                            /* AddressSize = */ 4);
+    uint64_t Offset = 0;
+    EXPECT_FALSE(Header.extract(*Context, Data, &Offset, DW_SECT_INFO));
+    // Header.extract() returns false because there is not enough space
+    // in the section for the declared length. Anyway, we can check that
+    // the properties are read correctly.
+    ASSERT_EQ(DwarfFormat::DWARF64, Header.getFormat());
+    ASSERT_EQ(0x1122334455667788ULL, Header.getLength());
+    ASSERT_EQ(5, Header.getVersion());
+    ASSERT_EQ(DW_UT_compile, Header.getUnitType());
+    ASSERT_EQ(4, Header.getAddressByteSize());
+
+    // Check that the length can be correctly read in the unit class.
+    DWARFUnitVector DummyUnitVector;
+    DWARFSection DummySec;
+    DWARFCompileUnit CU(*Context, Sec, Header, /* DA = */ 0, /* RS = */ 0,
+                        /* LocSection = */ 0, /* SS = */ StringRef(),
+                        /* SOS = */ DummySec, /* AOS = */ 0,
+                        /* LS = */ DummySec, /* LE = */ true,
+                        /* isDWO= */ false, DummyUnitVector);
+    ASSERT_EQ(0x1122334455667788ULL, CU.getLength());
+  });
 }
 
 } // end anonymous namespace

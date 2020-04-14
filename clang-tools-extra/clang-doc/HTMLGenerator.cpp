@@ -278,7 +278,7 @@ genStylesheetsHTML(StringRef InfoPath, const ClangDocContext &CDCtx) {
                             llvm::sys::path::filename(FilePath));
     // Paths in HTML must be in posix-style
     llvm::sys::path::native(StylesheetPath, llvm::sys::path::Style::posix);
-    LinkNode->Attributes.emplace_back("href", StylesheetPath.str());
+    LinkNode->Attributes.emplace_back("href", std::string(StylesheetPath.str()));
     Out.emplace_back(std::move(LinkNode));
   }
   return Out;
@@ -293,7 +293,7 @@ genJsScriptsHTML(StringRef InfoPath, const ClangDocContext &CDCtx) {
     llvm::sys::path::append(ScriptPath, llvm::sys::path::filename(FilePath));
     // Paths in HTML must be in posix-style
     llvm::sys::path::native(ScriptPath, llvm::sys::path::Style::posix);
-    ScriptNode->Attributes.emplace_back("src", ScriptPath.str());
+    ScriptNode->Attributes.emplace_back("src", std::string(ScriptPath.str()));
     Out.emplace_back(std::move(ScriptNode));
   }
   return Out;
@@ -314,9 +314,9 @@ genReference(const Reference &Type, StringRef CurrentDirectory,
     else
       return genLink(Type.Name, "#" + JumpToSection.getValue());
   }
-  llvm::SmallString<128> Path =
-      computeRelativePath(Type.Path, CurrentDirectory);
-  llvm::sys::path::append(Path, Type.Name + ".html");
+  llvm::SmallString<64> Path = Type.getRelativeFilePath(CurrentDirectory);
+  llvm::sys::path::append(Path, Type.getFileBaseName() + ".html");
+
   // Paths in HTML must be in posix-style
   llvm::sys::path::native(Path, llvm::sys::path::Style::posix);
   if (JumpToSection)
@@ -422,7 +422,7 @@ genReferencesBlock(const std::vector<Reference> &References,
 
   std::vector<std::unique_ptr<TagNode>> Out;
   Out.emplace_back(std::make_unique<TagNode>(HTMLTag::TAG_H2, Title));
-  Out.back()->Attributes.emplace_back("id", Title);
+  Out.back()->Attributes.emplace_back("id", std::string(Title));
   Out.emplace_back(std::make_unique<TagNode>(HTMLTag::TAG_UL));
   auto &ULBody = Out.back();
   for (const auto &R : References) {
@@ -454,7 +454,7 @@ writeFileDefinition(const Location &L,
   Node->Children.emplace_back(std::make_unique<TextNode>(" of file "));
   auto LocFileNode = std::make_unique<TagNode>(
       HTMLTag::TAG_A, llvm::sys::path::filename(FileURL));
-  LocFileNode->Attributes.emplace_back("href", FileURL.str());
+  LocFileNode->Attributes.emplace_back("href", std::string(FileURL.str()));
   Node->Children.emplace_back(std::move(LocFileNode));
   return Node;
 }
@@ -502,7 +502,7 @@ static std::unique_ptr<TagNode> genInfoFileMainNode(
 
   auto LeftSidebarNode = std::make_unique<TagNode>(HTMLTag::TAG_DIV);
   LeftSidebarNode->Attributes.emplace_back("id", "sidebar-left");
-  LeftSidebarNode->Attributes.emplace_back("path", InfoPath);
+  LeftSidebarNode->Attributes.emplace_back("path", std::string(InfoPath));
   LeftSidebarNode->Attributes.emplace_back(
       "class", "col-xs-6 col-sm-3 col-md-2 sidebar sidebar-offcanvas-left");
 
@@ -730,15 +730,17 @@ genHTML(const NamespaceInfo &I, Index &InfoIndex, const ClangDocContext &CDCtx,
   if (!I.Description.empty())
     Out.emplace_back(genHTML(I.Description));
 
+  llvm::SmallString<64> BasePath = I.getRelativeFilePath("");
+
   std::vector<std::unique_ptr<TagNode>> ChildNamespaces =
-      genReferencesBlock(I.ChildNamespaces, "Namespaces", I.Path);
+      genReferencesBlock(I.ChildNamespaces, "Namespaces", BasePath);
   AppendVector(std::move(ChildNamespaces), Out);
   std::vector<std::unique_ptr<TagNode>> ChildRecords =
-      genReferencesBlock(I.ChildRecords, "Records", I.Path);
+      genReferencesBlock(I.ChildRecords, "Records", BasePath);
   AppendVector(std::move(ChildRecords), Out);
 
   std::vector<std::unique_ptr<TagNode>> ChildFunctions =
-      genFunctionsBlock(I.ChildFunctions, CDCtx, I.Path);
+      genFunctionsBlock(I.ChildFunctions, CDCtx, BasePath);
   AppendVector(std::move(ChildFunctions), Out);
   std::vector<std::unique_ptr<TagNode>> ChildEnums =
       genEnumsBlock(I.ChildEnums, CDCtx);
@@ -829,7 +831,7 @@ public:
 
   llvm::Error generateDocForInfo(Info *I, llvm::raw_ostream &OS,
                                  const ClangDocContext &CDCtx) override;
-  bool createResources(ClangDocContext &CDCtx) override;
+  llvm::Error createResources(ClangDocContext &CDCtx) override;
 };
 
 const char *HTMLGenerator::Format = "html";
@@ -856,12 +858,12 @@ llvm::Error HTMLGenerator::generateDocForInfo(Info *I, llvm::raw_ostream &OS,
         genHTML(*static_cast<clang::doc::FunctionInfo *>(I), CDCtx, "");
     break;
   case InfoType::IT_default:
-    return llvm::make_error<llvm::StringError>("Unexpected info type.\n",
-                                               llvm::inconvertibleErrorCode());
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   "unexpected info type");
   }
 
-  HTMLFile F =
-      genInfoFile(InfoTitle, I->Path, MainContentNodes, InfoIndex, CDCtx);
+  HTMLFile F = genInfoFile(InfoTitle, I->getRelativeFilePath(""),
+                           MainContentNodes, InfoIndex, CDCtx);
   F.Render(OS);
 
   return llvm::Error::success();
@@ -883,16 +885,17 @@ static std::string getRefType(InfoType IT) {
   llvm_unreachable("Unknown InfoType");
 }
 
-static bool SerializeIndex(ClangDocContext &CDCtx) {
+static llvm::Error SerializeIndex(ClangDocContext &CDCtx) {
   std::error_code OK;
   std::error_code FileErr;
   llvm::SmallString<128> FilePath;
   llvm::sys::path::native(CDCtx.OutDirectory, FilePath);
   llvm::sys::path::append(FilePath, "index_json.js");
-  llvm::raw_fd_ostream OS(FilePath, FileErr, llvm::sys::fs::F_None);
+  llvm::raw_fd_ostream OS(FilePath, FileErr, llvm::sys::fs::OF_None);
   if (FileErr != OK) {
-    llvm::errs() << "Error creating index file: " << FileErr.message() << "\n";
-    return false;
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   "error creating index file: " +
+                                       FileErr.message());
   }
   CDCtx.Idx.sort();
   llvm::json::OStream J(OS, 2);
@@ -901,7 +904,7 @@ static bool SerializeIndex(ClangDocContext &CDCtx) {
       J.attribute("USR", toHex(llvm::toStringRef(I.USR)));
       J.attribute("Name", I.Name);
       J.attribute("RefType", getRefType(I.RefType));
-      J.attribute("Path", I.Path);
+      J.attribute("Path", I.getRelativeFilePath(""));
       J.attributeArray("Children", [&] {
         for (const Index &C : I.Children)
           IndexToJSON(C);
@@ -911,7 +914,7 @@ static bool SerializeIndex(ClangDocContext &CDCtx) {
   OS << "var JsonIndex = `\n";
   IndexToJSON(CDCtx.Idx);
   OS << "`;\n";
-  return true;
+  return llvm::Error::success();
 }
 
 // Generates a main HTML node that has the main content of the file that shows
@@ -932,15 +935,16 @@ static std::unique_ptr<TagNode> genIndexFileMainNode() {
   return MainNode;
 }
 
-static bool GenIndex(const ClangDocContext &CDCtx) {
+static llvm::Error GenIndex(const ClangDocContext &CDCtx) {
   std::error_code FileErr, OK;
   llvm::SmallString<128> IndexPath;
   llvm::sys::path::native(CDCtx.OutDirectory, IndexPath);
   llvm::sys::path::append(IndexPath, "index.html");
-  llvm::raw_fd_ostream IndexOS(IndexPath, FileErr, llvm::sys::fs::F_None);
+  llvm::raw_fd_ostream IndexOS(IndexPath, FileErr, llvm::sys::fs::OF_None);
   if (FileErr != OK) {
-    llvm::errs() << "Error creating main index: " << FileErr.message() << "\n";
-    return false;
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   "error creating main index: " +
+                                       FileErr.message());
   }
 
   HTMLFile F;
@@ -958,10 +962,10 @@ static bool GenIndex(const ClangDocContext &CDCtx) {
 
   F.Render(IndexOS);
 
-  return true;
+  return llvm::Error::success();
 }
 
-static bool CopyFile(StringRef FilePath, StringRef OutDirectory) {
+static llvm::Error CopyFile(StringRef FilePath, StringRef OutDirectory) {
   llvm::SmallString<128> PathWrite;
   llvm::sys::path::native(OutDirectory, PathWrite);
   llvm::sys::path::append(PathWrite, llvm::sys::path::filename(FilePath));
@@ -970,24 +974,33 @@ static bool CopyFile(StringRef FilePath, StringRef OutDirectory) {
   std::error_code OK;
   std::error_code FileErr = llvm::sys::fs::copy_file(PathRead, PathWrite);
   if (FileErr != OK) {
-    llvm::errs() << "Error creating file "
-                 << llvm::sys::path::filename(FilePath) << ": "
-                 << FileErr.message() << "\n";
-    return false;
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   "error creating file " +
+                                       llvm::sys::path::filename(FilePath) +
+                                       ": " + FileErr.message() + "\n");
   }
-  return true;
+  return llvm::Error::success();
 }
 
-bool HTMLGenerator::createResources(ClangDocContext &CDCtx) {
-  if (!SerializeIndex(CDCtx) || !GenIndex(CDCtx))
-    return false;
-  for (const auto &FilePath : CDCtx.UserStylesheets)
-    if (!CopyFile(FilePath, CDCtx.OutDirectory))
-      return false;
-  for (const auto &FilePath : CDCtx.FilesToCopy)
-    if (!CopyFile(FilePath, CDCtx.OutDirectory))
-      return false;
-  return true;
+llvm::Error HTMLGenerator::createResources(ClangDocContext &CDCtx) {
+  auto Err = SerializeIndex(CDCtx);
+  if (Err)
+    return Err;
+  Err = GenIndex(CDCtx);
+  if (Err)
+    return Err;
+
+  for (const auto &FilePath : CDCtx.UserStylesheets) {
+    Err = CopyFile(FilePath, CDCtx.OutDirectory);
+    if (Err)
+      return Err;
+  }
+  for (const auto &FilePath : CDCtx.FilesToCopy) {
+    Err = CopyFile(FilePath, CDCtx.OutDirectory);
+    if (Err)
+      return Err;
+  }
+  return llvm::Error::success();
 }
 
 static GeneratorRegistry::Add<HTMLGenerator> HTML(HTMLGenerator::Format,

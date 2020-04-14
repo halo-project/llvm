@@ -10,6 +10,7 @@
 
 #define TESTING_CXA_GUARD
 #include "../src/cxa_guard_impl.h"
+#include <cassert>
 
 using namespace __cxxabiv1;
 
@@ -126,7 +127,7 @@ int main() {
 #endif
   }
   {
-#if defined(__APPLE__) || defined(__linux__)
+#if (defined(__APPLE__) || defined(__linux__))  && !defined(_LIBCXXABI_HAS_NO_THREADS)
     assert(PlatformThreadID);
 #endif
     if (PlatformSupportsThreadID()) {

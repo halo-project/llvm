@@ -12,19 +12,12 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/Threading.h"
 
 #include <algorithm>
 #include <condition_variable>
 #include <functional>
 #include <mutex>
-
-#if defined(_MSC_VER) && LLVM_ENABLE_THREADS
-#pragma warning(push)
-#pragma warning(disable : 4530)
-#include <concrt.h>
-#include <ppl.h>
-#pragma warning(pop)
-#endif
 
 namespace llvm {
 
@@ -40,6 +33,11 @@ struct is_execution_policy
 
 constexpr sequential_execution_policy seq{};
 constexpr parallel_execution_policy par{};
+
+// Strategy for the default executor used by the parallel routines provided by
+// this file. It defaults to using all hardware threads and should be
+// initialized before the first use of parallel routines.
+extern ThreadPoolStrategy strategy;
 
 namespace detail {
 
@@ -84,23 +82,6 @@ public:
   void sync() const { L.sync(); }
 };
 
-#if defined(_MSC_VER)
-template <class RandomAccessIterator, class Comparator>
-void parallel_sort(RandomAccessIterator Start, RandomAccessIterator End,
-                   const Comparator &Comp) {
-  concurrency::parallel_sort(Start, End, Comp);
-}
-template <class IterTy, class FuncTy>
-void parallel_for_each(IterTy Begin, IterTy End, FuncTy Fn) {
-  concurrency::parallel_for_each(Begin, End, Fn);
-}
-
-template <class IndexTy, class FuncTy>
-void parallel_for_each_n(IndexTy Begin, IndexTy End, FuncTy Fn) {
-  concurrency::parallel_for(Begin, End, Fn);
-}
-
-#else
 const ptrdiff_t MinParallelSize = 1024;
 
 /// Inclusive median.
@@ -185,8 +166,6 @@ void parallel_for_each_n(IndexTy Begin, IndexTy End, FuncTy Fn) {
   for (IndexTy J = I; J < End; ++J)
     Fn(J);
 }
-
-#endif
 
 #endif
 

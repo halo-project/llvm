@@ -7,14 +7,18 @@
 //===-------------------------------------------------------------------===//
 
 #include "ClangdServer.h"
-#include "ClangdUnit.h"
 #include "CodeComplete.h"
 #include "FindSymbols.h"
 #include "Format.h"
 #include "FormattedString.h"
+#include "HeaderSourceSwitch.h"
 #include "Headers.h"
+#include "Logger.h"
+#include "ParsedAST.h"
+#include "Preamble.h"
 #include "Protocol.h"
 #include "SemanticHighlighting.h"
+#include "SemanticSelection.h"
 #include "SourceCode.h"
 #include "TUScheduler.h"
 #include "Trace.h"
@@ -52,16 +56,17 @@ namespace {
 
 // Update the FileIndex with new ASTs and plumb the diagnostics responses.
 struct UpdateIndexCallbacks : public ParsingCallbacks {
-  UpdateIndexCallbacks(FileIndex *FIndex, DiagnosticsConsumer &DiagConsumer,
-                       bool SemanticHighlighting)
-      : FIndex(FIndex), DiagConsumer(DiagConsumer),
-        SemanticHighlighting(SemanticHighlighting) {}
+  UpdateIndexCallbacks(FileIndex *FIndex,
+                       ClangdServer::Callbacks *ServerCallbacks,
+                       bool TheiaSemanticHighlighting)
+      : FIndex(FIndex), ServerCallbacks(ServerCallbacks),
+        TheiaSemanticHighlighting(TheiaSemanticHighlighting) {}
 
-  void onPreambleAST(PathRef Path, ASTContext &Ctx,
+  void onPreambleAST(PathRef Path, llvm::StringRef Version, ASTContext &Ctx,
                      std::shared_ptr<clang::Preprocessor> PP,
                      const CanonicalIncludes &CanonIncludes) override {
     if (FIndex)
-      FIndex->updatePreamble(Path, Ctx, std::move(PP), CanonIncludes);
+      FIndex->updatePreamble(Path, Version, Ctx, std::move(PP), CanonIncludes);
   }
 
   void onMainAST(PathRef Path, ParsedAST &AST, PublishFn Publish) override {
@@ -70,66 +75,76 @@ struct UpdateIndexCallbacks : public ParsingCallbacks {
 
     std::vector<Diag> Diagnostics = AST.getDiagnostics();
     std::vector<HighlightingToken> Highlightings;
-    if (SemanticHighlighting)
+    if (TheiaSemanticHighlighting)
       Highlightings = getSemanticHighlightings(AST);
 
-    // FIXME: We need a better way to send the maximum line number to the
-    // differ.
-    // The differ needs the information about the max number of lines
-    // to not send diffs that are outside the file.
-    const SourceManager &SM = AST.getSourceManager();
-    FileID MainFileID = SM.getMainFileID();
-    int NumLines = SM.getBufferData(MainFileID).count('\n') + 1;
+    if (ServerCallbacks)
+      Publish([&]() {
+        ServerCallbacks->onDiagnosticsReady(Path, AST.version(),
+                                            std::move(Diagnostics));
+        if (TheiaSemanticHighlighting)
+          ServerCallbacks->onHighlightingsReady(Path, AST.version(),
+                                                std::move(Highlightings));
+      });
+  }
 
-    Publish([&]() {
-      DiagConsumer.onDiagnosticsReady(Path, std::move(Diagnostics));
-      if (SemanticHighlighting)
-        DiagConsumer.onHighlightingsReady(Path, std::move(Highlightings),
-                                          NumLines);
-    });
+  void onFailedAST(PathRef Path, llvm::StringRef Version,
+                   std::vector<Diag> Diags, PublishFn Publish) override {
+    if (ServerCallbacks)
+      Publish(
+          [&]() { ServerCallbacks->onDiagnosticsReady(Path, Version, Diags); });
   }
 
   void onFileUpdated(PathRef File, const TUStatus &Status) override {
-    DiagConsumer.onFileUpdated(File, Status);
+    if (ServerCallbacks)
+      ServerCallbacks->onFileUpdated(File, Status);
   }
 
 private:
   FileIndex *FIndex;
-  DiagnosticsConsumer &DiagConsumer;
-  bool SemanticHighlighting;
+  ClangdServer::Callbacks *ServerCallbacks;
+  bool TheiaSemanticHighlighting;
 };
 } // namespace
 
 ClangdServer::Options ClangdServer::optsForTest() {
   ClangdServer::Options Opts;
-  Opts.UpdateDebounce = std::chrono::steady_clock::duration::zero(); // Faster!
+  Opts.UpdateDebounce = DebouncePolicy::fixed(/*zero*/ {});
   Opts.StorePreamblesInMemory = true;
   Opts.AsyncThreadsCount = 4; // Consistent!
-  Opts.SemanticHighlighting = true;
+  Opts.TheiaSemanticHighlighting = true;
+  return Opts;
+}
+
+ClangdServer::Options::operator TUScheduler::Options() const {
+  TUScheduler::Options Opts;
+  Opts.AsyncThreadsCount = AsyncThreadsCount;
+  Opts.RetentionPolicy = RetentionPolicy;
+  Opts.StorePreamblesInMemory = StorePreamblesInMemory;
+  Opts.UpdateDebounce = UpdateDebounce;
   return Opts;
 }
 
 ClangdServer::ClangdServer(const GlobalCompilationDatabase &CDB,
                            const FileSystemProvider &FSProvider,
-                           DiagnosticsConsumer &DiagConsumer,
-                           const Options &Opts)
+                           const Options &Opts, Callbacks *Callbacks)
     : FSProvider(FSProvider),
       DynamicIdx(Opts.BuildDynamicSymbolIndex
                      ? new FileIndex(Opts.HeavyweightDynamicSymbolIndex)
                      : nullptr),
       GetClangTidyOptions(Opts.GetClangTidyOptions),
       SuggestMissingIncludes(Opts.SuggestMissingIncludes),
-      TweakFilter(Opts.TweakFilter), WorkspaceRoot(Opts.WorkspaceRoot),
+      BuildRecoveryAST(Opts.BuildRecoveryAST), TweakFilter(Opts.TweakFilter),
+      WorkspaceRoot(Opts.WorkspaceRoot),
       // Pass a callback into `WorkScheduler` to extract symbols from a newly
       // parsed file and rebuild the file index synchronously each time an AST
       // is parsed.
       // FIXME(ioeric): this can be slow and we may be able to index on less
       // critical paths.
       WorkScheduler(
-          CDB, Opts.AsyncThreadsCount, Opts.StorePreamblesInMemory,
+          CDB, TUScheduler::Options(Opts),
           std::make_unique<UpdateIndexCallbacks>(
-              DynamicIdx.get(), DiagConsumer, Opts.SemanticHighlighting),
-          Opts.UpdateDebounce, Opts.RetentionPolicy) {
+              DynamicIdx.get(), Callbacks, Opts.TheiaSemanticHighlighting)) {
   // Adds an index to the stack, at higher priority than existing indexes.
   auto AddIndex = [&](SymbolIndex *Idx) {
     if (this->Index != nullptr) {
@@ -146,7 +161,11 @@ ClangdServer::ClangdServer(const GlobalCompilationDatabase &CDB,
         Context::current().clone(), FSProvider, CDB,
         BackgroundIndexStorage::createDiskBackedStorageFactory(
             [&CDB](llvm::StringRef File) { return CDB.getProjectInfo(File); }),
-        std::max(Opts.AsyncThreadsCount, 1u));
+        std::max(Opts.AsyncThreadsCount, 1u),
+        [Callbacks](BackgroundQueue::Stats S) {
+          if (Callbacks)
+            Callbacks->onBackgroundIndexProgress(S);
+        });
     AddIndex(BackgroundIdx.get());
   }
   if (DynamicIdx)
@@ -154,7 +173,8 @@ ClangdServer::ClangdServer(const GlobalCompilationDatabase &CDB,
 }
 
 void ClangdServer::addDocument(PathRef File, llvm::StringRef Contents,
-                               WantDiagnostics WantDiags) {
+                               llvm::StringRef Version,
+                               WantDiagnostics WantDiags, bool ForceRebuild) {
   auto FS = FSProvider.getFileSystem();
 
   ParseOptions Opts;
@@ -167,9 +187,12 @@ void ClangdServer::addDocument(PathRef File, llvm::StringRef Contents,
   // Compile command is set asynchronously during update, as it can be slow.
   ParseInputs Inputs;
   Inputs.FS = FS;
-  Inputs.Contents = Contents;
+  Inputs.Contents = std::string(Contents);
+  Inputs.Version = Version.str();
+  Inputs.ForceRebuild = ForceRebuild;
   Inputs.Opts = std::move(Opts);
   Inputs.Index = Index;
+  Inputs.Opts.BuildRecoveryAST = BuildRecoveryAST;
   bool NewFile = WorkScheduler.update(File, Inputs, WantDiags);
   // If we loaded Foo.h, we want to make sure Foo.cpp is indexed.
   if (NewFile && BackgroundIdx)
@@ -177,10 +200,6 @@ void ClangdServer::addDocument(PathRef File, llvm::StringRef Contents,
 }
 
 void ClangdServer::removeDocument(PathRef File) { WorkScheduler.remove(File); }
-
-llvm::StringRef ClangdServer::getDocument(PathRef File) const {
-  return WorkScheduler.getContents(File);
-}
 
 void ClangdServer::codeComplete(PathRef File, Position Pos,
                                 const clangd::CodeCompleteOptions &Opts,
@@ -195,8 +214,8 @@ void ClangdServer::codeComplete(PathRef File, Position Pos,
                this](llvm::Expected<InputsAndPreamble> IP) mutable {
     if (!IP)
       return CB(IP.takeError());
-    if (isCancelled())
-      return CB(llvm::make_error<CancelledError>());
+    if (auto Reason = isCancelled())
+      return CB(llvm::make_error<CancelledError>(Reason));
 
     llvm::Optional<SpeculativeFuzzyFind> SpecFuzzyFind;
     if (!IP->Preamble) {
@@ -252,9 +271,13 @@ void ClangdServer::signatureHelp(PathRef File, Position Pos,
     if (!IP)
       return CB(IP.takeError());
 
-    auto PreambleData = IP->Preamble;
-    CB(clangd::signatureHelp(File, IP->Command, PreambleData, IP->Contents, Pos,
-                             FS, Index));
+    const auto *PreambleData = IP->Preamble;
+    if (!PreambleData)
+      return CB(llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                        "Failed to parse includes"));
+
+    CB(clangd::signatureHelp(File, IP->Command, *PreambleData, IP->Contents,
+                             Pos, FS, Index));
   };
 
   // Unlike code completion, we wait for an up-to-date preamble here.
@@ -302,64 +325,85 @@ ClangdServer::formatOnType(llvm::StringRef Code, PathRef File, Position Pos,
 }
 
 void ClangdServer::prepareRename(PathRef File, Position Pos,
+                                 const RenameOptions &RenameOpts,
                                  Callback<llvm::Optional<Range>> CB) {
-  auto Action = [Pos, File = File.str(), CB = std::move(CB),
+  auto Action = [Pos, File = File.str(), CB = std::move(CB), RenameOpts,
                  this](llvm::Expected<InputsAndAST> InpAST) mutable {
     if (!InpAST)
       return CB(InpAST.takeError());
     auto &AST = InpAST->AST;
-    // Performing the rename isn't substantially more expensive than doing an
-    // AST-based check, so we just rename and throw away the results. We may
-    // have to revisit this when we support cross-file rename.
-    auto Changes = renameWithinFile(AST, File, Pos, "dummy", Index);
+    const auto &SM = AST.getSourceManager();
+    auto Loc = sourceLocationInMainFile(SM, Pos);
+    if (!Loc)
+      return CB(Loc.takeError());
+    const auto *TouchingIdentifier =
+        spelledIdentifierTouching(*Loc, AST.getTokens());
+    if (!TouchingIdentifier)
+      return CB(llvm::None); // no rename on non-identifiers.
+
+    auto Range = halfOpenToRange(
+        SM, CharSourceRange::getCharRange(TouchingIdentifier->location(),
+                                          TouchingIdentifier->endLocation()));
+
+    if (RenameOpts.AllowCrossFile)
+      // FIXME: we now assume cross-file rename always succeeds, revisit this.
+      return CB(Range);
+
+    // Performing the local rename isn't substantially more expensive than
+    // doing an AST-based check, so we just rename and throw away the results.
+    auto Changes = clangd::rename({Pos, "dummy", AST, File, Index, RenameOpts,
+                                   /*GetDirtyBuffer=*/nullptr});
     if (!Changes) {
       // LSP says to return null on failure, but that will result in a generic
       // failure message. If we send an LSP error response, clients can surface
       // the message to users (VSCode does).
       return CB(Changes.takeError());
     }
-    SourceLocation Loc = getBeginningOfIdentifier(
-        AST, Pos, AST.getSourceManager().getMainFileID());
-    if (auto Range = getTokenRange(AST.getSourceManager(),
-                                   AST.getASTContext().getLangOpts(), Loc))
-      return CB(*Range);
-    // Return null if the "rename" is not valid at the position.
-    CB(llvm::None);
+    return CB(Range);
   };
   WorkScheduler.runWithAST("PrepareRename", File, std::move(Action));
 }
 
 void ClangdServer::rename(PathRef File, Position Pos, llvm::StringRef NewName,
-                          bool WantFormat, Callback<std::vector<TextEdit>> CB) {
-  auto Action = [File = File.str(), NewName = NewName.str(), Pos, WantFormat,
-                 CB = std::move(CB),
+                          const RenameOptions &Opts, Callback<FileEdits> CB) {
+  // A snapshot of all file dirty buffers.
+  llvm::StringMap<std::string> Snapshot = WorkScheduler.getAllFileContents();
+  auto Action = [File = File.str(), NewName = NewName.str(), Pos, Opts,
+                 CB = std::move(CB), Snapshot = std::move(Snapshot),
                  this](llvm::Expected<InputsAndAST> InpAST) mutable {
     if (!InpAST)
       return CB(InpAST.takeError());
-    auto Changes = renameWithinFile(InpAST->AST, File, Pos, NewName, Index);
-    if (!Changes)
-      return CB(Changes.takeError());
+    auto GetDirtyBuffer =
+        [&Snapshot](PathRef AbsPath) -> llvm::Optional<std::string> {
+      auto It = Snapshot.find(AbsPath);
+      if (It == Snapshot.end())
+        return llvm::None;
+      return It->second;
+    };
+    auto Edits = clangd::rename(
+        {Pos, NewName, InpAST->AST, File, Index, Opts, GetDirtyBuffer});
+    if (!Edits)
+      return CB(Edits.takeError());
 
-    if (WantFormat) {
+    if (Opts.WantFormat) {
       auto Style = getFormatStyleForFile(File, InpAST->Inputs.Contents,
                                          InpAST->Inputs.FS.get());
-      if (auto Formatted =
-              cleanupAndFormat(InpAST->Inputs.Contents, *Changes, Style))
-        *Changes = std::move(*Formatted);
-      else
-        elog("Failed to format replacements: {0}", Formatted.takeError());
+      llvm::Error Err = llvm::Error::success();
+      for (auto &E : *Edits)
+        Err =
+            llvm::joinErrors(reformatEdit(E.getValue(), Style), std::move(Err));
+
+      if (Err)
+        return CB(std::move(Err));
     }
-
-    std::vector<TextEdit> Edits;
-    for (const auto &Rep : *Changes)
-      Edits.push_back(replacementToEdit(InpAST->Inputs.Contents, Rep));
-    return CB(std::move(Edits));
+    return CB(std::move(*Edits));
   };
-
   WorkScheduler.runWithAST("Rename", File, std::move(Action));
 }
 
-static llvm::Expected<Tweak::Selection>
+// May generate several candidate selections, due to SelectionTree ambiguity.
+// vector of pointers because GCC doesn't like non-copyable Selection.
+static llvm::Expected<std::vector<std::unique_ptr<Tweak::Selection>>>
 tweakSelection(const Range &Sel, const InputsAndAST &AST) {
   auto Begin = positionToOffset(AST.Inputs.Contents, Sel.start);
   if (!Begin)
@@ -367,7 +411,16 @@ tweakSelection(const Range &Sel, const InputsAndAST &AST) {
   auto End = positionToOffset(AST.Inputs.Contents, Sel.end);
   if (!End)
     return End.takeError();
-  return Tweak::Selection(AST.AST, *Begin, *End);
+  std::vector<std::unique_ptr<Tweak::Selection>> Result;
+  SelectionTree::createEach(
+      AST.AST.getASTContext(), AST.AST.getTokens(), *Begin, *End,
+      [&](SelectionTree T) {
+        Result.push_back(std::make_unique<Tweak::Selection>(
+            AST.Inputs.Index, AST.AST, *Begin, *End, std::move(T)));
+        return false;
+      });
+  assert(!Result.empty() && "Expected at least one SelectionTree");
+  return std::move(Result);
 }
 
 void ClangdServer::enumerateTweaks(PathRef File, Range Sel,
@@ -376,47 +429,63 @@ void ClangdServer::enumerateTweaks(PathRef File, Range Sel,
                  this](Expected<InputsAndAST> InpAST) mutable {
     if (!InpAST)
       return CB(InpAST.takeError());
-    auto Selection = tweakSelection(Sel, *InpAST);
-    if (!Selection)
-      return CB(Selection.takeError());
+    auto Selections = tweakSelection(Sel, *InpAST);
+    if (!Selections)
+      return CB(Selections.takeError());
     std::vector<TweakRef> Res;
-    for (auto &T : prepareTweaks(*Selection, TweakFilter))
-      Res.push_back({T->id(), T->title(), T->intent()});
+    // Don't allow a tweak to fire more than once across ambiguous selections.
+    llvm::DenseSet<llvm::StringRef> PreparedTweaks;
+    auto Filter = [&](const Tweak &T) {
+      return TweakFilter(T) && !PreparedTweaks.count(T.id());
+    };
+    for (const auto &Sel : *Selections) {
+      for (auto &T : prepareTweaks(*Sel, Filter)) {
+        Res.push_back({T->id(), T->title(), T->intent()});
+        PreparedTweaks.insert(T->id());
+      }
+    }
 
     CB(std::move(Res));
   };
 
-  WorkScheduler.runWithAST("EnumerateTweaks", File, std::move(Action));
+  WorkScheduler.runWithAST("EnumerateTweaks", File, std::move(Action),
+                           TUScheduler::InvalidateOnUpdate);
 }
 
 void ClangdServer::applyTweak(PathRef File, Range Sel, StringRef TweakID,
                               Callback<Tweak::Effect> CB) {
-  auto Action = [File = File.str(), Sel, TweakID = TweakID.str(),
-                 CB = std::move(CB)](Expected<InputsAndAST> InpAST) mutable {
-    if (!InpAST)
-      return CB(InpAST.takeError());
-    auto Selection = tweakSelection(Sel, *InpAST);
-    if (!Selection)
-      return CB(Selection.takeError());
-    auto A = prepareTweak(TweakID, *Selection);
-    if (!A)
-      return CB(A.takeError());
-    auto Effect = (*A)->apply(*Selection);
-    if (!Effect)
-      return CB(Effect.takeError());
-    if (Effect->ApplyEdit) {
-      // FIXME: this function has I/O operations (find .clang-format file),
-      // figure out a way to cache the format style.
-      auto Style = getFormatStyleForFile(File, InpAST->Inputs.Contents,
-                                         InpAST->Inputs.FS.get());
-      if (auto Formatted = cleanupAndFormat(InpAST->Inputs.Contents,
-                                            *Effect->ApplyEdit, Style))
-        Effect->ApplyEdit = std::move(*Formatted);
-      else
-        elog("Failed to format replacements: {0}", Formatted.takeError());
-    }
-    return CB(std::move(*Effect));
-  };
+  auto Action =
+      [File = File.str(), Sel, TweakID = TweakID.str(), CB = std::move(CB),
+       FS = FSProvider.getFileSystem()](Expected<InputsAndAST> InpAST) mutable {
+        if (!InpAST)
+          return CB(InpAST.takeError());
+        auto Selections = tweakSelection(Sel, *InpAST);
+        if (!Selections)
+          return CB(Selections.takeError());
+        llvm::Optional<llvm::Expected<Tweak::Effect>> Effect;
+        // Try each selection, take the first one that prepare()s.
+        // If they all fail, Effect will hold get the last error.
+        for (const auto &Selection : *Selections) {
+          auto T = prepareTweak(TweakID, *Selection);
+          if (T) {
+            Effect = (*T)->apply(*Selection);
+            break;
+          }
+          Effect = T.takeError();
+        }
+        assert(Effect.hasValue() && "Expected at least one selection");
+        if (*Effect) {
+          // Tweaks don't apply clang-format, do that centrally here.
+          for (auto &It : (*Effect)->ApplyEdits) {
+            Edit &E = It.second;
+            format::FormatStyle Style =
+                getFormatStyleForFile(File, E.InitialCode, FS.get());
+            if (llvm::Error Err = reformatEdit(E, Style))
+              elog("Failed to format {0}: {1}", It.first(), std::move(Err));
+          }
+        }
+        return CB(std::move(*Effect));
+      };
   WorkScheduler.runWithAST("ApplyTweak", File, std::move(Action));
 }
 
@@ -452,61 +521,24 @@ void ClangdServer::locateSymbolAt(PathRef File, Position Pos,
   WorkScheduler.runWithAST("Definitions", File, std::move(Action));
 }
 
-llvm::Optional<Path> ClangdServer::switchSourceHeader(PathRef Path) {
-
-  llvm::StringRef SourceExtensions[] = {".cpp", ".c", ".cc", ".cxx",
-                                        ".c++", ".m", ".mm"};
-  llvm::StringRef HeaderExtensions[] = {".h", ".hh", ".hpp", ".hxx", ".inc"};
-
-  llvm::StringRef PathExt = llvm::sys::path::extension(Path);
-
-  // Lookup in a list of known extensions.
-  auto SourceIter =
-      llvm::find_if(SourceExtensions, [&PathExt](PathRef SourceExt) {
-        return SourceExt.equals_lower(PathExt);
-      });
-  bool IsSource = SourceIter != std::end(SourceExtensions);
-
-  auto HeaderIter =
-      llvm::find_if(HeaderExtensions, [&PathExt](PathRef HeaderExt) {
-        return HeaderExt.equals_lower(PathExt);
-      });
-
-  bool IsHeader = HeaderIter != std::end(HeaderExtensions);
-
-  // We can only switch between the known extensions.
-  if (!IsSource && !IsHeader)
-    return None;
-
-  // Array to lookup extensions for the switch. An opposite of where original
-  // extension was found.
-  llvm::ArrayRef<llvm::StringRef> NewExts;
-  if (IsSource)
-    NewExts = HeaderExtensions;
-  else
-    NewExts = SourceExtensions;
-
-  // Storage for the new path.
-  llvm::SmallString<128> NewPath = llvm::StringRef(Path);
-
-  // Instance of vfs::FileSystem, used for file existence checks.
-  auto FS = FSProvider.getFileSystem();
-
-  // Loop through switched extension candidates.
-  for (llvm::StringRef NewExt : NewExts) {
-    llvm::sys::path::replace_extension(NewPath, NewExt);
-    if (FS->exists(NewPath))
-      return NewPath.str().str(); // First str() to convert from SmallString to
-                                  // StringRef, second to convert from StringRef
-                                  // to std::string
-
-    // Also check NewExt in upper-case, just in case.
-    llvm::sys::path::replace_extension(NewPath, NewExt.upper());
-    if (FS->exists(NewPath))
-      return NewPath.str().str();
-  }
-
-  return None;
+void ClangdServer::switchSourceHeader(
+    PathRef Path, Callback<llvm::Optional<clangd::Path>> CB) {
+  // We want to return the result as fast as possible, strategy is:
+  //  1) use the file-only heuristic, it requires some IO but it is much
+  //     faster than building AST, but it only works when .h/.cc files are in
+  //     the same directory.
+  //  2) if 1) fails, we use the AST&Index approach, it is slower but supports
+  //     different code layout.
+  if (auto CorrespondingFile = getCorrespondingHeaderOrSource(
+          std::string(Path), FSProvider.getFileSystem()))
+    return CB(std::move(CorrespondingFile));
+  auto Action = [Path = Path.str(), CB = std::move(CB),
+                 this](llvm::Expected<InputsAndAST> InpAST) mutable {
+    if (!InpAST)
+      return CB(InpAST.takeError());
+    CB(getCorrespondingHeaderOrSource(Path, InpAST->AST, Index));
+  };
+  WorkScheduler.runWithAST("SwitchHeaderSource", Path, std::move(Action));
 }
 
 llvm::Expected<tooling::Replacements>
@@ -536,7 +568,8 @@ void ClangdServer::findDocumentHighlights(
         CB(clangd::findDocumentHighlights(InpAST->AST, Pos));
       };
 
-  WorkScheduler.runWithAST("Highlights", File, std::move(Action));
+  WorkScheduler.runWithAST("Highlights", File, std::move(Action),
+                           TUScheduler::InvalidateOnUpdate);
 }
 
 void ClangdServer::findHover(PathRef File, Position Pos,
@@ -550,7 +583,8 @@ void ClangdServer::findHover(PathRef File, Position Pos,
     CB(clangd::getHover(InpAST->AST, Pos, std::move(Style), Index));
   };
 
-  WorkScheduler.runWithAST("Hover", File, std::move(Action));
+  WorkScheduler.runWithAST("Hover", File, std::move(Action),
+                           TUScheduler::InvalidateOnUpdate);
 }
 
 void ClangdServer::typeHierarchy(PathRef File, Position Pos, int Resolve,
@@ -582,11 +616,10 @@ void ClangdServer::onFileEvent(const DidChangeWatchedFilesParams &Params) {
 void ClangdServer::workspaceSymbols(
     llvm::StringRef Query, int Limit,
     Callback<std::vector<SymbolInformation>> CB) {
-  std::string QueryCopy = Query;
   WorkScheduler.run(
       "getWorkspaceSymbols",
-      [QueryCopy, Limit, CB = std::move(CB), this]() mutable {
-        CB(clangd::getWorkspaceSymbols(QueryCopy, Limit, Index,
+      [Query = Query.str(), Limit, CB = std::move(CB), this]() mutable {
+        CB(clangd::getWorkspaceSymbols(Query, Limit, Index,
                                        WorkspaceRoot.getValueOr("")));
       });
 }
@@ -599,11 +632,12 @@ void ClangdServer::documentSymbols(llvm::StringRef File,
           return CB(InpAST.takeError());
         CB(clangd::getDocumentSymbols(InpAST->AST));
       };
-  WorkScheduler.runWithAST("documentSymbols", File, std::move(Action));
+  WorkScheduler.runWithAST("documentSymbols", File, std::move(Action),
+                           TUScheduler::InvalidateOnUpdate);
 }
 
 void ClangdServer::findReferences(PathRef File, Position Pos, uint32_t Limit,
-                                  Callback<std::vector<Location>> CB) {
+                                  Callback<ReferencesResult> CB) {
   auto Action = [Pos, Limit, CB = std::move(CB),
                  this](llvm::Expected<InputsAndAST> InpAST) mutable {
     if (!InpAST)
@@ -626,9 +660,51 @@ void ClangdServer::symbolInfo(PathRef File, Position Pos,
   WorkScheduler.runWithAST("SymbolInfo", File, std::move(Action));
 }
 
-std::vector<std::pair<Path, std::size_t>>
-ClangdServer::getUsedBytesPerFile() const {
-  return WorkScheduler.getUsedBytesPerFile();
+void ClangdServer::semanticRanges(PathRef File,
+                                  const std::vector<Position> &Positions,
+                                  Callback<std::vector<SelectionRange>> CB) {
+  auto Action = [Positions, CB = std::move(CB)](
+                    llvm::Expected<InputsAndAST> InpAST) mutable {
+    if (!InpAST)
+      return CB(InpAST.takeError());
+    std::vector<SelectionRange> Result;
+    for (const auto &Pos : Positions) {
+      if (auto Range = clangd::getSemanticRanges(InpAST->AST, Pos))
+        Result.push_back(std::move(*Range));
+      else
+        return CB(Range.takeError());
+    }
+    CB(std::move(Result));
+  };
+  WorkScheduler.runWithAST("SemanticRanges", File, std::move(Action));
+}
+
+void ClangdServer::documentLinks(PathRef File,
+                                 Callback<std::vector<DocumentLink>> CB) {
+  auto Action =
+      [CB = std::move(CB)](llvm::Expected<InputsAndAST> InpAST) mutable {
+        if (!InpAST)
+          return CB(InpAST.takeError());
+        CB(clangd::getDocumentLinks(InpAST->AST));
+      };
+  WorkScheduler.runWithAST("DocumentLinks", File, std::move(Action),
+                           TUScheduler::InvalidateOnUpdate);
+}
+
+void ClangdServer::semanticHighlights(
+    PathRef File, Callback<std::vector<HighlightingToken>> CB) {
+  auto Action =
+      [CB = std::move(CB)](llvm::Expected<InputsAndAST> InpAST) mutable {
+        if (!InpAST)
+          return CB(InpAST.takeError());
+        CB(clangd::getSemanticHighlightings(InpAST->AST));
+      };
+  WorkScheduler.runWithAST("SemanticHighlights", File, std::move(Action),
+                           TUScheduler::InvalidateOnUpdate);
+}
+
+llvm::StringMap<TUScheduler::FileStats> ClangdServer::fileStats() const {
+  return WorkScheduler.fileStats();
 }
 
 LLVM_NODISCARD bool

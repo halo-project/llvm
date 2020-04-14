@@ -160,6 +160,9 @@ class ScopedInErrorReport {
       BlockingMutexLock l(&error_message_buf_mutex);
       internal_memcpy(buffer_copy.data(),
                       error_message_buffer, kErrorMessageBufferSize);
+      // Clear error_message_buffer so that if we find other errors
+      // we don't re-log this error.
+      error_message_buffer_pos = 0;
     }
 
     LogFullErrorReport(buffer_copy.data());
@@ -410,8 +413,12 @@ static bool IsInvalidPointerPair(uptr a1, uptr a2) {
 
 static INLINE void CheckForInvalidPointerPair(void *p1, void *p2) {
   switch (flags()->detect_invalid_pointer_pairs) {
-    case 0 : return;
-    case 1 : if (p1 == nullptr || p2 == nullptr) return; break;
+    case 0:
+      return;
+    case 1:
+      if (p1 == nullptr || p2 == nullptr)
+        return;
+      break;
   }
 
   uptr a1 = reinterpret_cast<uptr>(p1);
@@ -472,7 +479,7 @@ void ReportGenericError(uptr pc, uptr bp, uptr sp, uptr addr, bool is_write,
 }  // namespace __asan
 
 // --------------------------- Interface --------------------- {{{1
-using namespace __asan;  // NOLINT
+using namespace __asan;
 
 void __asan_report_error(uptr pc, uptr bp, uptr sp, uptr addr, int is_write,
                          uptr access_size, u32 exp) {

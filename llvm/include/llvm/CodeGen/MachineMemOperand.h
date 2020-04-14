@@ -169,7 +169,7 @@ private:
   MachinePointerInfo PtrInfo;
   uint64_t Size;
   Flags FlagVals;
-  uint16_t BaseAlignLog2; // log_2(base_alignment) + 1
+  Align BaseAlign;
   MachineAtomicInfo AtomicInfo;
   AAMDNodes AAInfo;
   const MDNode *Ranges;
@@ -181,8 +181,7 @@ public:
   /// atomic operations the atomic ordering requirements when store does not
   /// occur must also be specified.
   MachineMemOperand(MachinePointerInfo PtrInfo, Flags flags, uint64_t s,
-                    uint64_t a,
-                    const AAMDNodes &AAInfo = AAMDNodes(),
+                    Align a, const AAMDNodes &AAInfo = AAMDNodes(),
                     const MDNode *Ranges = nullptr,
                     SyncScope::ID SSID = SyncScope::System,
                     AtomicOrdering Ordering = AtomicOrdering::NotAtomic,
@@ -223,13 +222,21 @@ public:
   /// Return the size in bits of the memory reference.
   uint64_t getSizeInBits() const { return Size * 8; }
 
+  LLVM_ATTRIBUTE_DEPRECATED(uint64_t getAlignment() const,
+                            "Use getAlign instead");
+
   /// Return the minimum known alignment in bytes of the actual memory
   /// reference.
-  uint64_t getAlignment() const;
+  Align getAlign() const;
+
+  LLVM_ATTRIBUTE_DEPRECATED(uint64_t getBaseAlignment() const,
+                            "Use getBaseAlign instead") {
+    return BaseAlign.value();
+  }
 
   /// Return the minimum known alignment in bytes of the base address, without
   /// the offset.
-  uint64_t getBaseAlignment() const { return (1u << BaseAlignLog2) >> 1; }
+  Align getBaseAlign() const { return BaseAlign; }
 
   /// Return the AA tags for the memory reference.
   AAMDNodes getAAInfo() const { return AAInfo; }
@@ -293,8 +300,6 @@ public:
 
   /// Support for operator<<.
   /// @{
-  void print(raw_ostream &OS) const;
-  void print(raw_ostream &OS, ModuleSlotTracker &MST) const;
   void print(raw_ostream &OS, ModuleSlotTracker &MST,
              SmallVectorImpl<StringRef> &SSNs, const LLVMContext &Context,
              const MachineFrameInfo *MFI, const TargetInstrInfo *TII) const;
@@ -309,7 +314,7 @@ public:
            LHS.getFlags() == RHS.getFlags() &&
            LHS.getAAInfo() == RHS.getAAInfo() &&
            LHS.getRanges() == RHS.getRanges() &&
-           LHS.getAlignment() == RHS.getAlignment() &&
+           LHS.getAlign() == RHS.getAlign() &&
            LHS.getAddrSpace() == RHS.getAddrSpace();
   }
 
@@ -318,11 +323,6 @@ public:
     return !(LHS == RHS);
   }
 };
-
-inline raw_ostream &operator<<(raw_ostream &OS, const MachineMemOperand &MRO) {
-  MRO.print(OS);
-  return OS;
-}
 
 } // End llvm namespace
 

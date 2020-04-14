@@ -304,11 +304,13 @@ void PlatformPrepareForSandboxing(__sanitizer_sandbox_arguments *args) {
   MemoryMappingLayout::CacheMemoryMappings();
 }
 
-bool MmapFixedNoReserve(uptr fixed_addr, uptr size, const char *name) {
+static bool MmapFixed(uptr fixed_addr, uptr size, int additional_flags,
+                      const char *name) {
   size = RoundUpTo(size, GetPageSizeCached());
   fixed_addr = RoundDownTo(fixed_addr, GetPageSizeCached());
-  uptr p = MmapNamed((void *)fixed_addr, size, PROT_READ | PROT_WRITE,
-                     MAP_PRIVATE | MAP_FIXED | MAP_NORESERVE | MAP_ANON, name);
+  uptr p =
+      MmapNamed((void *)fixed_addr, size, PROT_READ | PROT_WRITE,
+                MAP_PRIVATE | MAP_FIXED | additional_flags | MAP_ANON, name);
   int reserrno;
   if (internal_iserror(p, &reserrno)) {
     Report("ERROR: %s failed to "
@@ -318,6 +320,24 @@ bool MmapFixedNoReserve(uptr fixed_addr, uptr size, const char *name) {
   }
   IncreaseTotalMmap(size);
   return true;
+}
+
+bool MmapFixedNoReserve(uptr fixed_addr, uptr size, const char *name) {
+  return MmapFixed(fixed_addr, size, MAP_NORESERVE, name);
+}
+
+bool MmapFixedSuperNoReserve(uptr fixed_addr, uptr size, const char *name) {
+#if SANITIZER_FREEBSD
+  if (common_flags()->no_huge_pages_for_shadow)
+    return MmapFixedNoReserve(fixed_addr, size, name);
+  // MAP_NORESERVE is implicit with FreeBSD
+  return MmapFixed(fixed_addr, size, MAP_ALIGNED_SUPER, name);
+#else
+  bool r = MmapFixedNoReserve(fixed_addr, size, name);
+  if (r)
+    SetShadowRegionHugePageMode(fixed_addr, size);
+  return r;
+#endif
 }
 
 uptr ReservedAddressRange::Init(uptr size, const char *name, uptr fixed_addr) {
@@ -406,7 +426,8 @@ void AdjustStackSize(void *attr_) {
 #endif // !SANITIZER_GO
 
 pid_t StartSubprocess(const char *program, const char *const argv[],
-                      fd_t stdin_fd, fd_t stdout_fd, fd_t stderr_fd) {
+                      const char *const envp[], fd_t stdin_fd, fd_t stdout_fd,
+                      fd_t stderr_fd) {
   auto file_closer = at_scope_exit([&] {
     if (stdin_fd != kInvalidFd) {
       internal_close(stdin_fd);
@@ -449,7 +470,8 @@ pid_t StartSubprocess(const char *program, const char *const argv[],
 
     for (int fd = sysconf(_SC_OPEN_MAX); fd > 2; fd--) internal_close(fd);
 
-    execv(program, const_cast<char **>(&argv[0]));
+    internal_execve(program, const_cast<char **>(&argv[0]),
+                    const_cast<char *const *>(envp));
     internal__exit(1);
   }
 

@@ -144,7 +144,8 @@ void ObjCContainersChecker::checkPreStmt(const CallExpr *CE,
       if (!N)
         return;
       initBugType();
-      auto R = std::make_unique<BugReport>(*BT, "Index is out of bounds", N);
+      auto R = std::make_unique<PathSensitiveBugReport>(
+          *BT, "Index is out of bounds", N);
       R->addRange(IdxExpr->getSourceRange());
       bugreporter::trackExpressionValue(
           N, IdxExpr, *R, bugreporter::TrackingKind::Thorough, false);
@@ -187,6 +188,6 @@ void ento::registerObjCContainersChecker(CheckerManager &mgr) {
   mgr.registerChecker<ObjCContainersChecker>();
 }
 
-bool ento::shouldRegisterObjCContainersChecker(const LangOptions &LO) {
+bool ento::shouldRegisterObjCContainersChecker(const CheckerManager &mgr) {
   return true;
 }

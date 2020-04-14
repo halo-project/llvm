@@ -10,6 +10,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "TableGenBackends.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/TableGen/Error.h"
 #include "llvm/TableGen/Record.h"
@@ -52,7 +53,7 @@ static std::string getCheckerFullName(const Record *R) {
 
 static std::string getStringValue(const Record &R, StringRef field) {
   if (StringInit *SI = dyn_cast<StringInit>(R.getValueInit(field)))
-    return SI->getValue();
+    return std::string(SI->getValue());
   return std::string();
 }
 
@@ -174,8 +175,7 @@ static void printOption(llvm::raw_ostream &OS, StringRef FullName,
     OS << "true";
 }
 
-namespace clang {
-void EmitClangSACheckers(RecordKeeper &Records, raw_ostream &OS) {
+void clang::EmitClangSACheckers(RecordKeeper &Records, raw_ostream &OS) {
   std::vector<Record*> checkers = Records.getAllDerivedDefinitions("Checker");
   std::vector<Record*> packages = Records.getAllDerivedDefinitions("Package");
 
@@ -315,4 +315,3 @@ void EmitClangSACheckers(RecordKeeper &Records, raw_ostream &OS) {
   OS << "#endif // GET_CHECKER_OPTIONS\n"
         "\n";
 }
-} // end namespace clang

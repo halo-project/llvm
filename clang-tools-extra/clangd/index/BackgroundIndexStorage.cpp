@@ -18,6 +18,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/FileUtilities.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
 #include <functional>
@@ -32,35 +33,7 @@ std::string getShardPathFromFilePath(llvm::StringRef ShardRoot,
   llvm::sys::path::append(ShardRootSS, llvm::sys::path::filename(FilePath) +
                                            "." + llvm::toHex(digest(FilePath)) +
                                            ".idx");
-  return ShardRootSS.str();
-}
-
-llvm::Error
-writeAtomically(llvm::StringRef OutPath,
-                llvm::function_ref<void(llvm::raw_ostream &)> Writer) {
-  // Write to a temporary file first.
-  llvm::SmallString<128> TempPath;
-  int FD;
-  auto EC =
-      llvm::sys::fs::createUniqueFile(OutPath + ".tmp.%%%%%%%%", FD, TempPath);
-  if (EC)
-    return llvm::errorCodeToError(EC);
-  // Make sure temp file is destroyed on failure.
-  auto RemoveOnFail =
-      llvm::make_scope_exit([TempPath] { llvm::sys::fs::remove(TempPath); });
-  llvm::raw_fd_ostream OS(FD, /*shouldClose=*/true);
-  Writer(OS);
-  OS.close();
-  if (OS.has_error())
-    return llvm::errorCodeToError(OS.error());
-  // Then move to real location.
-  EC = llvm::sys::fs::rename(TempPath, OutPath);
-  if (EC)
-    return llvm::errorCodeToError(EC);
-  // If everything went well, we already moved the file to another name. So
-  // don't delete the file, as the name might be taken by another file.
-  RemoveOnFail.release();
-  return llvm::ErrorSuccess();
+  return std::string(ShardRootSS.str());
 }
 
 // Uses disk as a storage for index shards. Creates a directory called
@@ -74,7 +47,7 @@ public:
   DiskBackedIndexStorage(llvm::StringRef Directory) {
     llvm::SmallString<128> CDBDirectory(Directory);
     llvm::sys::path::append(CDBDirectory, ".clangd", "index");
-    DiskShardRoot = CDBDirectory.str();
+    DiskShardRoot = std::string(CDBDirectory.str());
     std::error_code OK;
     std::error_code EC = llvm::sys::fs::create_directories(DiskShardRoot);
     if (EC != OK) {
@@ -100,9 +73,12 @@ public:
 
   llvm::Error storeShard(llvm::StringRef ShardIdentifier,
                          IndexFileOut Shard) const override {
-    return writeAtomically(
-        getShardPathFromFilePath(DiskShardRoot, ShardIdentifier),
-        [&Shard](llvm::raw_ostream &OS) { OS << Shard; });
+    auto ShardPath = getShardPathFromFilePath(DiskShardRoot, ShardIdentifier);
+    return llvm::writeFileAtomically(ShardPath + ".tmp.%%%%%%%%", ShardPath,
+                                     [&Shard](llvm::raw_ostream &OS) {
+                                       OS << Shard;
+                                       return llvm::Error::success();
+                                     });
   }
 };
 

@@ -9,8 +9,8 @@
 ;
 ; RUN: opt < %s -cost-model -analyze -mtriple=x86_64-apple-macosx10.8.0 -mcpu=slm | FileCheck %s --check-prefixes=SLM
 ; RUN: opt < %s -cost-model -analyze -mtriple=x86_64-apple-macosx10.8.0 -mcpu=goldmont | FileCheck %s --check-prefixes=GLM
-; RUN: opt < %s -cost-model -analyze -mtriple=x86_64-apple-macosx10.8.0 -mcpu=bdver2 | FileCheck %s --check-prefixes=BDVER2
-; RUN: opt < %s -cost-model -analyze -mtriple=x86_64-apple-macosx10.8.0 -mcpu=btver2 | FileCheck %s --check-prefixes=BTVER2
+; RUN: opt < %s -cost-model -analyze -mtriple=x86_64-apple-macosx10.8.0 -mcpu=bdver2 | FileCheck %s --check-prefixes=CHECK,AVX,BDVER2
+; RUN: opt < %s -cost-model -analyze -mtriple=x86_64-apple-macosx10.8.0 -mcpu=btver2 | FileCheck %s --check-prefixes=CHECK,AVX,BTVER2
 
 target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v64:64:64-v128:128:128-a0:0:64-s0:64:64-f80:128:128-n8:16:32:64-S128"
 target triple = "x86_64-apple-macosx10.8.0"
@@ -57,9 +57,9 @@ define void @var_funnel_i64(i64 %a64, <2 x i64> %a128, <4 x i64> %a256, <8 x i64
 ;
 ; SLM-LABEL: 'var_funnel_i64'
 ; SLM-NEXT:  Cost Model: Found an estimated cost of 4 for instruction: %I64 = call i64 @llvm.fshl.i64(i64 %a64, i64 %b64, i64 %c64)
-; SLM-NEXT:  Cost Model: Found an estimated cost of 16 for instruction: %V2I64 = call <2 x i64> @llvm.fshl.v2i64(<2 x i64> %a128, <2 x i64> %b128, <2 x i64> %c128)
-; SLM-NEXT:  Cost Model: Found an estimated cost of 32 for instruction: %V4I64 = call <4 x i64> @llvm.fshl.v4i64(<4 x i64> %a256, <4 x i64> %b256, <4 x i64> %c256)
-; SLM-NEXT:  Cost Model: Found an estimated cost of 64 for instruction: %V8I64 = call <8 x i64> @llvm.fshl.v8i64(<8 x i64> %a512, <8 x i64> %b512, <8 x i64> %c512)
+; SLM-NEXT:  Cost Model: Found an estimated cost of 17 for instruction: %V2I64 = call <2 x i64> @llvm.fshl.v2i64(<2 x i64> %a128, <2 x i64> %b128, <2 x i64> %c128)
+; SLM-NEXT:  Cost Model: Found an estimated cost of 34 for instruction: %V4I64 = call <4 x i64> @llvm.fshl.v4i64(<4 x i64> %a256, <4 x i64> %b256, <4 x i64> %c256)
+; SLM-NEXT:  Cost Model: Found an estimated cost of 68 for instruction: %V8I64 = call <8 x i64> @llvm.fshl.v8i64(<8 x i64> %a512, <8 x i64> %b512, <8 x i64> %c512)
 ; SLM-NEXT:  Cost Model: Found an estimated cost of 0 for instruction: ret void
 ;
 ; GLM-LABEL: 'var_funnel_i64'
@@ -385,9 +385,9 @@ define void @splatvar_funnel_i64(i64 %a64, <2 x i64> %a128, <4 x i64> %a256, <8 
 ; SLM-NEXT:  Cost Model: Found an estimated cost of 1 for instruction: %u128 = shufflevector <2 x i64> %c128, <2 x i64> undef, <2 x i32> zeroinitializer
 ; SLM-NEXT:  Cost Model: Found an estimated cost of 1 for instruction: %u256 = shufflevector <4 x i64> %c256, <4 x i64> undef, <4 x i32> zeroinitializer
 ; SLM-NEXT:  Cost Model: Found an estimated cost of 1 for instruction: %u512 = shufflevector <8 x i64> %c512, <8 x i64> undef, <8 x i32> zeroinitializer
-; SLM-NEXT:  Cost Model: Found an estimated cost of 10 for instruction: %V2I64 = call <2 x i64> @llvm.fshl.v2i64(<2 x i64> %a128, <2 x i64> %b128, <2 x i64> %u128)
-; SLM-NEXT:  Cost Model: Found an estimated cost of 20 for instruction: %V4I64 = call <4 x i64> @llvm.fshl.v4i64(<4 x i64> %a256, <4 x i64> %b256, <4 x i64> %u256)
-; SLM-NEXT:  Cost Model: Found an estimated cost of 40 for instruction: %V8I64 = call <8 x i64> @llvm.fshl.v8i64(<8 x i64> %a512, <8 x i64> %b512, <8 x i64> %u512)
+; SLM-NEXT:  Cost Model: Found an estimated cost of 11 for instruction: %V2I64 = call <2 x i64> @llvm.fshl.v2i64(<2 x i64> %a128, <2 x i64> %b128, <2 x i64> %u128)
+; SLM-NEXT:  Cost Model: Found an estimated cost of 22 for instruction: %V4I64 = call <4 x i64> @llvm.fshl.v4i64(<4 x i64> %a256, <4 x i64> %b256, <4 x i64> %u256)
+; SLM-NEXT:  Cost Model: Found an estimated cost of 44 for instruction: %V8I64 = call <8 x i64> @llvm.fshl.v8i64(<8 x i64> %a512, <8 x i64> %b512, <8 x i64> %u512)
 ; SLM-NEXT:  Cost Model: Found an estimated cost of 0 for instruction: ret void
 ;
 ; GLM-LABEL: 'splatvar_funnel_i64'
@@ -777,9 +777,9 @@ define void @constant_funnel_i64(i64 %a64, <2 x i64> %a128, <4 x i64> %a256, <8 
 ;
 ; SLM-LABEL: 'constant_funnel_i64'
 ; SLM-NEXT:  Cost Model: Found an estimated cost of 4 for instruction: %I64 = call i64 @llvm.fshl.i64(i64 %a64, i64 %b64, i64 7)
-; SLM-NEXT:  Cost Model: Found an estimated cost of 15 for instruction: %V2I64 = call <2 x i64> @llvm.fshl.v2i64(<2 x i64> %a128, <2 x i64> %b128, <2 x i64> <i64 1, i64 7>)
-; SLM-NEXT:  Cost Model: Found an estimated cost of 30 for instruction: %V4I64 = call <4 x i64> @llvm.fshl.v4i64(<4 x i64> %a256, <4 x i64> %b256, <4 x i64> <i64 1, i64 7, i64 15, i64 31>)
-; SLM-NEXT:  Cost Model: Found an estimated cost of 60 for instruction: %V8I64 = call <8 x i64> @llvm.fshl.v8i64(<8 x i64> %a512, <8 x i64> %b512, <8 x i64> <i64 1, i64 7, i64 15, i64 31, i64 1, i64 7, i64 15, i64 31>)
+; SLM-NEXT:  Cost Model: Found an estimated cost of 16 for instruction: %V2I64 = call <2 x i64> @llvm.fshl.v2i64(<2 x i64> %a128, <2 x i64> %b128, <2 x i64> <i64 1, i64 7>)
+; SLM-NEXT:  Cost Model: Found an estimated cost of 32 for instruction: %V4I64 = call <4 x i64> @llvm.fshl.v4i64(<4 x i64> %a256, <4 x i64> %b256, <4 x i64> <i64 1, i64 7, i64 15, i64 31>)
+; SLM-NEXT:  Cost Model: Found an estimated cost of 64 for instruction: %V8I64 = call <8 x i64> @llvm.fshl.v8i64(<8 x i64> %a512, <8 x i64> %b512, <8 x i64> <i64 1, i64 7, i64 15, i64 31, i64 1, i64 7, i64 15, i64 31>)
 ; SLM-NEXT:  Cost Model: Found an estimated cost of 0 for instruction: ret void
 ;
 ; GLM-LABEL: 'constant_funnel_i64'
@@ -1093,9 +1093,9 @@ define void @splatconstant_funnel_i64(i64 %a64, <2 x i64> %a128, <4 x i64> %a256
 ;
 ; SLM-LABEL: 'splatconstant_funnel_i64'
 ; SLM-NEXT:  Cost Model: Found an estimated cost of 4 for instruction: %I64 = call i64 @llvm.fshl.i64(i64 %a64, i64 %b64, i64 7)
-; SLM-NEXT:  Cost Model: Found an estimated cost of 9 for instruction: %V2I64 = call <2 x i64> @llvm.fshl.v2i64(<2 x i64> %a128, <2 x i64> %b128, <2 x i64> <i64 7, i64 7>)
-; SLM-NEXT:  Cost Model: Found an estimated cost of 18 for instruction: %V4I64 = call <4 x i64> @llvm.fshl.v4i64(<4 x i64> %a256, <4 x i64> %b256, <4 x i64> <i64 7, i64 7, i64 7, i64 7>)
-; SLM-NEXT:  Cost Model: Found an estimated cost of 36 for instruction: %V8I64 = call <8 x i64> @llvm.fshl.v8i64(<8 x i64> %a512, <8 x i64> %b512, <8 x i64> <i64 7, i64 7, i64 7, i64 7, i64 7, i64 7, i64 7, i64 7>)
+; SLM-NEXT:  Cost Model: Found an estimated cost of 10 for instruction: %V2I64 = call <2 x i64> @llvm.fshl.v2i64(<2 x i64> %a128, <2 x i64> %b128, <2 x i64> <i64 7, i64 7>)
+; SLM-NEXT:  Cost Model: Found an estimated cost of 20 for instruction: %V4I64 = call <4 x i64> @llvm.fshl.v4i64(<4 x i64> %a256, <4 x i64> %b256, <4 x i64> <i64 7, i64 7, i64 7, i64 7>)
+; SLM-NEXT:  Cost Model: Found an estimated cost of 40 for instruction: %V8I64 = call <8 x i64> @llvm.fshl.v8i64(<8 x i64> %a512, <8 x i64> %b512, <8 x i64> <i64 7, i64 7, i64 7, i64 7, i64 7, i64 7, i64 7, i64 7>)
 ; SLM-NEXT:  Cost Model: Found an estimated cost of 0 for instruction: ret void
 ;
 ; GLM-LABEL: 'splatconstant_funnel_i64'

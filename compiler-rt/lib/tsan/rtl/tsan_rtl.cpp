@@ -144,7 +144,7 @@ static void MemoryProfiler(Context *ctx, fd_t fd, int i) {
   WriteToFile(fd, buf.data(), internal_strlen(buf.data()));
 }
 
-static void BackgroundThread(void *arg) {
+static void *BackgroundThread(void *arg) {
   // This is a non-initialized non-user thread, nothing to see here.
   // We don't use ScopedIgnoreInterceptors, because we want ignores to be
   // enabled even when the thread function exits (e.g. during pthread thread
@@ -220,6 +220,7 @@ static void BackgroundThread(void *arg) {
       }
     }
   }
+  return nullptr;
 }
 
 static void StartBackgroundThread() {
@@ -238,6 +239,15 @@ static void StopBackgroundThread() {
 void DontNeedShadowFor(uptr addr, uptr size) {
   ReleaseMemoryPagesToOS(MemToShadow(addr), MemToShadow(addr + size));
 }
+
+#if !SANITIZER_GO
+void UnmapShadow(ThreadState *thr, uptr addr, uptr size) {
+  if (size == 0) return;
+  DontNeedShadowFor(addr, size);
+  ScopedGlobalProcessor sgp;
+  ctx->metamap.ResetRange(thr->proc(), addr, size);
+}
+#endif
 
 void MapShadow(uptr addr, uptr size) {
   // Global data is not 64K aligned, but there are no adjacent mappings,
@@ -329,7 +339,7 @@ static void CheckShadowMapping() {
 #if !SANITIZER_GO
 static void OnStackUnwind(const SignalContext &sig, const void *,
                           BufferedStackTrace *stack) {
-  stack->Unwind(sig.pc, sig.bp, sig.context,
+  stack->Unwind(StackTrace::GetNextInstructionPc(sig.pc), sig.bp, sig.context,
                 common_flags()->fast_unwind_on_fatal);
 }
 
@@ -485,14 +495,23 @@ int Finalize(ThreadState *thr) {
 void ForkBefore(ThreadState *thr, uptr pc) {
   ctx->thread_registry->Lock();
   ctx->report_mtx.Lock();
+  // Ignore memory accesses in the pthread_atfork callbacks.
+  // If any of them triggers a data race we will deadlock
+  // on the report_mtx.
+  // We could ignore interceptors and sync operations as well,
+  // but so far it's unclear if it will do more good or harm.
+  // Unnecessarily ignoring things can lead to false positives later.
+  ThreadIgnoreBegin(thr, pc);
 }
 
 void ForkParentAfter(ThreadState *thr, uptr pc) {
+  ThreadIgnoreEnd(thr, pc);  // Begin is in ForkBefore.
   ctx->report_mtx.Unlock();
   ctx->thread_registry->Unlock();
 }
 
 void ForkChildAfter(ThreadState *thr, uptr pc) {
+  ThreadIgnoreEnd(thr, pc);  // Begin is in ForkBefore.
   ctx->report_mtx.Unlock();
   ctx->thread_registry->Unlock();
 
@@ -985,6 +1004,14 @@ void MemoryRangeImitateWrite(ThreadState *thr, uptr pc, uptr addr, uptr size) {
   s.SetWrite(true);
   s.SetAddr0AndSizeLog(0, 3);
   MemoryRangeSet(thr, pc, addr, size, s.raw());
+}
+
+void MemoryRangeImitateWriteOrResetRange(ThreadState *thr, uptr pc, uptr addr,
+                                         uptr size) {
+  if (thr->ignore_reads_and_writes == 0)
+    MemoryRangeImitateWrite(thr, pc, addr, size);
+  else
+    MemoryResetRange(thr, pc, addr, size);
 }
 
 ALWAYS_INLINE USED

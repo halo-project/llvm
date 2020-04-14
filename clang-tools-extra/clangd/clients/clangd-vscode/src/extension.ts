@@ -1,8 +1,9 @@
 import * as vscode from 'vscode';
 import * as vscodelc from 'vscode-languageclient';
+import * as semanticHighlighting from './semantic-highlighting';
 
 /**
- * Method to get workspace configuration option
+ * Get an option from workspace configuration.
  * @param option name of the option (e.g. for clangd.path should be path)
  * @param defaultValue default value to return if option is not set
  */
@@ -64,9 +65,18 @@ class ClangdLanguageClient extends vscodelc.LanguageClient {
   }
 }
 
+class EnableEditsNearCursorFeature implements vscodelc.StaticFeature {
+  initialize() {}
+  fillClientCapabilities(capabilities: vscodelc.ClientCapabilities): void {
+    const extendedCompletionCapabilities: any =
+        capabilities.textDocument.completion;
+    extendedCompletionCapabilities.editsNearCursor = true;
+  }
+}
+
 /**
- *  this method is called when your extension is activate
- *  your extension is activated the very first time the command is executed
+ *  This method is called when the extension is activated. The extension is
+ *  activated the very first time a command is executed.
  */
 export function activate(context: vscode.ExtensionContext) {
   const syncFileEvents = getConfig<boolean>('syncFileEvents', true);
@@ -82,32 +92,62 @@ export function activate(context: vscode.ExtensionContext) {
   }
   const serverOptions: vscodelc.ServerOptions = clangd;
 
-  // Note that CUDA ('.cu') files are special. When opening files of all other
-  // extensions, VSCode would load clangd automatically. This is achieved by
-  // having a corresponding 'onLanguage:...' activation event in package.json.
-  // However, VSCode does not have CUDA as a supported language yet, so we
-  // cannot add a corresponding activationEvent for CUDA files and clangd will
-  // *not* load itself automatically on '.cu' files.
-  const cudaFilePattern: string = '**/*.{' + [ 'cu' ].join() + '}';
   const clientOptions: vscodelc.LanguageClientOptions = {
         // Register the server for c-family and cuda files.
         documentSelector: [
             { scheme: 'file', language: 'c' },
             { scheme: 'file', language: 'cpp' },
+            // CUDA is not supported by vscode, but our extension does supports it.
+            { scheme: 'file', language: 'cuda' },
             { scheme: 'file', language: 'objective-c'},
-            { scheme: 'file', language: 'objective-cpp'},
-            { scheme: 'file', pattern: cudaFilePattern },
+            { scheme: 'file', language: 'objective-cpp'}
         ],
         synchronize: !syncFileEvents ? undefined : {
-        // FIXME: send sync file events when clangd provides implemenatations.
+        // FIXME: send sync file events when clangd provides implementations.
         },
         initializationOptions: { clangdFileStatus: true },
-        // Do not switch to output window when clangd returns output
-        revealOutputChannelOn: vscodelc.RevealOutputChannelOn.Never
+        // Do not switch to output window when clangd returns output.
+        revealOutputChannelOn: vscodelc.RevealOutputChannelOn.Never,
+
+        // We hack up the completion items a bit to prevent VSCode from re-ranking them
+        // and throwing away all our delicious signals like type information.
+        //
+        // VSCode sorts by (fuzzymatch(prefix, item.filterText), item.sortText)
+        // By adding the prefix to the beginning of the filterText, we get a perfect
+        // fuzzymatch score for every item.
+        // The sortText (which reflects clangd ranking) breaks the tie.
+        // This also prevents VSCode from filtering out any results due to the
+        // differences in how fuzzy filtering is applies, e.g. enable dot-to-arrow
+        // fixes in completion.
+        //
+        // We also have to mark the list as incomplete to force retrieving new rankings.
+        // See https://github.com/microsoft/language-server-protocol/issues/898
+        middleware: {
+          provideCompletionItem: async (document, position, context, token, next) => {
+            let list = await next(document, position, context, token);
+            let items = (Array.isArray(list) ? list : list.items).map(item => {
+              // Gets the prefix used by VSCode when doing fuzzymatch.
+              let prefix = document.getText(new vscode.Range(item.range.start, position))
+              if (prefix)
+                item.filterText = prefix + "_" + item.filterText;
+              return item;
+            })
+            return new vscode.CompletionList(items, /*isIncomplete=*/true);
+          }
+        },
     };
 
   const clangdClient = new ClangdLanguageClient('Clang Language Server',
                                                 serverOptions, clientOptions);
+  if (getConfig<boolean>('semanticHighlighting')) {
+    const semanticHighlightingFeature =
+        new semanticHighlighting.SemanticHighlightingFeature(clangdClient,
+                                                             context);
+    context.subscriptions.push(
+        vscode.Disposable.from(semanticHighlightingFeature));
+    clangdClient.registerFeature(semanticHighlightingFeature);
+  }
+  clangdClient.registerFeature(new EnableEditsNearCursorFeature);
   console.log('Clang Language Server is now active!');
   context.subscriptions.push(clangdClient.start());
   context.subscriptions.push(vscode.commands.registerCommand(
@@ -129,9 +169,10 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.window.showTextDocument(doc);
       }));
   const status = new FileStatus();
+  context.subscriptions.push(vscode.Disposable.from(status));
   context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(
       () => { status.updateStatus(); }));
-  clangdClient.onDidChangeState(({newState}) => {
+  context.subscriptions.push(clangdClient.onDidChangeState(({newState}) => {
     if (newState == vscodelc.State.Running) {
       // clangd starts or restarts after crash.
       clangdClient.onNotification(
@@ -141,7 +182,7 @@ export function activate(context: vscode.ExtensionContext) {
       // Clear all cached statuses when clangd crashes.
       status.clear();
     }
-  })
+  }));
   // An empty place holder for the activate command, otherwise we'll get an
   // "command is not registered" error.
   context.subscriptions.push(vscode.commands.registerCommand(

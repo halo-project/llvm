@@ -282,35 +282,35 @@ INTERCEPTOR(void, malloc_stats, void) {
 #define MSAN_MAYBE_INTERCEPT_MALLOC_STATS
 #endif
 
-INTERCEPTOR(char *, strcpy, char *dest, const char *src) {  // NOLINT
+INTERCEPTOR(char *, strcpy, char *dest, const char *src) {
   ENSURE_MSAN_INITED();
   GET_STORE_STACK_TRACE;
   SIZE_T n = REAL(strlen)(src);
   CHECK_UNPOISONED_STRING(src + n, 0);
-  char *res = REAL(strcpy)(dest, src);  // NOLINT
+  char *res = REAL(strcpy)(dest, src);
   CopyShadowAndOrigin(dest, src, n + 1, &stack);
   return res;
 }
 
-INTERCEPTOR(char *, strncpy, char *dest, const char *src, SIZE_T n) {  // NOLINT
+INTERCEPTOR(char *, strncpy, char *dest, const char *src, SIZE_T n) {
   ENSURE_MSAN_INITED();
   GET_STORE_STACK_TRACE;
   SIZE_T copy_size = REAL(strnlen)(src, n);
   if (copy_size < n)
     copy_size++;  // trailing \0
-  char *res = REAL(strncpy)(dest, src, n);  // NOLINT
+  char *res = REAL(strncpy)(dest, src, n);
   CopyShadowAndOrigin(dest, src, copy_size, &stack);
   __msan_unpoison(dest + copy_size, n - copy_size);
   return res;
 }
 
 #if !SANITIZER_NETBSD
-INTERCEPTOR(char *, stpcpy, char *dest, const char *src) {  // NOLINT
+INTERCEPTOR(char *, stpcpy, char *dest, const char *src) {
   ENSURE_MSAN_INITED();
   GET_STORE_STACK_TRACE;
   SIZE_T n = REAL(strlen)(src);
   CHECK_UNPOISONED_STRING(src + n, 0);
-  char *res = REAL(stpcpy)(dest, src);  // NOLINT
+  char *res = REAL(stpcpy)(dest, src);
   CopyShadowAndOrigin(dest, src, n + 1, &stack);
   return res;
 }
@@ -359,25 +359,25 @@ INTERCEPTOR(char *, gcvt, double number, SIZE_T ndigit, char *buf) {
 #define MSAN_MAYBE_INTERCEPT_GCVT
 #endif
 
-INTERCEPTOR(char *, strcat, char *dest, const char *src) {  // NOLINT
+INTERCEPTOR(char *, strcat, char *dest, const char *src) {
   ENSURE_MSAN_INITED();
   GET_STORE_STACK_TRACE;
   SIZE_T src_size = REAL(strlen)(src);
   SIZE_T dest_size = REAL(strlen)(dest);
   CHECK_UNPOISONED_STRING(src + src_size, 0);
   CHECK_UNPOISONED_STRING(dest + dest_size, 0);
-  char *res = REAL(strcat)(dest, src);  // NOLINT
+  char *res = REAL(strcat)(dest, src);
   CopyShadowAndOrigin(dest + dest_size, src, src_size + 1, &stack);
   return res;
 }
 
-INTERCEPTOR(char *, strncat, char *dest, const char *src, SIZE_T n) {  // NOLINT
+INTERCEPTOR(char *, strncat, char *dest, const char *src, SIZE_T n) {
   ENSURE_MSAN_INITED();
   GET_STORE_STACK_TRACE;
   SIZE_T dest_size = REAL(strlen)(dest);
   SIZE_T copy_size = REAL(strnlen)(src, n);
   CHECK_UNPOISONED_STRING(dest + dest_size, 0);
-  char *res = REAL(strncat)(dest, src, n);  // NOLINT
+  char *res = REAL(strncat)(dest, src, n);
   CopyShadowAndOrigin(dest + dest_size, src, copy_size, &stack);
   __msan_unpoison(dest + dest_size + copy_size, 1); // \0
   return res;
@@ -437,22 +437,22 @@ INTERCEPTOR(char *, strncat, char *dest, const char *src, SIZE_T n) {  // NOLINT
   INTERCEPTOR_STRTO_BASE_LOC(ret_type, __##func##_internal, char_type)
 #endif
 
-INTERCEPTORS_STRTO(double, strtod, char)                     // NOLINT
-INTERCEPTORS_STRTO(float, strtof, char)                      // NOLINT
-INTERCEPTORS_STRTO(long double, strtold, char)               // NOLINT
-INTERCEPTORS_STRTO_BASE(long, strtol, char)                  // NOLINT
-INTERCEPTORS_STRTO_BASE(long long, strtoll, char)            // NOLINT
-INTERCEPTORS_STRTO_BASE(unsigned long, strtoul, char)        // NOLINT
-INTERCEPTORS_STRTO_BASE(unsigned long long, strtoull, char)  // NOLINT
-INTERCEPTORS_STRTO_BASE(u64, strtouq, char)                  // NOLINT
+INTERCEPTORS_STRTO(double, strtod, char)
+INTERCEPTORS_STRTO(float, strtof, char)
+INTERCEPTORS_STRTO(long double, strtold, char)
+INTERCEPTORS_STRTO_BASE(long, strtol, char)
+INTERCEPTORS_STRTO_BASE(long long, strtoll, char)
+INTERCEPTORS_STRTO_BASE(unsigned long, strtoul, char)
+INTERCEPTORS_STRTO_BASE(unsigned long long, strtoull, char)
+INTERCEPTORS_STRTO_BASE(u64, strtouq, char)
 
-INTERCEPTORS_STRTO(double, wcstod, wchar_t)                     // NOLINT
-INTERCEPTORS_STRTO(float, wcstof, wchar_t)                      // NOLINT
-INTERCEPTORS_STRTO(long double, wcstold, wchar_t)               // NOLINT
-INTERCEPTORS_STRTO_BASE(long, wcstol, wchar_t)                  // NOLINT
-INTERCEPTORS_STRTO_BASE(long long, wcstoll, wchar_t)            // NOLINT
-INTERCEPTORS_STRTO_BASE(unsigned long, wcstoul, wchar_t)        // NOLINT
-INTERCEPTORS_STRTO_BASE(unsigned long long, wcstoull, wchar_t)  // NOLINT
+INTERCEPTORS_STRTO(double, wcstod, wchar_t)
+INTERCEPTORS_STRTO(float, wcstof, wchar_t)
+INTERCEPTORS_STRTO(long double, wcstold, wchar_t)
+INTERCEPTORS_STRTO_BASE(long, wcstol, wchar_t)
+INTERCEPTORS_STRTO_BASE(long long, wcstoll, wchar_t)
+INTERCEPTORS_STRTO_BASE(unsigned long, wcstoul, wchar_t)
+INTERCEPTORS_STRTO_BASE(unsigned long long, wcstoull, wchar_t)
 
 #if SANITIZER_NETBSD
 #define INTERCEPT_STRTO(func) \
@@ -765,17 +765,24 @@ INTERCEPTOR(char *, fgets_unlocked, char *s, int size, void *stream) {
 #define MSAN_MAYBE_INTERCEPT_FGETS_UNLOCKED
 #endif
 
+#define INTERCEPTOR_GETRLIMIT_BODY(func, resource, rlim)  \
+  if (msan_init_is_running)                               \
+    return REAL(getrlimit)(resource, rlim);               \
+  ENSURE_MSAN_INITED();                                   \
+  int res = REAL(func)(resource, rlim);                   \
+  if (!res)                                               \
+    __msan_unpoison(rlim, __sanitizer::struct_rlimit_sz); \
+  return res
+
 INTERCEPTOR(int, getrlimit, int resource, void *rlim) {
-  if (msan_init_is_running)
-    return REAL(getrlimit)(resource, rlim);
-  ENSURE_MSAN_INITED();
-  int res = REAL(getrlimit)(resource, rlim);
-  if (!res)
-    __msan_unpoison(rlim, __sanitizer::struct_rlimit_sz);
-  return res;
+  INTERCEPTOR_GETRLIMIT_BODY(getrlimit, resource, rlim);
 }
 
 #if !SANITIZER_FREEBSD && !SANITIZER_NETBSD
+INTERCEPTOR(int, __getrlimit, int resource, void *rlim) {
+  INTERCEPTOR_GETRLIMIT_BODY(__getrlimit, resource, rlim);
+}
+
 INTERCEPTOR(int, getrlimit64, int resource, void *rlim) {
   if (msan_init_is_running) return REAL(getrlimit64)(resource, rlim);
   ENSURE_MSAN_INITED();
@@ -806,37 +813,15 @@ INTERCEPTOR(int, prlimit64, int pid, int resource, void *new_rlimit,
   return res;
 }
 
+#define MSAN_MAYBE_INTERCEPT___GETRLIMIT INTERCEPT_FUNCTION(__getrlimit)
 #define MSAN_MAYBE_INTERCEPT_GETRLIMIT64 INTERCEPT_FUNCTION(getrlimit64)
 #define MSAN_MAYBE_INTERCEPT_PRLIMIT INTERCEPT_FUNCTION(prlimit)
 #define MSAN_MAYBE_INTERCEPT_PRLIMIT64 INTERCEPT_FUNCTION(prlimit64)
 #else
+#define MSAN_MAYBE_INTERCEPT___GETRLIMIT
 #define MSAN_MAYBE_INTERCEPT_GETRLIMIT64
 #define MSAN_MAYBE_INTERCEPT_PRLIMIT
 #define MSAN_MAYBE_INTERCEPT_PRLIMIT64
-#endif
-
-#if SANITIZER_FREEBSD
-// FreeBSD's <sys/utsname.h> define uname() as
-// static __inline int uname(struct utsname *name) {
-//   return __xuname(SYS_NMLN, (void*)name);
-// }
-INTERCEPTOR(int, __xuname, int size, void *utsname) {
-  ENSURE_MSAN_INITED();
-  int res = REAL(__xuname)(size, utsname);
-  if (!res)
-    __msan_unpoison(utsname, __sanitizer::struct_utsname_sz);
-  return res;
-}
-#define MSAN_INTERCEPT_UNAME INTERCEPT_FUNCTION(__xuname)
-#else
-INTERCEPTOR(int, uname, struct utsname *utsname) {
-  ENSURE_MSAN_INITED();
-  int res = REAL(uname)(utsname);
-  if (!res)
-    __msan_unpoison(utsname, __sanitizer::struct_utsname_sz);
-  return res;
-}
-#define MSAN_INTERCEPT_UNAME INTERCEPT_FUNCTION(uname)
 #endif
 
 INTERCEPTOR(int, gethostname, char *name, SIZE_T len) {
@@ -944,7 +929,9 @@ void __sanitizer_dtor_callback(const void *data, uptr size) {
 template <class Mmap>
 static void *mmap_interceptor(Mmap real_mmap, void *addr, SIZE_T length,
                               int prot, int flags, int fd, OFF64_T offset) {
-  if (addr && !MEM_IS_APP(addr)) {
+  SIZE_T rounded_length = RoundUpTo(length, GetPageSize());
+  void *end_addr = (char *)addr + (rounded_length - 1);
+  if (addr && (!MEM_IS_APP(addr) || !MEM_IS_APP(end_addr))) {
     if (flags & map_fixed) {
       errno = errno_EINVAL;
       return (void *)-1;
@@ -953,7 +940,18 @@ static void *mmap_interceptor(Mmap real_mmap, void *addr, SIZE_T length,
     }
   }
   void *res = real_mmap(addr, length, prot, flags, fd, offset);
-  if (res != (void *)-1) __msan_unpoison(res, RoundUpTo(length, GetPageSize()));
+  if (res != (void *)-1) {
+    void *end_res = (char *)res + (rounded_length - 1);
+    if (MEM_IS_APP(res) && MEM_IS_APP(end_res)) {
+      __msan_unpoison(res, rounded_length);
+    } else {
+      // Application has attempted to map more memory than is supported by
+      // MSAN. Act as if we ran out of memory.
+      internal_munmap(res, length);
+      errno = errno_ENOMEM;
+      return (void *)-1;
+    }
+  }
   return res;
 }
 
@@ -1061,8 +1059,9 @@ INTERCEPTOR(int, pthread_key_create, __sanitizer_pthread_key_t *key,
 }
 
 #if SANITIZER_NETBSD
-INTERCEPTOR(void, __libc_thr_keycreate, void *m, void (*dtor)(void *value)) \
-  ALIAS(WRAPPER_NAME(pthread_key_create));
+INTERCEPTOR(int, __libc_thr_keycreate, __sanitizer_pthread_key_t *m,
+            void (*dtor)(void *value))
+ALIAS(WRAPPER_NAME(pthread_key_create));
 #endif
 
 INTERCEPTOR(int, pthread_join, void *th, void **retval) {
@@ -1305,6 +1304,8 @@ int OnExit() {
       ForEachMappedRegion(map, __msan_unpoison);                               \
   } while (false)
 
+#define COMMON_INTERCEPTOR_NOTHING_IS_INITIALIZED (!msan_inited)
+
 #define COMMON_INTERCEPTOR_GET_TLS_RANGE(begin, end)                           \
   if (MsanThread *t = GetCurrentThread()) {                                    \
     *begin = t->tls_begin();                                                   \
@@ -1514,13 +1515,12 @@ INTERCEPTOR(wchar_t *, wcscpy, wchar_t *dest, const wchar_t *src) {
   return res;
 }
 
-INTERCEPTOR(wchar_t *, wcsncpy, wchar_t *dest, const wchar_t *src,
-            SIZE_T n) {  // NOLINT
+INTERCEPTOR(wchar_t *, wcsncpy, wchar_t *dest, const wchar_t *src, SIZE_T n) {
   ENSURE_MSAN_INITED();
   GET_STORE_STACK_TRACE;
   SIZE_T copy_size = REAL(wcsnlen)(src, n);
   if (copy_size < n) copy_size++;           // trailing \0
-  wchar_t *res = REAL(wcsncpy)(dest, src, n);  // NOLINT
+  wchar_t *res = REAL(wcsncpy)(dest, src, n);
   CopyShadowAndOrigin(dest, src, copy_size * sizeof(wchar_t), &stack);
   __msan_unpoison(dest + copy_size, (n - copy_size) * sizeof(wchar_t));
   return res;
@@ -1620,14 +1620,14 @@ void InitializeInterceptors() {
   INTERCEPT_FUNCTION(wmemcpy);
   MSAN_MAYBE_INTERCEPT_WMEMPCPY;
   INTERCEPT_FUNCTION(wmemmove);
-  INTERCEPT_FUNCTION(strcpy);  // NOLINT
-  MSAN_MAYBE_INTERCEPT_STPCPY;  // NOLINT
+  INTERCEPT_FUNCTION(strcpy);
+  MSAN_MAYBE_INTERCEPT_STPCPY;
   INTERCEPT_FUNCTION(strdup);
   MSAN_MAYBE_INTERCEPT___STRDUP;
-  INTERCEPT_FUNCTION(strncpy);  // NOLINT
+  INTERCEPT_FUNCTION(strncpy);
   MSAN_MAYBE_INTERCEPT_GCVT;
-  INTERCEPT_FUNCTION(strcat);  // NOLINT
-  INTERCEPT_FUNCTION(strncat);  // NOLINT
+  INTERCEPT_FUNCTION(strcat);
+  INTERCEPT_FUNCTION(strncat);
   INTERCEPT_STRTO(strtod);
   INTERCEPT_STRTO(strtof);
   INTERCEPT_STRTO(strtold);
@@ -1679,10 +1679,10 @@ void InitializeInterceptors() {
   INTERCEPT_FUNCTION(socketpair);
   MSAN_MAYBE_INTERCEPT_FGETS_UNLOCKED;
   INTERCEPT_FUNCTION(getrlimit);
+  MSAN_MAYBE_INTERCEPT___GETRLIMIT;
   MSAN_MAYBE_INTERCEPT_GETRLIMIT64;
   MSAN_MAYBE_INTERCEPT_PRLIMIT;
   MSAN_MAYBE_INTERCEPT_PRLIMIT64;
-  MSAN_INTERCEPT_UNAME;
   INTERCEPT_FUNCTION(gethostname);
   MSAN_MAYBE_INTERCEPT_EPOLL_WAIT;
   MSAN_MAYBE_INTERCEPT_EPOLL_PWAIT;

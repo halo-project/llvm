@@ -1,4 +1,4 @@
-//===-- Socket.cpp ----------------------------------------------*- C++ -*-===//
+//===-- Socket.cpp --------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -22,7 +22,7 @@
 #include "llvm/Support/Error.h"
 #include "llvm/Support/WindowsError.h"
 
-#ifndef LLDB_DISABLE_POSIX
+#if LLDB_ENABLE_POSIX
 #include "lldb/Host/posix/DomainSocket.h"
 
 #include <arpa/inet.h>
@@ -74,9 +74,10 @@ bool IsInterrupted() {
 
 Socket::Socket(SocketProtocol protocol, bool should_close,
                bool child_processes_inherit)
-    : IOObject(eFDTypeSocket, should_close), m_protocol(protocol),
+    : IOObject(eFDTypeSocket), m_protocol(protocol),
       m_socket(kInvalidSocketValue),
-      m_child_processes_inherit(child_processes_inherit) {}
+      m_child_processes_inherit(child_processes_inherit),
+      m_should_close_fd(should_close) {}
 
 Socket::~Socket() { Close(); }
 
@@ -121,7 +122,7 @@ std::unique_ptr<Socket> Socket::Create(const SocketProtocol protocol,
         std::make_unique<UDPSocket>(true, child_processes_inherit);
     break;
   case ProtocolUnixDomain:
-#ifndef LLDB_DISABLE_POSIX
+#if LLDB_ENABLE_POSIX
     socket_up =
         std::make_unique<DomainSocket>(true, child_processes_inherit);
 #else
@@ -308,7 +309,7 @@ bool Socket::DecodeHostAndPort(llvm::StringRef host_and_port,
   host_str.clear();
   port_str.clear();
   if (to_integer(host_and_port, port, 10) && port < UINT16_MAX) {
-    port_str = host_and_port;
+    port_str = std::string(host_and_port);
     if (error_ptr)
       error_ptr->Clear();
     return true;
@@ -353,6 +354,7 @@ Status Socket::Read(void *buf, size_t &num_bytes) {
 }
 
 Status Socket::Write(const void *buf, size_t &num_bytes) {
+  const size_t src_len = num_bytes;
   Status error;
   int bytes_sent = 0;
   do {
@@ -372,7 +374,7 @@ Status Socket::Write(const void *buf, size_t &num_bytes) {
               ", src = %p, src_len = %" PRIu64 ", flags = 0) => %" PRIi64
               " (error = %s)",
               static_cast<void *>(this), static_cast<uint64_t>(m_socket), buf,
-              static_cast<uint64_t>(num_bytes),
+              static_cast<uint64_t>(src_len),
               static_cast<int64_t>(bytes_sent), error.AsCString());
   }
 
@@ -475,11 +477,11 @@ NativeSocket Socket::AcceptSocket(NativeSocket sockfd, struct sockaddr *addr,
   if (!child_processes_inherit) {
     flags |= SOCK_CLOEXEC;
   }
-  NativeSocket fd = llvm::sys::RetryAfterSignal(-1, ::accept4,
-      sockfd, addr, addrlen, flags);
+  NativeSocket fd = llvm::sys::RetryAfterSignal(
+      static_cast<NativeSocket>(-1), ::accept4, sockfd, addr, addrlen, flags);
 #else
-  NativeSocket fd = llvm::sys::RetryAfterSignal(-1, ::accept,
-      sockfd, addr, addrlen);
+  NativeSocket fd = llvm::sys::RetryAfterSignal(
+      static_cast<NativeSocket>(-1), ::accept, sockfd, addr, addrlen);
 #endif
   if (fd == kInvalidSocketValue)
     SetLastError(error);

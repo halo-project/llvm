@@ -22,6 +22,9 @@ static_library("Support") {
 
     # public_dep because public header TargetSelect.h includes these .def files.
     "//llvm/include/llvm/Config:write_target_def_files",
+
+    # public_dep because random targets assume its output exists.
+    "//llvm/include/llvm/Support:write_extension_def",
   ]
   include_dirs = [
     "Unix",
@@ -29,6 +32,7 @@ static_library("Support") {
   ]
   sources = [
     "AArch64TargetParser.cpp",
+    "ABIBreak.cpp",
     "AMDGPUMetadata.cpp",
     "APFloat.cpp",
     "APInt.cpp",
@@ -61,8 +65,11 @@ static_library("Support") {
     "Debug.cpp",
     "DebugCounter.cpp",
     "DeltaAlgorithm.cpp",
+    "ELFAttributeParser.cpp",
+    "ELFAttributes.cpp",
     "Error.cpp",
     "ErrorHandling.cpp",
+    "ExtensibleRTTI.cpp",
     "FileCheck.cpp",
     "FileCollector.cpp",
     "FileOutputBuffer.cpp",
@@ -78,7 +85,6 @@ static_library("Support") {
     "IntervalMap.cpp",
     "ItaniumManglingCanonicalizer.cpp",
     "JSON.cpp",
-    "JamCRC.cpp",
     "KnownBits.cpp",
     "LEB128.cpp",
     "LineIterator.cpp",
@@ -90,11 +96,13 @@ static_library("Support") {
     "MathExtras.cpp",
     "MemoryBuffer.cpp",
     "NativeFormatting.cpp",
+    "OptimizedStructLayout.cpp",
     "Optional.cpp",
-    "Options.cpp",
     "Parallel.cpp",
     "PluginLoader.cpp",
     "PrettyStackTrace.cpp",
+    "RISCVAttributeParser.cpp",
+    "RISCVAttributes.cpp",
     "RWMutex.cpp",
     "RandomNumberGenerator.cpp",
     "Regex.cpp",

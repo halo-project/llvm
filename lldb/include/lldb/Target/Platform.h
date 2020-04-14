@@ -6,8 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef liblldb_Platform_h_
-#define liblldb_Platform_h_
+#ifndef LLDB_TARGET_PLATFORM_H
+#define LLDB_TARGET_PLATFORM_H
 
 #include <functional>
 #include <map>
@@ -18,12 +18,15 @@
 
 #include "lldb/Core/PluginInterface.h"
 #include "lldb/Core/UserSettingsController.h"
+#include "lldb/Host/File.h"
 #include "lldb/Interpreter/Options.h"
 #include "lldb/Utility/ArchSpec.h"
 #include "lldb/Utility/ConstString.h"
 #include "lldb/Utility/FileSpec.h"
+#include "lldb/Utility/StructuredData.h"
 #include "lldb/Utility/Timeout.h"
 #include "lldb/Utility/UserIDResolver.h"
+#include "lldb/Utility/XcodeSDK.h"
 #include "lldb/lldb-private-forward.h"
 #include "lldb/lldb-public.h"
 #include "llvm/Support/VersionTuple.h"
@@ -31,8 +34,8 @@
 namespace lldb_private {
 
 class ProcessInstanceInfo;
-class ProcessInstanceInfoList;
 class ProcessInstanceInfoMatch;
+typedef std::vector<ProcessInstanceInfo> ProcessInstanceInfoList;
 
 class ModuleCache;
 enum MmapFlags { eMmapFlagsPrivate = 1, eMmapFlagsAnon = 2 };
@@ -48,6 +51,9 @@ public:
 
   FileSpec GetModuleCacheDirectory() const;
   bool SetModuleCacheDirectory(const FileSpec &dir_spec);
+
+private:
+  void SetDefaultModuleCacheDirectory(const FileSpec &dir_spec);
 };
 
 typedef std::shared_ptr<PlatformProperties> PlatformPropertiesSP;
@@ -257,19 +263,6 @@ public:
 
   virtual bool SetRemoteWorkingDirectory(const FileSpec &working_dir);
 
-  /// Retrieve the system include directories on this platform for the
-  /// given language.
-  ///
-  /// \param[in] lang
-  ///     The language for which the include directories should be queried.
-  ///
-  /// \param[out] directories
-  ///     The include directories for this system.
-  virtual std::vector<std::string>
-  GetSystemIncludeDirectories(lldb::LanguageType lang) {
-    return {};
-  }
-
   virtual UserIDResolver &GetUserIDResolver() = 0;
 
   /// Locate a file for a platform.
@@ -392,9 +385,6 @@ public:
   /// attached to the process, or an empty shared pointer with an appropriate
   /// error.
   ///
-  /// \param[in] pid
-  ///     The process ID that we should attempt to attach to.
-  ///
   /// \return
   ///     An appropriate ProcessSP containing a valid shared pointer
   ///     to the default Process subclass for the platform that is
@@ -443,6 +433,10 @@ public:
   virtual lldb_private::ConstString
   GetSDKDirectory(lldb_private::Target &target) {
     return lldb_private::ConstString();
+  }
+
+  virtual llvm::StringRef GetSDKPath(lldb_private::XcodeSDK sdk) {
+    return {};
   }
 
   const std::string &GetRemoteURL() const { return m_remote_url; }
@@ -518,8 +512,9 @@ public:
   virtual Status SetFilePermissions(const FileSpec &file_spec,
                                     uint32_t file_permissions);
 
-  virtual lldb::user_id_t OpenFile(const FileSpec &file_spec, uint32_t flags,
-                                   uint32_t mode, Status &error) {
+  virtual lldb::user_id_t OpenFile(const FileSpec &file_spec,
+                                   File::OpenOptions flags, uint32_t mode,
+                                   Status &error) {
     return UINT64_MAX;
   }
 
@@ -788,7 +783,7 @@ public:
   ///     given an install name and a set (e.g. DYLD_LIBRARY_PATH provided) of
   ///     alternate paths.
   ///
-  /// \param[in] path_list
+  /// \param[in] paths
   ///     The list of paths to use to search for the library.  First
   ///     match wins.
   ///
@@ -799,7 +794,7 @@ public:
   /// \param[out] loaded_path
   ///      If non-null, the path to the dylib that was successfully loaded
   ///      is stored in this path.
-  /// 
+  ///
   /// \return
   ///     A token that represents the shared library which can be
   ///     passed to UnloadImage. A value of
@@ -836,6 +831,26 @@ public:
   ///     The number of processes we are successfully connected to.
   virtual size_t ConnectToWaitingProcesses(lldb_private::Debugger &debugger,
                                            lldb_private::Status &error);
+
+  /// Gather all of crash informations into a structured data dictionary.
+  ///
+  /// If the platform have a crashed process with crash information entries,
+  /// gather all the entries into an structured data dictionary or return a
+  /// nullptr. This dictionary is generic and extensible, as it contains an
+  /// array for each different type of crash information.
+  ///
+  /// \param[in] process
+  ///     The crashed process.
+  ///
+  /// \return
+  ///     A structured data dictionary containing at each entry, the crash
+  ///     information type as the entry key and the matching  an array as the
+  ///     entry value. \b nullptr if not implemented or  if the process has no
+  ///     crash information entry. \b error if an error occured.
+  virtual llvm::Expected<StructuredData::DictionarySP>
+  FetchExtendedCrashInformation(lldb_private::Process &process) {
+    return nullptr;
+  }
 
 protected:
   bool m_is_host;
@@ -1060,4 +1075,4 @@ private:
 
 } // namespace lldb_private
 
-#endif // liblldb_Platform_h_
+#endif // LLDB_TARGET_PLATFORM_H

@@ -9,6 +9,7 @@
 #ifndef GWP_ASAN_OPTIONAL_BACKTRACE_H_
 #define GWP_ASAN_OPTIONAL_BACKTRACE_H_
 
+#include "gwp_asan/optional/segv_handler.h"
 #include "gwp_asan/options.h"
 
 namespace gwp_asan {
@@ -17,9 +18,11 @@ namespace options {
 // and backtrace printing functions when RTGwpAsanBacktraceLibc or
 // RTGwpAsanBacktraceSanitizerCommon are linked. Use these functions to get the
 // backtrace function for populating the Options::Backtrace and
-// Options::PrintBacktrace when initialising the GuardedPoolAllocator.
+// Options::PrintBacktrace when initialising the GuardedPoolAllocator. Please
+// note any thread-safety descriptions for the implementation of these functions
+// that you use.
 Backtrace_t getBacktraceFunction();
-PrintBacktrace_t getPrintBacktraceFunction();
+crash_handler::PrintBacktrace_t getPrintBacktraceFunction();
 } // namespace options
 } // namespace gwp_asan
 

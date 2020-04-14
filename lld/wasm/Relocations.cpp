@@ -14,9 +14,8 @@
 using namespace llvm;
 using namespace llvm::wasm;
 
-using namespace lld;
-using namespace lld::wasm;
-
+namespace lld {
+namespace wasm {
 static bool requiresGOTAccess(const Symbol *sym) {
   return config->isPic && !sym->isHidden() && !sym->isLocal();
 }
@@ -29,6 +28,11 @@ static bool allowUndefined(const Symbol* sym) {
   // compiling with -fPIC)
   if (isa<DataSymbol>(sym))
     return false;
+  // Undefined functions with explicit import name are allowed to be undefined
+  // at link time.
+  if (auto *F = dyn_cast<UndefinedFunction>(sym))
+    if (F->importName)
+      return true;
   return (config->allowUndefined ||
           config->allowUndefinedSymbols.count(sym->getName()) != 0);
 }
@@ -51,10 +55,10 @@ static void addGOTEntry(Symbol *sym) {
   if (config->isPic)
     out.importSec->addGOTEntry(sym);
   else
-    out.globalSec->addDummyGOTEntry(sym);
+    out.globalSec->addStaticGOTEntry(sym);
 }
 
-void lld::wasm::scanRelocations(InputChunk *chunk) {
+void scanRelocations(InputChunk *chunk) {
   if (!chunk->live)
     return;
   ObjFile *file = chunk->file;
@@ -113,3 +117,6 @@ void lld::wasm::scanRelocations(InputChunk *chunk) {
 
   }
 }
+
+} // namespace wasm
+} // namespace lld

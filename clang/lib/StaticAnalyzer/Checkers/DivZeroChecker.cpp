@@ -47,7 +47,7 @@ void DivZeroChecker::reportBug(
     if (!BT)
       BT.reset(new BuiltinBug(this, "Division by zero"));
 
-    auto R = std::make_unique<BugReport>(*BT, Msg, N);
+    auto R = std::make_unique<PathSensitiveBugReport>(*BT, Msg, N);
     R->addVisitor(std::move(Visitor));
     bugreporter::trackExpressionValue(N, getDenomExpr(N), *R);
     C.emitReport(std::move(R));
@@ -101,6 +101,6 @@ void ento::registerDivZeroChecker(CheckerManager &mgr) {
   mgr.registerChecker<DivZeroChecker>();
 }
 
-bool ento::shouldRegisterDivZeroChecker(const LangOptions &LO) {
+bool ento::shouldRegisterDivZeroChecker(const CheckerManager &mgr) {
   return true;
 }

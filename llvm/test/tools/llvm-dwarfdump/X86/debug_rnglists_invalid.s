@@ -2,7 +2,7 @@
 # RUN: llvm-dwarfdump --debug-rnglists - 2>&1 | FileCheck %s --check-prefix=SHORT
 # SHORT-NOT: error:
 # SHORT-NOT: range list header
-# SHORT: error: section is not large enough to contain a .debug_rnglists table length at offset 0
+# SHORT: error: parsing .debug_rnglists table at offset 0x0: unexpected end of data at offset 0x0
 # SHORT-NOT: range list header
 # SHORT-NOT: error:
 
@@ -36,11 +36,6 @@
 # CHECK-NEXT: error: no end of list marker detected at end of .debug_rnglists table starting at offset 0xaa
 # CHECK-NEXT: error: section is not large enough to contain a .debug_rnglists table of length 0x1f at offset 0xe5
 # CHECK-NOT: error:
-
-# RUN: llvm-mc %S/Inputs/debug_rnglists_DWARF64.s -filetype obj -triple x86_64-pc-linux -o - | \
-# RUN: llvm-dwarfdump --debug-rnglists - 2>&1 | FileCheck %s --check-prefix=DWARF64
-
-# DWARF64: DWARF64 is not supported in .debug_rnglists at offset 0x0
 
 .section .debug_rnglists,"",@progbits
 

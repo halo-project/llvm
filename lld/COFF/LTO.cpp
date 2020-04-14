@@ -38,7 +38,6 @@
 
 using namespace llvm;
 using namespace llvm::object;
-
 using namespace lld;
 using namespace lld::coff;
 
@@ -55,9 +54,9 @@ static std::unique_ptr<raw_fd_ostream> openFile(StringRef file) {
 }
 
 static std::string getThinLTOOutputFile(StringRef path) {
-  return lto::getThinLTOOutputFile(path,
-                                   config->thinLTOPrefixReplace.first,
-                                   config->thinLTOPrefixReplace.second);
+  return lto::getThinLTOOutputFile(
+      std::string(path), std::string(config->thinLTOPrefixReplace.first),
+      std::string(config->thinLTOPrefixReplace.second));
 }
 
 static lto::Config createConfig() {
@@ -99,10 +98,12 @@ BitcodeCompiler::BitcodeCompiler() {
   if (config->thinLTOIndexOnly) {
     auto OnIndexWrite = [&](StringRef S) { thinIndices.erase(S); };
     backend = lto::createWriteIndexesThinBackend(
-        config->thinLTOPrefixReplace.first, config->thinLTOPrefixReplace.second,
+        std::string(config->thinLTOPrefixReplace.first),
+        std::string(config->thinLTOPrefixReplace.second),
         config->thinLTOEmitImportsFiles, indexFile.get(), OnIndexWrite);
-  } else if (config->thinLTOJobs != 0) {
-    backend = lto::createInProcessThinBackend(config->thinLTOJobs);
+  } else {
+    backend = lto::createInProcessThinBackend(
+        llvm::heavyweight_hardware_concurrency(config->thinLTOJobs));
   }
 
   ltoObj = std::make_unique<lto::LTO>(createConfig(), backend,
@@ -177,6 +178,8 @@ std::vector<StringRef> BitcodeCompiler::compile() {
   // files. After that, we exit from linker and ThinLTO backend runs in a
   // distributed environment.
   if (config->thinLTOIndexOnly) {
+    if (!config->ltoObjPath.empty())
+      saveBuffer(buf[0], config->ltoObjPath);
     if (indexFile)
       indexFile->close();
     return {};

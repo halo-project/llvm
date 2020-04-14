@@ -191,7 +191,7 @@ class ARMFastISel final : public FastISel {
     bool isTypeLegal(Type *Ty, MVT &VT);
     bool isLoadTypeLegal(Type *Ty, MVT &VT);
     bool ARMEmitCmp(const Value *Src1Value, const Value *Src2Value,
-                    bool isZExt, bool isEquality);
+                    bool isZExt);
     bool ARMEmitLoad(MVT VT, Register &ResultReg, Address &Addr,
                      unsigned Alignment = 0, bool isZExt = true,
                      bool allocReg = true);
@@ -209,7 +209,7 @@ class ARMFastISel final : public FastISel {
     unsigned ARMMoveToFPReg(MVT VT, unsigned SrcReg);
     unsigned ARMMoveToIntReg(MVT VT, unsigned SrcReg);
     unsigned ARMSelectCallOp(bool UseReg);
-    unsigned ARMLowerPICELF(const GlobalValue *GV, unsigned Align, MVT VT);
+    unsigned ARMLowerPICELF(const GlobalValue *GV, MVT VT);
 
     const TargetLowering *getTargetLowering() { return &TLI; }
 
@@ -570,14 +570,10 @@ unsigned ARMFastISel::ARMMaterializeGV(const GlobalValue *GV, MVT VT) {
                             TII.get(Opc), DestReg).addGlobalAddress(GV, 0, TF));
   } else {
     // MachineConstantPool wants an explicit alignment.
-    unsigned Align = DL.getPrefTypeAlignment(GV->getType());
-    if (Align == 0) {
-      // TODO: Figure out if this is correct.
-      Align = DL.getTypeAllocSize(GV->getType());
-    }
+    Align Alignment = DL.getPrefTypeAlign(GV->getType());
 
     if (Subtarget->isTargetELF() && IsPositionIndependent)
-      return ARMLowerPICELF(GV, Align, VT);
+      return ARMLowerPICELF(GV, VT);
 
     // Grab index.
     unsigned PCAdj = IsPositionIndependent ? (Subtarget->isThumb() ? 4 : 8) : 0;
@@ -585,7 +581,7 @@ unsigned ARMFastISel::ARMMaterializeGV(const GlobalValue *GV, MVT VT) {
     ARMConstantPoolValue *CPV = ARMConstantPoolConstant::Create(GV, Id,
                                                                 ARMCP::CPValue,
                                                                 PCAdj);
-    unsigned Idx = MCP.getConstantPoolIndex(CPV, Align);
+    unsigned Idx = MCP.getConstantPoolIndex(CPV, Alignment.value());
 
     // Load value.
     MachineInstrBuilder MIB;
@@ -882,7 +878,7 @@ void ARMFastISel::AddLoadStoreOperands(MVT VT, Address &Addr,
     int Offset = Addr.Offset;
     MachineMemOperand *MMO = FuncInfo.MF->getMachineMemOperand(
         MachinePointerInfo::getFixedStack(*FuncInfo.MF, FI, Offset), Flags,
-        MFI.getObjectSize(FI), MFI.getObjectAlignment(FI));
+        MFI.getObjectSize(FI), MFI.getObjectAlign(FI));
     // Now add the rest of the operands.
     MIB.addFrameIndex(FI);
 
@@ -1259,8 +1255,7 @@ bool ARMFastISel::SelectBranch(const Instruction *I) {
       if (ARMPred == ARMCC::AL) return false;
 
       // Emit the compare.
-      if (!ARMEmitCmp(CI->getOperand(0), CI->getOperand(1), CI->isUnsigned(),
-                      CI->isEquality()))
+      if (!ARMEmitCmp(CI->getOperand(0), CI->getOperand(1), CI->isUnsigned()))
         return false;
 
       unsigned BrOpc = isThumb2 ? ARM::t2Bcc : ARM::Bcc;
@@ -1349,7 +1344,7 @@ bool ARMFastISel::SelectIndirectBr(const Instruction *I) {
 }
 
 bool ARMFastISel::ARMEmitCmp(const Value *Src1Value, const Value *Src2Value,
-                             bool isZExt, bool isEquality) {
+                             bool isZExt) {
   Type *Ty = Src1Value->getType();
   EVT SrcEVT = TLI.getValueType(DL, Ty, true);
   if (!SrcEVT.isSimple()) return false;
@@ -1397,19 +1392,11 @@ bool ARMFastISel::ARMEmitCmp(const Value *Src1Value, const Value *Src2Value,
     // TODO: Verify compares.
     case MVT::f32:
       isICmp = false;
-      // Equality comparisons shouldn't raise Invalid on uordered inputs.
-      if (isEquality)
-        CmpOpc = UseImm ? ARM::VCMPZS : ARM::VCMPS;
-      else
-        CmpOpc = UseImm ? ARM::VCMPEZS : ARM::VCMPES;
+      CmpOpc = UseImm ? ARM::VCMPZS : ARM::VCMPS;
       break;
     case MVT::f64:
       isICmp = false;
-      // Equality comparisons shouldn't raise Invalid on uordered inputs.
-      if (isEquality)
-        CmpOpc = UseImm ? ARM::VCMPZD : ARM::VCMPD;
-      else
-      CmpOpc = UseImm ? ARM::VCMPEZD : ARM::VCMPED;
+      CmpOpc = UseImm ? ARM::VCMPZD : ARM::VCMPD;
       break;
     case MVT::i1:
     case MVT::i8:
@@ -1485,8 +1472,7 @@ bool ARMFastISel::SelectCmp(const Instruction *I) {
   if (ARMPred == ARMCC::AL) return false;
 
   // Emit the compare.
-  if (!ARMEmitCmp(CI->getOperand(0), CI->getOperand(1), CI->isUnsigned(),
-                  CI->isEquality()))
+  if (!ARMEmitCmp(CI->getOperand(0), CI->getOperand(1), CI->isUnsigned()))
     return false;
 
   // Now set a register based on the comparison. Explicitly set the predicates
@@ -1889,6 +1875,8 @@ CCAssignFn *ARMFastISel::CCAssignFnForCall(CallingConv::ID CC,
       report_fatal_error("Can't return in GHC call convention");
     else
       return CC_ARM_APCS_GHC;
+  case CallingConv::CFGuard_Check:
+    return (Return ? RetCC_ARM_AAPCS : CC_ARM_Win32_CFGuard_Check);
   }
 }
 
@@ -2247,8 +2235,7 @@ bool ARMFastISel::ARMEmitLibcall(const Instruction *I, RTLIB::Libcall Call) {
     if (!isTypeLegal(ArgTy, ArgVT)) return false;
 
     ISD::ArgFlagsTy Flags;
-    unsigned OriginalAlignment = DL.getABITypeAlignment(ArgTy);
-    Flags.setOrigAlign(OriginalAlignment);
+    Flags.setOrigAlign(Align(DL.getABITypeAlignment(ArgTy)));
 
     Args.push_back(Op);
     ArgRegs.push_back(Arg);
@@ -2381,8 +2368,7 @@ bool ARMFastISel::SelectCall(const Instruction *I,
     if (!Arg.isValid())
       return false;
 
-    unsigned OriginalAlignment = DL.getABITypeAlignment(ArgTy);
-    Flags.setOrigAlign(OriginalAlignment);
+    Flags.setOrigAlign(Align(DL.getABITypeAlignment(ArgTy)));
 
     Args.push_back(*i);
     ArgRegs.push_back(Arg);
@@ -2576,8 +2562,12 @@ bool ARMFastISel::SelectIntrinsicCall(const IntrinsicInst &I) {
     return SelectCall(&I, "memset");
   }
   case Intrinsic::trap: {
-    BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc, TII.get(
-      Subtarget->useNaClTrap() ? ARM::TRAPNaCl : ARM::TRAP));
+    unsigned Opcode;
+    if (Subtarget->isThumb())
+      Opcode = ARM::tTRAP;
+    else
+      Opcode = Subtarget->useNaClTrap() ? ARM::TRAPNaCl : ARM::TRAP;
+    BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc, TII.get(Opcode));
     return true;
   }
   }
@@ -2955,8 +2945,7 @@ bool ARMFastISel::tryToFoldLoadIntoMI(MachineInstr *MI, unsigned OpNo,
   return true;
 }
 
-unsigned ARMFastISel::ARMLowerPICELF(const GlobalValue *GV,
-                                     unsigned Align, MVT VT) {
+unsigned ARMFastISel::ARMLowerPICELF(const GlobalValue *GV, MVT VT) {
   bool UseGOT_PREL = !TM.shouldAssumeDSOLocal(*GV->getParent(), GV);
 
   LLVMContext *Context = &MF->getFunction().getContext();
@@ -2972,7 +2961,7 @@ unsigned ARMFastISel::ARMLowerPICELF(const GlobalValue *GV,
   unsigned Idx = MF->getConstantPool()->getConstantPoolIndex(CPV, ConstAlign);
   MachineMemOperand *CPMMO =
       MF->getMachineMemOperand(MachinePointerInfo::getConstantPool(*MF),
-                               MachineMemOperand::MOLoad, 4, 4);
+                               MachineMemOperand::MOLoad, 4, Align(4));
 
   Register TempReg = MF->getRegInfo().createVirtualRegister(&ARM::rGPRRegClass);
   unsigned Opc = isThumb2 ? ARM::t2LDRpci : ARM::LDRcp;

@@ -244,8 +244,7 @@ private:
                     SmallVectorImpl<uint64_t> *Offsets = nullptr);
 
   /// Common code for translating normal calls or invokes.
-  bool translateCallSite(const ImmutableCallSite &CS,
-                         MachineIRBuilder &MIRBuilder);
+  bool translateCallBase(const CallBase &CB, MachineIRBuilder &MIRBuilder);
 
   /// Translate call instruction.
   /// \pre \p U is a call instruction.
@@ -483,6 +482,9 @@ private:
   bool translateUserOp2(const User &U, MachineIRBuilder &MIRBuilder) {
     return false;
   }
+  bool translateFreeze(const User &U, MachineIRBuilder &MIRBuilder) {
+    return false;
+  }
 
   /// @}
 
@@ -517,6 +519,10 @@ private:
   // True when either the Target Machine specifies no optimizations or the
   // function has the optnone attribute.
   bool EnableOpts = false;
+
+  /// True when the block contains a tail call. This allows the IRTranslator to
+  /// stop translating such blocks early.
+  bool HasTailCall = false;
 
   /// Switch analysis and optimization.
   class GISelSwitchLowering : public SwitchCG::SwitchLowering {
@@ -575,7 +581,16 @@ private:
   /// Get the alignment of the given memory operation instruction. This will
   /// either be the explicitly specified value or the ABI-required alignment for
   /// the type being accessed (according to the Module's DataLayout).
-  unsigned getMemOpAlignment(const Instruction &I);
+  LLVM_ATTRIBUTE_DEPRECATED(
+      inline unsigned getMemOpAlignment(const Instruction &I),
+      "Use getMemOpAlign instead") {
+    return getMemOpAlign(I).value();
+  }
+
+  /// Get the alignment of the given memory operation instruction. This will
+  /// either be the explicitly specified value or the ABI-required alignment for
+  /// the type being accessed (according to the Module's DataLayout).
+  Align getMemOpAlign(const Instruction &I);
 
   /// Get the MachineBasicBlock that represents \p BB. Specifically, the block
   /// returned will be the head of the translated block (suitable for branch

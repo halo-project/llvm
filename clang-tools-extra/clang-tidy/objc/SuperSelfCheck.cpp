@@ -19,7 +19,7 @@ namespace objc {
 
 namespace {
 
-/// \brief Matches Objective-C methods in the initializer family.
+/// Matches Objective-C methods in the initializer family.
 ///
 /// Example matches -init and -initWithInt:.
 ///   (matcher = objcMethodDecl(isInitializer()))
@@ -35,7 +35,7 @@ AST_MATCHER(ObjCMethodDecl, isInitializer) {
   return Node.getMethodFamily() == OMF_init;
 }
 
-/// \brief Matches Objective-C implementations with interfaces that match
+/// Matches Objective-C implementations with interfaces that match
 /// \c Base.
 ///
 /// Example matches implementation declarations for X.
@@ -56,7 +56,7 @@ AST_MATCHER_P(ObjCImplementationDecl, hasInterface,
   return Base.matches(*InterfaceDecl, Finder, Builder);
 }
 
-/// \brief Matches Objective-C message expressions where the receiver is the
+/// Matches Objective-C message expressions where the receiver is the
 /// super instance.
 ///
 /// Example matches the invocations of -banana and -orange.
@@ -75,10 +75,6 @@ AST_MATCHER(ObjCMessageExpr, isMessagingSuperInstance) {
 } // namespace
 
 void SuperSelfCheck::registerMatchers(MatchFinder *Finder) {
-  // This check should only be applied to Objective-C sources.
-  if (!getLangOpts().ObjC)
-    return;
-
   Finder->addMatcher(
       objcMessageExpr(hasSelector("self"), isMessagingSuperInstance(),
                       hasAncestor(objcMethodDecl(

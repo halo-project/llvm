@@ -184,7 +184,8 @@ bool WebAssemblyMemIntrinsicResults::runOnMachineFunction(MachineFunction &MF) {
   auto &MDT = getAnalysis<MachineDominatorTree>();
   const WebAssemblyTargetLowering &TLI =
       *MF.getSubtarget<WebAssemblySubtarget>().getTargetLowering();
-  const auto &LibInfo = getAnalysis<TargetLibraryInfoWrapperPass>().getTLI();
+  const auto &LibInfo =
+      getAnalysis<TargetLibraryInfoWrapperPass>().getTLI(MF.getFunction());
   auto &LIS = getAnalysis<LiveIntervals>();
   bool Changed = false;
 
@@ -200,8 +201,7 @@ bool WebAssemblyMemIntrinsicResults::runOnMachineFunction(MachineFunction &MF) {
       switch (MI.getOpcode()) {
       default:
         break;
-      case WebAssembly::CALL_i32:
-      case WebAssembly::CALL_i64:
+      case WebAssembly::CALL:
         Changed |= optimizeCall(MBB, MI, MRI, MDT, LIS, TLI, LibInfo);
         break;
       }

@@ -304,13 +304,14 @@ void EHScopeStack::Cleanup::anchor() {}
 static void createStoreInstBefore(llvm::Value *value, Address addr,
                                   llvm::Instruction *beforeInst) {
   auto store = new llvm::StoreInst(value, addr.getPointer(), beforeInst);
-  store->setAlignment(addr.getAlignment().getQuantity());
+  store->setAlignment(addr.getAlignment().getAsAlign());
 }
 
 static llvm::LoadInst *createLoadInstBefore(Address addr, const Twine &name,
                                             llvm::Instruction *beforeInst) {
-  auto load = new llvm::LoadInst(addr.getPointer(), name, beforeInst);
-  load->setAlignment(addr.getAlignment().getQuantity());
+  auto load = new llvm::LoadInst(addr.getElementType(), addr.getPointer(), name,
+                                 beforeInst);
+  load->setAlignment(addr.getAlignment().getAsAlign());
   return load;
 }
 

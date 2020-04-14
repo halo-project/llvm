@@ -35,6 +35,8 @@ option(COMPILER_RT_BUILD_BUILTINS "Build builtins" ON)
 mark_as_advanced(COMPILER_RT_BUILD_BUILTINS)
 option(COMPILER_RT_BUILD_CRT "Build crtbegin.o/crtend.o" ON)
 mark_as_advanced(COMPILER_RT_BUILD_CRT)
+option(COMPILER_RT_CRT_USE_EH_FRAME_REGISTRY "Use eh_frame in crtbegin.o/crtend.o" ON)
+mark_as_advanced(COMPILER_RT_CRT_USE_EH_FRAME_REGISTRY)
 option(COMPILER_RT_BUILD_SANITIZERS "Build sanitizers" ON)
 mark_as_advanced(COMPILER_RT_BUILD_SANITIZERS)
 option(COMPILER_RT_BUILD_XRAY "Build xray" ON)
@@ -281,12 +283,28 @@ if(NOT COMPILER_RT_HAS_FVISIBILITY_HIDDEN_FLAG)
 endif()
 append_list_if(COMPILER_RT_HAS_FNO_LTO_FLAG -fno-lto SANITIZER_COMMON_CFLAGS)
 
+# By default do not instrument or use profdata for compiler-rt.
+if(NOT COMPILER_RT_ENABLE_PGO)
+  if(LLVM_PROFDATA_FILE AND COMPILER_RT_HAS_FNO_PROFILE_INSTR_USE_FLAG)
+    list(APPEND SANITIZER_COMMON_CFLAGS "-fno-profile-instr-use")
+  endif()
+  if(LLVM_BUILD_INSTRUMENTED MATCHES IR AND COMPILER_RT_HAS_FNO_PROFILE_GENERATE_FLAG)
+    list(APPEND SANITIZER_COMMON_CFLAGS "-fno-profile-generate")
+  elseif(LLVM_BUILD_INSTRUMENTED AND COMPILER_RT_HAS_FNO_PROFILE_INSTR_GENERATE_FLAG)
+    list(APPEND SANITIZER_COMMON_CFLAGS "-fno-profile-instr-generate")
+  endif()
+endif()
+
 # The following is a workaround for powerpc64le. This is the only architecture
 # that requires -fno-function-sections to work properly. If lacking, the ASan
 # Linux test function-sections-are-bad.cpp fails with the following error:
 # 'undefined symbol: __sanitizer_unaligned_load32'.
 if(DEFINED TARGET_powerpc64le_CFLAGS)
-  append_list_if(COMPILER_RT_HAS_FNO_FUNCTION_SECTIONS_FLAG -fno-function-sections TARGET_powerpc64le_CFLAGS)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "XL")
+    append("-qnofuncsect" TARGET_powerpc64le_CFLAGS)
+  else()
+    append_list_if(COMPILER_RT_HAS_FNO_FUNCTION_SECTIONS_FLAG -fno-function-sections TARGET_powerpc64le_CFLAGS)
+  endif()
 endif()
 
 # The following is a workaround for s390x.  This avoids creation of "partial
@@ -337,12 +355,12 @@ if (NOT MSVC)
 endif()
 
 # Determine if we should restrict stack frame sizes.
-# Stack frames on PowerPC and Mips and in debug biuld can be much larger than
+# Stack frames on PowerPC, Mips, SystemZ and in debug build can be much larger than
 # anticipated.
 # FIXME: Fix all sanitizers and add -Wframe-larger-than to
 # SANITIZER_COMMON_FLAGS
 if(COMPILER_RT_HAS_WFRAME_LARGER_THAN_FLAG AND NOT COMPILER_RT_DEBUG
-   AND NOT ${COMPILER_RT_DEFAULT_TARGET_ARCH} MATCHES "powerpc|mips")
+   AND NOT ${COMPILER_RT_DEFAULT_TARGET_ARCH} MATCHES "powerpc|mips|s390x")
   set(SANITIZER_LIMIT_FRAME_SIZE TRUE)
 else()
   set(SANITIZER_LIMIT_FRAME_SIZE FALSE)
@@ -397,7 +415,6 @@ append_list_if(COMPILER_RT_HAS_NODEFAULTLIBS_FLAG -nodefaultlibs SANITIZER_COMMO
 append_list_if(COMPILER_RT_HAS_Z_TEXT -Wl,-z,text SANITIZER_COMMON_LINK_FLAGS)
 
 if (COMPILER_RT_USE_BUILTINS_LIBRARY)
-  list(APPEND SANITIZER_COMMON_LINK_LIBS ${COMPILER_RT_BUILTINS_LIBRARY})
   string(REPLACE "-Wl,-z,defs" "" CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS}")
 else()
   if (ANDROID)
@@ -465,24 +482,30 @@ add_subdirectory(include)
 option(COMPILER_RT_USE_LIBCXX
   "Enable compiler-rt to use libc++ from the source tree" ON)
 if(COMPILER_RT_USE_LIBCXX)
-  foreach(path IN ITEMS ${LLVM_MAIN_SRC_DIR}/projects/libcxx
-                        ${LLVM_MAIN_SRC_DIR}/runtimes/libcxx
-                        ${LLVM_MAIN_SRC_DIR}/../libcxx
-                        ${LLVM_EXTERNAL_LIBCXX_SOURCE_DIR})
-    if(IS_DIRECTORY ${path})
-      set(COMPILER_RT_LIBCXX_PATH ${path})
-      break()
-    endif()
-  endforeach()
-  foreach(path IN ITEMS ${LLVM_MAIN_SRC_DIR}/projects/libcxxabi
-                        ${LLVM_MAIN_SRC_DIR}/runtimes/libcxxabi
-                        ${LLVM_MAIN_SRC_DIR}/../libcxxabi
-                        ${LLVM_EXTERNAL_LIBCXXABI_SOURCE_DIR})
-    if(IS_DIRECTORY ${path})
-      set(COMPILER_RT_LIBCXXABI_PATH ${path})
-      break()
-    endif()
-  endforeach()
+  if(LLVM_ENABLE_PROJECTS_USED)
+    # Don't use libcxx if LLVM_ENABLE_PROJECTS does not enable it.
+    set(COMPILER_RT_LIBCXX_PATH ${LLVM_EXTERNAL_LIBCXX_SOURCE_DIR})
+    set(COMPILER_RT_LIBCXXABI_PATH ${LLVM_EXTERNAL_LIBCXXABI_SOURCE_DIR})
+  else()
+    foreach(path IN ITEMS ${LLVM_MAIN_SRC_DIR}/projects/libcxx
+                          ${LLVM_MAIN_SRC_DIR}/runtimes/libcxx
+                          ${LLVM_MAIN_SRC_DIR}/../libcxx
+                          ${LLVM_EXTERNAL_LIBCXX_SOURCE_DIR})
+      if(IS_DIRECTORY ${path})
+        set(COMPILER_RT_LIBCXX_PATH ${path})
+        break()
+      endif()
+    endforeach()
+    foreach(path IN ITEMS ${LLVM_MAIN_SRC_DIR}/projects/libcxxabi
+                          ${LLVM_MAIN_SRC_DIR}/runtimes/libcxxabi
+                          ${LLVM_MAIN_SRC_DIR}/../libcxxabi
+                          ${LLVM_EXTERNAL_LIBCXXABI_SOURCE_DIR})
+      if(IS_DIRECTORY ${path})
+        set(COMPILER_RT_LIBCXXABI_PATH ${path})
+        break()
+      endif()
+    endforeach()
+  endif()
 endif()
 
 set(COMPILER_RT_LLD_PATH ${LLVM_MAIN_SRC_DIR}/tools/lld)
@@ -493,7 +516,7 @@ else()
   if(EXISTS ${COMPILER_RT_LLD_PATH}/ AND LLVM_TOOL_LLD_BUILD)
     set(COMPILER_RT_HAS_LLD TRUE)
   else()
-    set(COMPILER_RT_HAS_LLD FALSE)
+    set(COMPILER_RT_HAS_LLD ${COMPILER_RT_HAS_FUSE_LD_LLD_FLAG})
   endif()
 endif()
 pythonize_bool(COMPILER_RT_HAS_LLD)
@@ -508,6 +531,8 @@ if(COMPILER_RT_INCLUDE_TESTS)
     # The user can still choose to have the check targets *use* a different lit
     # by specifying -DLLVM_EXTERNAL_LIT, but we generate it regardless.
     if (EXISTS ${LLVM_MAIN_SRC_DIR}/utils/llvm-lit)
+      # Needed for lit support in standalone builds.
+      include(AddLLVM)
       add_subdirectory(${LLVM_MAIN_SRC_DIR}/utils/llvm-lit ${CMAKE_CURRENT_BINARY_DIR}/llvm-lit)
     elseif(NOT EXISTS ${LLVM_EXTERNAL_LIT})
       message(WARNING "Could not find LLVM source directory and LLVM_EXTERNAL_LIT does not"
@@ -515,3 +540,5 @@ if(COMPILER_RT_INCLUDE_TESTS)
     endif()
   endif()
 endif()
+
+add_subdirectory(tools)

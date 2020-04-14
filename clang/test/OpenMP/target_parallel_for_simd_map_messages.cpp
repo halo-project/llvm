@@ -1,12 +1,19 @@
-// RUN: %clang_cc1 -verify -fopenmp %s -Wno-openmp-target -Wuninitialized
+// RUN: %clang_cc1 -verify -fopenmp %s -Wno-openmp-mapping -Wuninitialized
 
-// RUN: %clang_cc1 -verify -fopenmp-simd %s -Wno-openmp-target -Wuninitialized
+// RUN: %clang_cc1 -verify -fopenmp-simd %s -Wno-openmp-mapping -Wuninitialized
 
 void foo() {
 }
 
 bool foobool(int argc) {
   return argc;
+}
+
+void xxx(int argc) {
+  int map; // expected-note {{initialize the variable 'map' to silence this warning}}
+#pragma omp target parallel for simd map(map) // expected-warning {{variable 'map' is uninitialized when used here}}
+  for (int i = 0; i < 10; ++i)
+    ;
 }
 
 struct S1; // expected-note 2 {{declared here}}
@@ -281,6 +288,12 @@ int main(int argc, char **argv) {
   for (i = 0; i < argc; ++i) foo();
 #pragma omp target parallel for simd map(tofrom j) // expected-error {{expected ',' or ')' in 'map' clause}}
   for (i = 0; i < argc; ++i) foo();
+#pragma omp target parallel for simd map(delete: j) // expected-error {{map type 'delete' is not allowed for '#pragma omp target parallel for simd'}}
+  for (i = 0; i < argc; ++i)
+    foo();
+#pragma omp target parallel for simd map(release: j) // expected-error {{map type 'release' is not allowed for '#pragma omp target parallel for simd'}}
+  for (i = 0; i < argc; ++i)
+    foo();
 
   return tmain<int, 3>(argc)+tmain<from, 4>(argc); // expected-note {{in instantiation of function template specialization 'tmain<int, 3>' requested here}} expected-note {{in instantiation of function template specialization 'tmain<int, 4>' requested here}}
 }

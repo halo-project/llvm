@@ -1,4 +1,4 @@
-//===-- Reproducer.cpp ------------------------------------------*- C++ -*-===//
+//===-- Reproducer.cpp ----------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -18,12 +18,31 @@ using namespace lldb_private::repro;
 using namespace llvm;
 using namespace llvm::yaml;
 
+static llvm::Optional<bool> GetEnv(const char *var) {
+  std::string val = llvm::StringRef(getenv(var)).lower();
+  if (val == "0" || val == "off")
+    return false;
+  if (val == "1" || val == "on")
+    return true;
+  return {};
+}
+
 Reproducer &Reproducer::Instance() { return *InstanceImpl(); }
 
 llvm::Error Reproducer::Initialize(ReproducerMode mode,
                                    llvm::Optional<FileSpec> root) {
   lldbassert(!InstanceImpl() && "Already initialized.");
   InstanceImpl().emplace();
+
+  // The environment can override the capture mode.
+  if (mode != ReproducerMode::Replay) {
+    if (llvm::Optional<bool> override = GetEnv("LLDB_CAPTURE_REPRODUCER")) {
+      if (*override)
+        mode = ReproducerMode::Capture;
+      else
+        mode = ReproducerMode::Off;
+    }
+  }
 
   switch (mode) {
   case ReproducerMode::Capture: {
@@ -136,9 +155,25 @@ FileSpec Reproducer::GetReproducerPath() const {
   return {};
 }
 
-Generator::Generator(const FileSpec &root) : m_root(root), m_done(false) {}
+static FileSpec MakeAbsolute(FileSpec file_spec) {
+  SmallString<128> path;
+  file_spec.GetPath(path, false);
+  llvm::sys::fs::make_absolute(path);
+  return FileSpec(path, file_spec.GetPathStyle());
+}
 
-Generator::~Generator() {}
+Generator::Generator(FileSpec root) : m_root(MakeAbsolute(std::move(root))) {
+  GetOrCreate<repro::WorkingDirectoryProvider>();
+}
+
+Generator::~Generator() {
+  if (!m_done) {
+    if (m_auto_generate)
+      Keep();
+    else
+      Discard();
+  }
+}
 
 ProviderBase *Generator::Register(std::unique_ptr<ProviderBase> provider) {
   std::lock_guard<std::mutex> lock(m_providers_mutex);
@@ -168,6 +203,10 @@ void Generator::Discard() {
   llvm::sys::fs::remove_directories(m_root.GetPath());
 }
 
+void Generator::SetAutoGenerate(bool b) { m_auto_generate = b; }
+
+bool Generator::IsAutoGenerate() const { return m_auto_generate; }
+
 const FileSpec &Generator::GetRoot() const { return m_root; }
 
 void Generator::AddProvidersToIndex() {
@@ -176,7 +215,7 @@ void Generator::AddProvidersToIndex() {
 
   std::error_code EC;
   auto strm = std::make_unique<raw_fd_ostream>(index.GetPath(), EC,
-                                                sys::fs::OpenFlags::OF_None);
+                                               sys::fs::OpenFlags::OF_None);
   yaml::Output yout(*strm);
 
   std::vector<std::string> files;
@@ -188,7 +227,8 @@ void Generator::AddProvidersToIndex() {
   yout << files;
 }
 
-Loader::Loader(const FileSpec &root) : m_root(root), m_loaded(false) {}
+Loader::Loader(FileSpec root)
+    : m_root(MakeAbsolute(std::move(root))), m_loaded(false) {}
 
 llvm::Error Loader::LoadIndex() {
   if (m_loaded)
@@ -232,7 +272,7 @@ DataRecorder::Create(const FileSpec &filename) {
 DataRecorder *CommandProvider::GetNewDataRecorder() {
   std::size_t i = m_data_recorders.size() + 1;
   std::string filename = (llvm::Twine(Info::name) + llvm::Twine("-") +
-                          llvm::Twine(i) + llvm::Twine(".txt"))
+                          llvm::Twine(i) + llvm::Twine(".yaml"))
                              .str();
   auto recorder_or_error =
       DataRecorder::Create(GetRoot().CopyByAppendingPathComponent(filename));
@@ -272,14 +312,31 @@ void VersionProvider::Keep() {
   os << m_version << "\n";
 }
 
+void WorkingDirectoryProvider::Keep() {
+  FileSpec file = GetRoot().CopyByAppendingPathComponent(Info::file);
+  std::error_code ec;
+  llvm::raw_fd_ostream os(file.GetPath(), ec, llvm::sys::fs::OF_Text);
+  if (ec)
+    return;
+  os << m_cwd << "\n";
+}
+
+void FileProvider::recordInterestingDirectory(const llvm::Twine &dir) {
+  if (m_collector)
+    m_collector->addDirectory(dir);
+}
+
 void ProviderBase::anchor() {}
-char ProviderBase::ID = 0;
 char CommandProvider::ID = 0;
 char FileProvider::ID = 0;
+char ProviderBase::ID = 0;
 char VersionProvider::ID = 0;
+char WorkingDirectoryProvider::ID = 0;
 const char *CommandProvider::Info::file = "command-interpreter.yaml";
 const char *CommandProvider::Info::name = "command-interpreter";
 const char *FileProvider::Info::file = "files.yaml";
 const char *FileProvider::Info::name = "files";
 const char *VersionProvider::Info::file = "version.txt";
 const char *VersionProvider::Info::name = "version";
+const char *WorkingDirectoryProvider::Info::file = "cwd.txt";
+const char *WorkingDirectoryProvider::Info::name = "cwd";

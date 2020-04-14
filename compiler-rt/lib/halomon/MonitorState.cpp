@@ -49,7 +49,7 @@ void MonitorState::server_listen_loop() {
         logs(LC) << "got request to START measuring a function\n";
         llvm::StringRef Blob(Body.data(), Body.size());
         pb::FunctionAddress Req;
-        Req.ParseFromString(Blob);
+        Req.ParseFromString(Blob.str());
 
         logs(LC) << "Recieved request to measure perf of func "
                   << Req.func_addr() << "\n";
@@ -65,7 +65,7 @@ void MonitorState::server_listen_loop() {
         logs(LC) << "got request to STOP measuring a function\n";
         llvm::StringRef Blob(Body.data(), Body.size());
         pb::FunctionAddress Req;
-        Req.ParseFromString(Blob);
+        Req.ParseFromString(Blob.str());
 
         logs(LC) << "Recieved request to STOP measuring perf of func "
                   << Req.func_addr() << "\n";
@@ -80,7 +80,7 @@ void MonitorState::server_listen_loop() {
         logs(LC) << "got code replacement\n";
         llvm::StringRef Blob(Body.data(), Body.size());
         pb::CodeReplacement CR;
-        CR.ParseFromString(Blob);
+        CR.ParseFromString(Blob.str());
 
         // msg::print_proto(CR);
 
@@ -237,7 +237,7 @@ llvm::Error MonitorState::gather_module_info(std::string ObjPath, CodePatcher co
         return makeError("Function marked patchable but unknown to CodePatcher!\n");
 
       pb::FunctionInfo *FI = MI->add_funcs();
-      FI->set_label(Name);
+      FI->set_label(Name.str());
       FI->set_start(Start);
       FI->set_size(Size);
       FI->set_patchable(IsPatchable);

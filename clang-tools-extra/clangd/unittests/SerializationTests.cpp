@@ -104,9 +104,6 @@ TEST(SerializationTest, NoCrashOnEmptyYAML) {
 }
 
 TEST(SerializationTest, YAMLConversions) {
-  auto In = readIndexFile(YAML);
-  EXPECT_TRUE(bool(In)) << In.takeError();
-
   auto ParsedYAML = readIndexFile(YAML);
   ASSERT_TRUE(bool(ParsedYAML)) << ParsedYAML.takeError();
   ASSERT_TRUE(bool(ParsedYAML->Symbols));
@@ -152,9 +149,9 @@ TEST(SerializationTest, YAMLConversions) {
   SymbolID Base = cantFail(SymbolID::fromStr("6481EE7AF2841756"));
   SymbolID Derived = cantFail(SymbolID::fromStr("6512AEC512EA3A2D"));
   ASSERT_TRUE(bool(ParsedYAML->Relations));
-  EXPECT_THAT(*ParsedYAML->Relations,
-              UnorderedElementsAre(
-                  Relation{Base, index::SymbolRole::RelationBaseOf, Derived}));
+  EXPECT_THAT(
+      *ParsedYAML->Relations,
+      UnorderedElementsAre(Relation{Base, RelationKind::BaseOf, Derived}));
 }
 
 std::vector<std::string> YAMLFromSymbols(const SymbolSlab &Slab) {

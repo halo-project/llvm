@@ -135,8 +135,8 @@ isSafeToConvert(const RecordDecl *RD, CodeGenTypes &CGT,
   // the class.
   if (const CXXRecordDecl *CRD = dyn_cast<CXXRecordDecl>(RD)) {
     for (const auto &I : CRD->bases())
-      if (!isSafeToConvert(I.getType()->getAs<RecordType>()->getDecl(),
-                           CGT, AlreadyChecked))
+      if (!isSafeToConvert(I.getType()->castAs<RecordType>()->getDecl(), CGT,
+                           AlreadyChecked))
         return false;
   }
 
@@ -383,6 +383,20 @@ llvm::Type *CodeGenTypes::ConvertType(QualType T) {
 
   const Type *Ty = T.getTypePtr();
 
+  // For the device-side compilation, CUDA device builtin surface/texture types
+  // may be represented in different types.
+  if (Context.getLangOpts().CUDAIsDevice) {
+    if (T->isCUDADeviceBuiltinSurfaceType()) {
+      if (auto *Ty = CGM.getTargetCodeGenInfo()
+                         .getCUDADeviceBuiltinSurfaceDeviceType())
+        return Ty;
+    } else if (T->isCUDADeviceBuiltinTextureType()) {
+      if (auto *Ty = CGM.getTargetCodeGenInfo()
+                         .getCUDADeviceBuiltinTextureDeviceType())
+        return Ty;
+    }
+  }
+
   // RecordTypes are cached and processed specially.
   if (const RecordType *RT = dyn_cast<RecordType>(Ty))
     return ConvertRecordDeclType(RT->getDecl());
@@ -402,7 +416,7 @@ llvm::Type *CodeGenTypes::ConvertType(QualType T) {
 #define NON_CANONICAL_TYPE(Class, Base) case Type::Class:
 #define DEPENDENT_TYPE(Class, Base) case Type::Class:
 #define NON_CANONICAL_UNLESS_DEPENDENT_TYPE(Class, Base) case Type::Class:
-#include "clang/AST/TypeNodes.def"
+#include "clang/AST/TypeNodes.inc"
     llvm_unreachable("Non-canonical or dependent types aren't possible.");
 
   case Type::Builtin: {
@@ -511,23 +525,44 @@ llvm::Type *CodeGenTypes::ConvertType(QualType T) {
     case BuiltinType::OCLReserveID:
       ResultType = CGM.getOpenCLRuntime().convertOpenCLSpecificType(Ty);
       break;
-
-    // TODO: real CodeGen support for SVE types requires more infrastructure
-    // to be added first.  Report an error until then.
-#define SVE_TYPE(Name, Id, SingletonId) case BuiltinType::Id:
-#include "clang/Basic/AArch64SVEACLETypes.def"
-    {
-      unsigned DiagID = CGM.getDiags().getCustomDiagID(
-          DiagnosticsEngine::Error,
-          "cannot yet generate code for SVE type '%0'");
-      auto *BT = cast<BuiltinType>(Ty);
-      auto Name = BT->getName(CGM.getContext().getPrintingPolicy());
-      CGM.getDiags().Report(DiagID) << Name;
-      // Return something safe.
-      ResultType = llvm::IntegerType::get(getLLVMContext(), 32);
+    case BuiltinType::SveInt8:
+    case BuiltinType::SveUint8:
+      return llvm::VectorType::get(llvm::IntegerType::get(getLLVMContext(), 8),
+                                   {16, true});
+    case BuiltinType::SveInt16:
+    case BuiltinType::SveUint16:
+      return llvm::VectorType::get(llvm::IntegerType::get(getLLVMContext(), 16),
+                                   {8, true});
+    case BuiltinType::SveInt32:
+    case BuiltinType::SveUint32:
+      return llvm::VectorType::get(llvm::IntegerType::get(getLLVMContext(), 32),
+                                   {4, true});
+    case BuiltinType::SveInt64:
+    case BuiltinType::SveUint64:
+      return llvm::VectorType::get(llvm::IntegerType::get(getLLVMContext(), 64),
+                                   {2, true});
+    case BuiltinType::SveFloat16:
+      return llvm::VectorType::get(
+          getTypeForFormat(getLLVMContext(),
+                           Context.getFloatTypeSemantics(Context.HalfTy),
+                           /* UseNativeHalf = */ true),
+          {8, true});
+    case BuiltinType::SveFloat32:
+      return llvm::VectorType::get(
+          getTypeForFormat(getLLVMContext(),
+                           Context.getFloatTypeSemantics(Context.FloatTy),
+                           /* UseNativeHalf = */ false),
+          {4, true});
+    case BuiltinType::SveFloat64:
+      return llvm::VectorType::get(
+          getTypeForFormat(getLLVMContext(),
+                           Context.getFloatTypeSemantics(Context.DoubleTy),
+                           /* UseNativeHalf = */ false),
+          {2, true});
+    case BuiltinType::SveBool:
+      return llvm::VectorType::get(llvm::IntegerType::get(getLLVMContext(), 1),
+                                   {16, true});
       break;
-    }
-
     case BuiltinType::Dependent:
 #define BUILTIN_TYPE(Id, SingletonId)
 #define PLACEHOLDER_TYPE(Id, SingletonId) \
@@ -560,7 +595,11 @@ llvm::Type *CodeGenTypes::ConvertType(QualType T) {
     llvm::Type *PointeeType = ConvertTypeForMem(ETy);
     if (PointeeType->isVoidTy())
       PointeeType = llvm::Type::getInt8Ty(getLLVMContext());
-    unsigned AS = Context.getTargetAddressSpace(ETy);
+
+    unsigned AS = PointeeType->isFunctionTy()
+                      ? getDataLayout().getProgramAddressSpace()
+                      : Context.getTargetAddressSpace(ETy);
+
     ResultType = llvm::PointerType::get(PointeeType, AS);
     break;
   }
@@ -744,8 +783,7 @@ llvm::StructType *CodeGenTypes::ConvertRecordDeclType(const RecordDecl *RD) {
   if (const CXXRecordDecl *CRD = dyn_cast<CXXRecordDecl>(RD)) {
     for (const auto &I : CRD->bases()) {
       if (I.isVirtual()) continue;
-
-      ConvertRecordDeclType(I.getType()->getAs<RecordType>()->getDecl());
+      ConvertRecordDeclType(I.getType()->castAs<RecordType>()->getDecl());
     }
   }
 

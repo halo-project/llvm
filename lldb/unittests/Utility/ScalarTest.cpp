@@ -1,4 +1,4 @@
-//===-- ScalarTest.cpp ------------------------------------------*- C++ -*-===//
+//===-- ScalarTest.cpp ----------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -16,7 +16,9 @@
 #include "llvm/Testing/Support/Error.h"
 
 using namespace lldb_private;
-using namespace llvm;
+using llvm::APInt;
+using llvm::Failed;
+using llvm::Succeeded;
 
 template <typename T>
 bool checkInequality(T c1, T c2) {
@@ -155,7 +157,7 @@ TEST(ScalarTest, ExtractBitfield) {
 template <typename T> static std::string ScalarGetValue(T value) {
   StreamString stream;
   Scalar(value).GetValue(&stream, false);
-  return stream.GetString();
+  return std::string(stream.GetString());
 }
 
 TEST(ScalarTest, GetValue) {
@@ -272,7 +274,7 @@ TEST(ScalarTest, APIntConstructor) {
   }
 
   Scalar B(APInt(64, 42));
-  EXPECT_EQ(B.GetType(), Scalar::e_slonglong);
+  EXPECT_EQ(B.GetType(), Scalar::GetBestTypeForBitSize(64, true));
   Scalar C(APInt(128, 96));
   EXPECT_EQ(C.GetType(), Scalar::e_sint128);
   Scalar D(APInt(256, 156));

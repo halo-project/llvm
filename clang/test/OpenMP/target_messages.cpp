@@ -13,14 +13,12 @@
 // NO-HOST-BC: The provided host compiler IR file '1111.bc' is required to generate code for OpenMP target regions but cannot be found.
 
 // RUN: %clang_cc1 -fopenmp -x c++ -triple powerpc64le-unknown-unknown -fopenmp-targets=powerpc64le-ibm-linux-gnu -emit-llvm-bc %s -o %t-ppc-host.bc -DREGION_HOST
-// RUN: not %clang_cc1 -fopenmp -x c++ -triple powerpc64le-unknown-unknown -fopenmp-targets=powerpc64le-ibm-linux-gnu -emit-llvm %s -fopenmp-is-device -fopenmp-host-ir-file-path %t-ppc-host.bc -o - -DREGION_DEVICE 2>&1 | FileCheck %s --check-prefix NO-REGION
-// NO-REGION: Offloading entry for target region is incorrect: either the address or the ID is invalid.
-// NO-REGION-NOT: Offloading entry for target region is incorrect: either the address or the ID is invalid.
+// RUN: not %clang_cc1 -verify -fopenmp -x c++ -triple powerpc64le-unknown-unknown -fopenmp-targets=powerpc64le-ibm-linux-gnu -emit-llvm %s -fopenmp-is-device -fopenmp-host-ir-file-path %t-ppc-host.bc -o - -DREGION_DEVICE 2>&1
 
 #if defined(REGION_HOST) || defined(REGION_DEVICE)
 void foo() {
 #ifdef REGION_HOST
-#pragma omp target
+#pragma omp target // expected-error {{Offloading entry for target region in _Z3foov is incorrect: either the address or the ID is invalid.}}
   ;
 #endif
 #ifdef REGION_DEVICE
@@ -52,6 +50,12 @@ class S {
       int b;
     #pragma omp target map(this[1]) // expected-note {{expected 'this' subscript expression on map clause to be 'this[0]'}} // expected-error {{invalid 'this' expression on 'map' clause}}
       int c;
+    #pragma omp target map(foo) // expected-error {{expected expression containing only member accesses and/or array sections based on named variables}}
+      int d;
+    #pragma omp target map(zee) // expected-error {{expected expression containing only member accesses and/or array sections based on named variables}}
+      int e;
+    #pragma omp target map(this->zee) // expected-error {{expected expression containing only member accesses and/or array sections based on named variables}}
+      int f;
   }
 };
 
@@ -112,6 +116,22 @@ int main(int argc, char **argv) {
   #pragma omp target
   for (int n = 0; n < 100; ++n) {}
 
+  #pragma omp target map(foo) // expected-error {{expected expression containing only member accesses and/or array sections based on named variables}}
+  {}
+
+  S s;
+
+  #pragma omp target map(s.zee) // expected-error {{expected expression containing only member accesses and/or array sections based on named variables}}
+  {}
+
   return 0;
+}
+
+template <class> struct a { static bool b; };
+template <class c, bool = a<c>::b> void e(c) { // expected-note {{candidate template ignored: substitution failure [with c = int]: non-type template argument is not a constant expression}}
+#pragma omp target
+  {
+    int d ; e(d); // expected-error {{no matching function for call to 'e'}}
+  }
 }
 #endif

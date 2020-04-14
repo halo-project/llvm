@@ -1,4 +1,4 @@
-//===-- CommandReturnObject.cpp ---------------------------------*- C++ -*-===//
+//===-- CommandReturnObject.cpp -------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -33,8 +33,7 @@ static void DumpStringToStreamWithNewline(Stream &strm, const std::string &s,
 
 CommandReturnObject::CommandReturnObject()
     : m_out_stream(), m_err_stream(), m_status(eReturnStatusStarted),
-      m_did_change_process_state(false), m_interactive(true),
-      m_abnormal_stop_was_expected(false) {}
+      m_did_change_process_state(false), m_interactive(true) {}
 
 CommandReturnObject::~CommandReturnObject() {}
 
@@ -47,7 +46,7 @@ void CommandReturnObject::AppendErrorWithFormat(const char *format, ...) {
   sstrm.PrintfVarArg(format, args);
   va_end(args);
 
-  const std::string &s = sstrm.GetString();
+  const std::string &s = std::string(sstrm.GetString());
   if (!s.empty()) {
     Stream &error_strm = GetErrorStream();
     error_strm.PutCString("error: ");

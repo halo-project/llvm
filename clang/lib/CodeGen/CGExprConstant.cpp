@@ -10,20 +10,21 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "CodeGenFunction.h"
 #include "CGCXXABI.h"
 #include "CGObjCRuntime.h"
 #include "CGRecordLayout.h"
+#include "CodeGenFunction.h"
 #include "CodeGenModule.h"
 #include "ConstantEmitter.h"
 #include "TargetInfo.h"
 #include "clang/AST/APValue.h"
 #include "clang/AST/ASTContext.h"
+#include "clang/AST/Attr.h"
 #include "clang/AST/RecordLayout.h"
 #include "clang/AST/StmtVisitor.h"
 #include "clang/Basic/Builtins.h"
-#include "llvm/ADT/Sequence.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/Sequence.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/Function.h"
@@ -317,12 +318,17 @@ bool ConstantAggregateBuilder::split(size_t Index, CharUnits Hint) {
   CharUnits Offset = Offsets[Index];
 
   if (auto *CA = dyn_cast<llvm::ConstantAggregate>(C)) {
+    // Expand the sequence into its contained elements.
+    // FIXME: This assumes vector elements are byte-sized.
     replace(Elems, Index, Index + 1,
             llvm::map_range(llvm::seq(0u, CA->getNumOperands()),
                             [&](unsigned Op) { return CA->getOperand(Op); }));
-    if (auto *Seq = dyn_cast<llvm::SequentialType>(CA->getType())) {
+    if (isa<llvm::ArrayType>(CA->getType()) ||
+        isa<llvm::VectorType>(CA->getType())) {
       // Array or vector.
-      CharUnits ElemSize = getSize(Seq->getElementType());
+      llvm::Type *ElemTy =
+          llvm::GetElementPtrInst::getTypeAtIndex(CA->getType(), (uint64_t)0);
+      CharUnits ElemSize = getSize(ElemTy);
       replace(
           Offsets, Index, Index + 1,
           llvm::map_range(llvm::seq(0u, CA->getNumOperands()),
@@ -343,6 +349,8 @@ bool ConstantAggregateBuilder::split(size_t Index, CharUnits Hint) {
   }
 
   if (auto *CDS = dyn_cast<llvm::ConstantDataSequential>(C)) {
+    // Expand the sequence into its contained elements.
+    // FIXME: This assumes vector elements are byte-sized.
     // FIXME: If possible, split into two ConstantDataSequentials at Hint.
     CharUnits ElemSize = getSize(CDS->getElementType());
     replace(Elems, Index, Index + 1,
@@ -358,6 +366,7 @@ bool ConstantAggregateBuilder::split(size_t Index, CharUnits Hint) {
   }
 
   if (isa<llvm::ConstantAggregateZero>(C)) {
+    // Split into two zeros at the hinted offset.
     CharUnits ElemSize = getSize(C);
     assert(Hint > Offset && Hint < Offset + ElemSize && "nothing to split");
     replace(Elems, Index, Index + 1,
@@ -367,6 +376,7 @@ bool ConstantAggregateBuilder::split(size_t Index, CharUnits Hint) {
   }
 
   if (isa<llvm::UndefValue>(C)) {
+    // Drop undef; it doesn't contribute to the final layout.
     replace(Elems, Index, Index + 1, {});
     replace(Offsets, Index, Index + 1, {});
     return true;
@@ -588,19 +598,21 @@ bool ConstStructBuilder::AppendBytes(CharUnits FieldOffsetInChars,
 bool ConstStructBuilder::AppendBitField(
     const FieldDecl *Field, uint64_t FieldOffset, llvm::ConstantInt *CI,
     bool AllowOverwrite) {
-  uint64_t FieldSize = Field->getBitWidthValue(CGM.getContext());
+  const CGRecordLayout &RL =
+      CGM.getTypes().getCGRecordLayout(Field->getParent());
+  const CGBitFieldInfo &Info = RL.getBitFieldInfo(Field);
   llvm::APInt FieldValue = CI->getValue();
 
   // Promote the size of FieldValue if necessary
   // FIXME: This should never occur, but currently it can because initializer
   // constants are cast to bool, and because clang is not enforcing bitfield
   // width limits.
-  if (FieldSize > FieldValue.getBitWidth())
-    FieldValue = FieldValue.zext(FieldSize);
+  if (Info.Size > FieldValue.getBitWidth())
+    FieldValue = FieldValue.zext(Info.Size);
 
   // Truncate the size of FieldValue to the bit field size.
-  if (FieldSize < FieldValue.getBitWidth())
-    FieldValue = FieldValue.trunc(FieldSize);
+  if (Info.Size < FieldValue.getBitWidth())
+    FieldValue = FieldValue.trunc(Info.Size);
 
   return Builder.addBits(FieldValue,
                          CGM.getContext().toBits(StartOffset) + FieldOffset,
@@ -659,7 +671,7 @@ static bool EmitDesignatedInitUpdater(ConstantEmitter &Emitter,
 }
 
 bool ConstStructBuilder::Build(InitListExpr *ILE, bool AllowOverwrite) {
-  RecordDecl *RD = ILE->getType()->getAs<RecordType>()->getDecl();
+  RecordDecl *RD = ILE->getType()->castAs<RecordType>()->getDecl();
   const ASTRecordLayout &Layout = CGM.getContext().getASTRecordLayout(RD);
 
   unsigned FieldNo = -1;
@@ -839,7 +851,7 @@ bool ConstStructBuilder::Build(const APValue &Val, const RecordDecl *RD,
 }
 
 llvm::Constant *ConstStructBuilder::Finalize(QualType Type) {
-  RecordDecl *RD = Type->getAs<RecordType>()->getDecl();
+  RecordDecl *RD = Type->castAs<RecordType>()->getDecl();
   llvm::Type *ValTy = CGM.getTypes().ConvertType(Type);
   return Builder.build(ValTy, RD->hasFlexibleArrayMember());
 }
@@ -907,7 +919,7 @@ static ConstantAddress tryEmitGlobalCompoundLiteral(CodeGenModule &CGM,
                                      llvm::GlobalVariable::NotThreadLocal,
                     CGM.getContext().getTargetAddressSpace(addressSpace));
   emitter.finalize(GV);
-  GV->setAlignment(Align.getQuantity());
+  GV->setAlignment(Align.getAsAlign());
   CGM.setAddrOfConstantCompoundLiteral(E, GV);
   return ConstantAddress(GV, Align);
 }
@@ -1166,14 +1178,12 @@ public:
   }
 
   llvm::Constant *VisitExprWithCleanups(ExprWithCleanups *E, QualType T) {
-    if (!E->cleanupsHaveSideEffects())
-      return Visit(E->getSubExpr(), T);
-    return nullptr;
+    return Visit(E->getSubExpr(), T);
   }
 
   llvm::Constant *VisitMaterializeTemporaryExpr(MaterializeTemporaryExpr *E,
                                                 QualType T) {
-    return Visit(E->GetTemporaryExpr(), T);
+    return Visit(E->getSubExpr(), T);
   }
 
   llvm::Constant *EmitArrayInitialization(InitListExpr *ILE, QualType T) {
@@ -1268,19 +1278,7 @@ public:
     if (!E->getConstructor()->isTrivial())
       return nullptr;
 
-    // FIXME: We should not have to call getBaseElementType here.
-    const RecordType *RT =
-      CGM.getContext().getBaseElementType(Ty)->getAs<RecordType>();
-    const CXXRecordDecl *RD = cast<CXXRecordDecl>(RT->getDecl());
-
-    // If the class doesn't have a trivial destructor, we can't emit it as a
-    // constant expr.
-    if (!RD->hasTrivialDestructor())
-      return nullptr;
-
-    // Only copy and default constructors can be trivial.
-
-
+    // Only default and copy/move constructors can be trivial.
     if (E->getNumArgs()) {
       assert(E->getNumArgs() == 1 && "trivial ctor with > 1 argument");
       assert(E->getConstructor()->isCopyOrMoveConstructor() &&
@@ -1728,7 +1726,7 @@ struct ConstantLValue {
 
   /*implicit*/ ConstantLValue(llvm::Constant *value,
                               bool hasOffsetApplied = false)
-    : Value(value), HasOffsetApplied(false) {}
+    : Value(value), HasOffsetApplied(hasOffsetApplied) {}
 
   /*implicit*/ ConstantLValue(ConstantAddress address)
     : ConstantLValue(address.getPointer()) {}
@@ -2003,8 +2001,8 @@ ConstantLValueEmitter::VisitMaterializeTemporaryExpr(
   assert(E->getStorageDuration() == SD_Static);
   SmallVector<const Expr *, 2> CommaLHSs;
   SmallVector<SubobjectAdjustment, 2> Adjustments;
-  const Expr *Inner = E->GetTemporaryExpr()
-      ->skipRValueSubobjectAdjustments(CommaLHSs, Adjustments);
+  const Expr *Inner =
+      E->getSubExpr()->skipRValueSubobjectAdjustments(CommaLHSs, Adjustments);
   return CGM.GetAddrOfGlobalTemporary(E, Inner);
 }
 

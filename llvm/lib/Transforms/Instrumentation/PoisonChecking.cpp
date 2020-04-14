@@ -65,10 +65,11 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/MemoryBuiltins.h"
 #include "llvm/Analysis/ValueTracking.h"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstVisitor.h"
 #include "llvm/IR/IntrinsicInst.h"
-#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/PatternMatch.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 
 using namespace llvm;
@@ -194,10 +195,11 @@ static Value* generatePoisonChecks(Instruction &I) {
     break;
   case Instruction::ExtractElement: {
     Value *Vec = I.getOperand(0);
-    if (Vec->getType()->getVectorIsScalable())
+    auto *VecVTy = cast<VectorType>(Vec->getType());
+    if (VecVTy->isScalable())
       break;
     Value *Idx = I.getOperand(1);
-    unsigned NumElts = Vec->getType()->getVectorNumElements();
+    unsigned NumElts = VecVTy->getNumElements();
     Value *Check =
       B.CreateICmp(ICmpInst::ICMP_UGE, Idx,
                    ConstantInt::get(Idx->getType(), NumElts));
@@ -206,10 +208,11 @@ static Value* generatePoisonChecks(Instruction &I) {
   }
   case Instruction::InsertElement: {
     Value *Vec = I.getOperand(0);
-    if (Vec->getType()->getVectorIsScalable())
+    auto *VecVTy = cast<VectorType>(Vec->getType());
+    if (VecVTy->isScalable())
       break;
     Value *Idx = I.getOperand(2);
-    unsigned NumElts = Vec->getType()->getVectorNumElements();
+    unsigned NumElts = VecVTy->getNumElements();
     Value *Check =
       B.CreateICmp(ICmpInst::ICMP_UGE, Idx,
                    ConstantInt::get(Idx->getType(), NumElts));

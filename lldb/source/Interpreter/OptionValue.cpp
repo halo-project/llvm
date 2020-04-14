@@ -1,4 +1,4 @@
-//===-- OptionValue.cpp -----------------------------------------*- C++ -*-===//
+//===-- OptionValue.cpp ---------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -565,11 +565,8 @@ bool OptionValue::DumpQualifiedName(Stream &strm) const {
   return dumped_something;
 }
 
-size_t OptionValue::AutoComplete(CommandInterpreter &interpreter,
-                                 CompletionRequest &request) {
-  request.SetWordComplete(false);
-  return request.GetNumberOfMatches();
-}
+void OptionValue::AutoComplete(CommandInterpreter &interpreter,
+                               CompletionRequest &request) {}
 
 Status OptionValue::SetValueFromString(llvm::StringRef value,
                                        VarSetOperationType op) {

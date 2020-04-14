@@ -80,21 +80,19 @@ void Sema::AddMsStructLayoutForRecord(RecordDecl *RD) {
   // FIXME: We should merge AddAlignmentAttributesForRecord with
   // AddMsStructLayoutForRecord into AddPragmaAttributesForRecord, which takes
   // all active pragmas and applies them as attributes to class definitions.
-  if (VtorDispStack.CurrentValue != getLangOpts().VtorDispMode)
-    RD->addAttr(
-        MSVtorDispAttr::CreateImplicit(Context, VtorDispStack.CurrentValue));
+  if (VtorDispStack.CurrentValue != getLangOpts().getVtorDispMode())
+    RD->addAttr(MSVtorDispAttr::CreateImplicit(
+        Context, unsigned(VtorDispStack.CurrentValue)));
 }
 
 template <typename Attribute>
 static void addGslOwnerPointerAttributeIfNotExisting(ASTContext &Context,
                                                      CXXRecordDecl *Record) {
-  CXXRecordDecl *Canonical = Record->getCanonicalDecl();
-  if (Canonical->hasAttr<OwnerAttr>() || Canonical->hasAttr<PointerAttr>())
+  if (Record->hasAttr<OwnerAttr>() || Record->hasAttr<PointerAttr>())
     return;
 
-  Canonical->addAttr(::new (Context) Attribute(SourceRange{}, Context,
-                                               /*DerefType*/ nullptr,
-                                               /*Spelling=*/0));
+  for (Decl *Redecl : Record->redecls())
+    Redecl->addAttr(Attribute::CreateImplicit(Context, /*DerefType=*/nullptr));
 }
 
 void Sema::inferGslPointerAttribute(NamedDecl *ND,
@@ -189,8 +187,7 @@ void Sema::inferGslOwnerPointerAttribute(CXXRecordDecl *Record) {
 
   // Handle classes that directly appear in std namespace.
   if (Record->isInStdNamespace()) {
-    CXXRecordDecl *Canonical = Record->getCanonicalDecl();
-    if (Canonical->hasAttr<OwnerAttr>() || Canonical->hasAttr<PointerAttr>())
+    if (Record->hasAttr<OwnerAttr>() || Record->hasAttr<PointerAttr>())
       return;
 
     if (StdOwners.count(Record->getName()))
@@ -269,6 +266,9 @@ void Sema::ActOnPragmaClangSection(SourceLocation PragmaLoc, PragmaClangSectionA
     case PragmaClangSectionKind::PCSK_Rodata:
       CSec = &PragmaClangRodataSection;
       break;
+    case PragmaClangSectionKind::PCSK_Relro:
+      CSec = &PragmaClangRelroSection;
+      break;
     case PragmaClangSectionKind::PCSK_Text:
       CSec = &PragmaClangTextSection;
       break;
@@ -282,7 +282,7 @@ void Sema::ActOnPragmaClangSection(SourceLocation PragmaLoc, PragmaClangSectionA
   }
 
   CSec->Valid = true;
-  CSec->SectionName = SecName;
+  CSec->SectionName = std::string(SecName);
   CSec->PragmaLocation = PragmaLoc;
 }
 
@@ -416,7 +416,7 @@ void Sema::ActOnPragmaMSPointersToMembers(
 
 void Sema::ActOnPragmaMSVtorDisp(PragmaMsStackAction Action,
                                  SourceLocation PragmaLoc,
-                                 MSVtorDispAttr::Mode Mode) {
+                                 MSVtorDispMode Mode) {
   if (Action & PSK_Pop && VtorDispStack.Stack.empty())
     Diag(PragmaLoc, diag::warn_pragma_pop_failed) << "vtordisp"
                                                   << "stack empty";
@@ -574,12 +574,15 @@ void Sema::ActOnPragmaUnused(const Token &IdTok, Scope *curScope,
   if (VD->isUsed())
     Diag(PragmaLoc, diag::warn_used_but_marked_unused) << Name;
 
-  VD->addAttr(UnusedAttr::CreateImplicit(Context, UnusedAttr::GNU_unused,
-                                         IdTok.getLocation()));
+  VD->addAttr(UnusedAttr::CreateImplicit(Context, IdTok.getLocation(),
+                                         AttributeCommonInfo::AS_Pragma,
+                                         UnusedAttr::GNU_unused));
 }
 
 void Sema::AddCFAuditedAttribute(Decl *D) {
-  SourceLocation Loc = PP.getPragmaARCCFCodeAuditedLoc();
+  IdentifierInfo *Ident;
+  SourceLocation Loc;
+  std::tie(Ident, Loc) = PP.getPragmaARCCFCodeAuditedInfo();
   if (!Loc.isValid()) return;
 
   // Don't add a redundant or conflicting attribute.
@@ -587,7 +590,9 @@ void Sema::AddCFAuditedAttribute(Decl *D) {
       D->hasAttr<CFUnknownTransferAttr>())
     return;
 
-  D->addAttr(CFAuditedTransferAttr::CreateImplicit(Context, Loc));
+  AttributeCommonInfo Info(Ident, SourceRange(Loc),
+                           AttributeCommonInfo::AS_Pragma);
+  D->addAttr(CFAuditedTransferAttr::CreateImplicit(Context, Info));
 }
 
 namespace {
@@ -738,7 +743,7 @@ void Sema::ActOnPragmaAttributeAttribute(
   if (!Rules.empty()) {
     auto Diagnostic =
         Diag(PragmaLoc, diag::err_pragma_attribute_invalid_matchers)
-        << Attribute.getName();
+        << Attribute;
     SmallVector<attr::SubjectMatchRule, 2> ExtraRules;
     for (const auto &Rule : Rules) {
       ExtraRules.push_back(attr::SubjectMatchRule(Rule.first));
@@ -933,6 +938,14 @@ void Sema::ActOnPragmaFPContract(LangOptions::FPContractModeKind FPC) {
     FPFeatures.setDisallowFPContract();
     break;
   }
+}
+
+void Sema::setRoundingMode(llvm::RoundingMode FPR) {
+  FPFeatures.setRoundingMode(FPR);
+}
+
+void Sema::setExceptionMode(LangOptions::FPExceptionModeKind FPE) {
+  FPFeatures.setExceptionMode(FPE);
 }
 
 void Sema::ActOnPragmaFEnvAccess(LangOptions::FEnvAccessModeKind FPC) {

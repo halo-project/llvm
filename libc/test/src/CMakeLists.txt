@@ -1,0 +1,8 @@
+add_subdirectory(assert)
+add_subdirectory(errno)
+add_subdirectory(signal)
+add_subdirectory(stdio)
+add_subdirectory(stdlib)
+add_subdirectory(string)
+add_subdirectory(sys)
+add_subdirectory(threads)

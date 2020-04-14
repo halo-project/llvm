@@ -11,6 +11,7 @@
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/ExternalASTMerger.h"
 #include "clang/Basic/Builtins.h"
+#include "clang/Basic/FileManager.h"
 #include "clang/Basic/IdentifierTable.h"
 #include "clang/Basic/SourceLocation.h"
 #include "clang/Basic/TargetInfo.h"
@@ -63,6 +64,9 @@ static llvm::cl::opt<std::string>
     Input("x", llvm::cl::Optional,
           llvm::cl::desc("The language to parse (default: c++)"),
           llvm::cl::init("c++"));
+
+static llvm::cl::opt<bool> ObjCARC("objc-arc", llvm::cl::init(false),
+                                   llvm::cl::desc("Emable ObjC ARC"));
 
 static llvm::cl::opt<bool> DumpAST("dump-ast", llvm::cl::init(false),
                                    llvm::cl::desc("Dump combined AST"));
@@ -168,9 +172,7 @@ std::unique_ptr<CompilerInstance> BuildCompilerInstance() {
   std::vector<const char *> ClangArgv(ClangArgs.size());
   std::transform(ClangArgs.begin(), ClangArgs.end(), ClangArgv.begin(),
                  [](const std::string &s) -> const char * { return s.data(); });
-  CompilerInvocation::CreateFromArgs(*Inv, ClangArgv.data(),
-                                     &ClangArgv.data()[ClangArgv.size()],
-                                     Ins->getDiagnostics());
+  CompilerInvocation::CreateFromArgs(*Inv, ClangArgv, Ins->getDiagnostics());
 
   {
     using namespace driver::types;
@@ -185,6 +187,8 @@ std::unique_ptr<CompilerInstance> BuildCompilerInstance() {
       Inv->getLangOpts()->ObjC = 1;
     }
   }
+  Inv->getLangOpts()->ObjCAutoRefCount = ObjCARC;
+
   Inv->getLangOpts()->Bool = true;
   Inv->getLangOpts()->WChar = true;
   Inv->getLangOpts()->Blocks = true;
@@ -265,8 +269,8 @@ void AddExternalSource(CIAndOrigins &CI,
       {CI.getASTContext(), CI.getFileManager()});
   llvm::SmallVector<ExternalASTMerger::ImporterSource, 3> Sources;
   for (CIAndOrigins &Import : Imports)
-    Sources.push_back({Import.getASTContext(), Import.getFileManager(),
-                       Import.getOriginMap()});
+    Sources.emplace_back(Import.getASTContext(), Import.getFileManager(),
+                         Import.getOriginMap());
   auto ES = std::make_unique<ExternalASTMerger>(Target, Sources);
   CI.getASTContext().setExternalSource(ES.release());
   CI.getASTContext().getTranslationUnitDecl()->setHasExternalVisibleStorage();

@@ -1,4 +1,4 @@
-//===-- AppleDWARFIndex.cpp ------------------------------------*- C++ -*-===//
+//===-- AppleDWARFIndex.cpp -----------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -53,8 +53,9 @@ std::unique_ptr<AppleDWARFIndex> AppleDWARFIndex::Create(
 }
 
 void AppleDWARFIndex::GetGlobalVariables(ConstString basename, DIEArray &offsets) {
-  if (m_apple_names_up)
-    m_apple_names_up->FindByName(basename.GetStringRef(), offsets);
+  if (!m_apple_names_up)
+    return;
+  m_apple_names_up->FindByName(basename.GetStringRef(), offsets);
 }
 
 void AppleDWARFIndex::GetGlobalVariables(const RegularExpression &regex,
@@ -80,22 +81,24 @@ void AppleDWARFIndex::GetGlobalVariables(const DWARFUnit &cu,
 
 void AppleDWARFIndex::GetObjCMethods(ConstString class_name,
                                      DIEArray &offsets) {
-  if (m_apple_objc_up)
-    m_apple_objc_up->FindByName(class_name.GetStringRef(), offsets);
+  if (!m_apple_objc_up)
+    return;
+  m_apple_objc_up->FindByName(class_name.GetStringRef(), offsets);
 }
 
 void AppleDWARFIndex::GetCompleteObjCClass(ConstString class_name,
                                            bool must_be_implementation,
                                            DIEArray &offsets) {
-  if (m_apple_types_up) {
-    m_apple_types_up->FindCompleteObjCClassByName(
-        class_name.GetStringRef(), offsets, must_be_implementation);
-  }
+  if (!m_apple_types_up)
+    return;
+  m_apple_types_up->FindCompleteObjCClassByName(
+      class_name.GetStringRef(), offsets, must_be_implementation);
 }
 
 void AppleDWARFIndex::GetTypes(ConstString name, DIEArray &offsets) {
-  if (m_apple_types_up)
-    m_apple_types_up->FindByName(name.GetStringRef(), offsets);
+  if (!m_apple_types_up)
+    return;
+  m_apple_types_up->FindByName(name.GetStringRef(), offsets);
 }
 
 void AppleDWARFIndex::GetTypes(const DWARFDeclContext &context,
@@ -110,6 +113,7 @@ void AppleDWARFIndex::GetTypes(const DWARFDeclContext &context,
   const bool has_qualified_name_hash =
       m_apple_types_up->GetHeader().header_data.ContainsAtom(
           DWARFMappedHash::eAtomTypeQualNameHash);
+
   const ConstString type_name(context[0].name);
   const dw_tag_t tag = context[0].tag;
   if (has_tag && has_qualified_name_hash) {
@@ -119,17 +123,38 @@ void AppleDWARFIndex::GetTypes(const DWARFDeclContext &context,
       m_module.LogMessage(log, "FindByNameAndTagAndQualifiedNameHash()");
     m_apple_types_up->FindByNameAndTagAndQualifiedNameHash(
         type_name.GetStringRef(), tag, qualified_name_hash, offsets);
-  } else if (has_tag) {
+    return;
+  }
+
+  if (has_tag) {
+    // When searching for a scoped type (for example,
+    // "std::vector<int>::const_iterator") searching for the innermost
+    // name alone ("const_iterator") could yield many false
+    // positives. By searching for the parent type ("vector<int>")
+    // first we can avoid extracting type DIEs from object files that
+    // would fail the filter anyway.
+    if (!has_qualified_name_hash && (context.GetSize() > 1) &&
+        (context[1].tag == DW_TAG_class_type ||
+         context[1].tag == DW_TAG_structure_type)) {
+      DIEArray class_matches;
+      m_apple_types_up->FindByName(context[1].name, class_matches);
+      if (class_matches.empty())
+        return;
+    }
+
     if (log)
       m_module.LogMessage(log, "FindByNameAndTag()");
     m_apple_types_up->FindByNameAndTag(type_name.GetStringRef(), tag, offsets);
-  } else
-    m_apple_types_up->FindByName(type_name.GetStringRef(), offsets);
+    return;
+  }
+
+  m_apple_types_up->FindByName(type_name.GetStringRef(), offsets);
 }
 
 void AppleDWARFIndex::GetNamespaces(ConstString name, DIEArray &offsets) {
-  if (m_apple_namespaces_up)
-    m_apple_namespaces_up->FindByName(name.GetStringRef(), offsets);
+  if (!m_apple_namespaces_up)
+    return;
+  m_apple_namespaces_up->FindByName(name.GetStringRef(), offsets);
 }
 
 void AppleDWARFIndex::GetFunctions(ConstString name, SymbolFileDWARF &dwarf,

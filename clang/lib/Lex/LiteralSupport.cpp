@@ -25,6 +25,7 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/Support/ConvertUTF.h"
+#include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorHandling.h"
 #include <algorithm>
 #include <cassert>
@@ -1051,7 +1052,11 @@ NumericLiteralParser::GetFloatValue(llvm::APFloat &Result) {
     Str = Buffer;
   }
 
-  return Result.convertFromString(Str, APFloat::rmNearestTiesToEven);
+  auto StatusOrErr =
+      Result.convertFromString(Str, APFloat::rmNearestTiesToEven);
+  assert(StatusOrErr && "Invalid floating point representation");
+  return !errorToBool(StatusOrErr.takeError()) ? *StatusOrErr
+                                               : APFloat::opInvalidOp;
 }
 
 static inline bool IsExponentPart(char c) {

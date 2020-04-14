@@ -1,4 +1,4 @@
-//===-- SBAddress.cpp -------------------------------------------*- C++ -*-===//
+//===-- SBAddress.cpp -----------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -52,7 +52,7 @@ SBAddress::SBAddress(lldb::addr_t load_addr, lldb::SBTarget &target)
   SetLoadAddress(load_addr, target);
 }
 
-SBAddress::~SBAddress() {}
+SBAddress::~SBAddress() = default;
 
 const SBAddress &SBAddress::operator=(const SBAddress &rhs) {
   LLDB_RECORD_METHOD(const lldb::SBAddress &,
@@ -210,12 +210,6 @@ bool SBAddress::GetDescription(SBStream &description) {
   if (m_opaque_up->IsValid()) {
     m_opaque_up->Dump(&strm, nullptr, Address::DumpStyleResolvedDescription,
                       Address::DumpStyleModuleWithFileAddress, 4);
-    StreamString sstrm;
-    //        m_opaque_up->Dump (&sstrm, NULL,
-    //        Address::DumpStyleResolvedDescription, Address::DumpStyleInvalid,
-    //        4);
-    //        if (sstrm.GetData())
-    //            strm.Printf (" (%s)", sstrm.GetData());
   } else
     strm.PutCString("No value");
 

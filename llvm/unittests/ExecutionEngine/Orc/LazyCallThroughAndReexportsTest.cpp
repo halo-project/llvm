@@ -41,21 +41,20 @@ TEST_F(LazyReexportsTest, BasicLocalCallThroughManagerOperation) {
       SymbolFlagsMap({{DummyTarget, JITSymbolFlags::Exported}}),
       [&](MaterializationResponsibility R) {
         DummyTargetMaterialized = true;
-        R.notifyResolved(
+        // No dependencies registered, can't fail.
+        cantFail(R.notifyResolved(
             {{DummyTarget,
               JITEvaluatedSymbol(static_cast<JITTargetAddress>(
                                      reinterpret_cast<uintptr_t>(&dummyTarget)),
-                                 JITSymbolFlags::Exported)}});
-        R.notifyEmitted();
+                                 JITSymbolFlags::Exported)}}));
+        cantFail(R.notifyEmitted());
       })));
 
   unsigned NotifyResolvedCount = 0;
-  auto NotifyResolved = LazyCallThroughManager::createNotifyResolvedFunction(
-      [&](JITDylib &JD, const SymbolStringPtr &SymbolName,
-          JITTargetAddress ResolvedAddr) {
-        ++NotifyResolvedCount;
-        return Error::success();
-      });
+  auto NotifyResolved = [&](JITTargetAddress ResolvedAddr) {
+    ++NotifyResolvedCount;
+    return Error::success();
+  };
 
   auto CallThroughTrampoline = cantFail((*LCTM)->getCallThroughTrampoline(
       JD, DummyTarget, std::move(NotifyResolved)));

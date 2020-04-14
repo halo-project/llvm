@@ -51,6 +51,7 @@ static const EnumEntry<unsigned> WasmSymbolFlags[] = {
   ENUM_ENTRY(UNDEFINED),
   ENUM_ENTRY(EXPORTED),
   ENUM_ENTRY(EXPLICIT_NAME),
+  ENUM_ENTRY(NO_STRIP),
 #undef ENUM_ENTRY
 };
 
@@ -226,8 +227,12 @@ void WasmDumper::printSymbol(const SymbolRef &Sym) {
   W.printFlags("Flags", Symbol.Info.Flags, makeArrayRef(WasmSymbolFlags));
 
   if (Symbol.Info.Flags & wasm::WASM_SYMBOL_UNDEFINED) {
-    W.printString("ImportName", Symbol.Info.ImportName);
-    W.printString("ImportModule", Symbol.Info.ImportModule);
+    if (Symbol.Info.ImportName) {
+      W.printString("ImportName", *Symbol.Info.ImportName);
+    }
+    if (Symbol.Info.ImportModule) {
+      W.printString("ImportModule", *Symbol.Info.ImportModule);
+    }
   }
   if (Symbol.Info.Kind != wasm::WASM_SYMBOL_TYPE_DATA) {
     W.printHex("ElementIndex", Symbol.Info.ElementIndex);

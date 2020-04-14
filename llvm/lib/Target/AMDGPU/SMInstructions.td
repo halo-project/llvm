@@ -417,7 +417,7 @@ class SMRD_Real_si <bits<5> op, SM_Pseudo ps>
   , SIMCInstr<ps.PseudoInstr, SIEncodingFamily.SI>
   , Enc32 {
 
-  let AssemblerPredicates = [isGFX6GFX7];
+  let AssemblerPredicate = isGFX6GFX7;
   let DecoderNamespace = "GFX6GFX7";
 
   let Inst{7-0}   = !if(ps.has_offset, offset{7-0}, ?);
@@ -471,7 +471,7 @@ class SMEM_Real_vi <bits<8> op, SM_Pseudo ps>
   , Enc64 {
   bit glc;
 
-  let AssemblerPredicates = [isGFX8GFX9];
+  let AssemblerPredicate = isGFX8GFX9;
   let DecoderNamespace = "GFX8";
 
   let Inst{5-0}   = !if(ps.has_sbase, sbase{6-1}, ?);
@@ -660,7 +660,7 @@ class SMRD_Real_Load_IMM_ci <bits<5> op, SM_Load_Pseudo ps> :
   SM_Real<ps>,
   Enc64 {
 
-  let AssemblerPredicates = [isGFX7Only];
+  let AssemblerPredicate = isGFX7Only;
   let DecoderNamespace = "GFX7";
   let InOperandList = (ins ps.BaseClass:$sbase, smrd_literal_offset:$offset, GLC:$glc, DLC:$dlc);
 
@@ -697,7 +697,7 @@ class SMRD_Real_ci <bits<5> op, SM_Pseudo ps>
   , SIMCInstr<ps.PseudoInstr, SIEncodingFamily.SI>
   , Enc32 {
 
-  let AssemblerPredicates = [isGFX7Only];
+  let AssemblerPredicate = isGFX7Only;
   let DecoderNamespace = "GFX7";
 
   let Inst{7-0}   = !if(ps.has_offset, offset{7-0}, ?);
@@ -768,23 +768,26 @@ multiclass SMRD_Pattern <string Instr, ValueType vt> {
 multiclass SMLoad_Pattern <string Instr, ValueType vt> {
   // 1. Offset as an immediate
   def : GCNPat <
-    (SIsbuffer_load v4i32:$sbase, (SMRDBufferImm i32:$offset), i1:$glc, i1:$dlc),
-    (vt (!cast<SM_Pseudo>(Instr#"_IMM") $sbase, $offset, (as_i1imm $glc),
-                                        (as_i1imm $dlc)))
-  >;
+    (SIsbuffer_load v4i32:$sbase, (SMRDBufferImm i32:$offset), timm:$cachepolicy),
+    (vt (!cast<SM_Pseudo>(Instr#"_IMM") SReg_128:$sbase, i32imm:$offset, (extract_glc $cachepolicy),
+                                        (extract_dlc $cachepolicy)))> {
+    let AddedComplexity = 2;
+  }
 
   // 2. 32-bit IMM offset on CI
   def : GCNPat <
-    (vt (SIsbuffer_load v4i32:$sbase, (SMRDBufferImm32 i32:$offset), i1:$glc, i1:$dlc)),
-    (!cast<InstSI>(Instr#"_IMM_ci") $sbase, $offset, (as_i1imm $glc), (as_i1imm $dlc))> {
+    (vt (SIsbuffer_load v4i32:$sbase, (SMRDBufferImm32 i32:$offset), timm:$cachepolicy)),
+    (!cast<InstSI>(Instr#"_IMM_ci") SReg_128:$sbase, smrd_literal_offset:$offset,
+                                    (extract_glc $cachepolicy), (extract_dlc $cachepolicy))> {
     let OtherPredicates = [isGFX7Only];
+    let AddedComplexity = 1;
   }
 
   // 3. Offset loaded in an 32bit SGPR
   def : GCNPat <
-    (SIsbuffer_load v4i32:$sbase, i32:$offset, i1:$glc, i1:$dlc),
-    (vt (!cast<SM_Pseudo>(Instr#"_SGPR") $sbase, $offset, (as_i1imm $glc),
-                                         (as_i1imm $dlc)))
+    (SIsbuffer_load v4i32:$sbase, i32:$offset, timm:$cachepolicy),
+    (vt (!cast<SM_Pseudo>(Instr#"_SGPR") SReg_128:$sbase, SReg_32:$offset, (extract_glc $cachepolicy),
+                                         (extract_dlc $cachepolicy)))
   >;
 }
 
@@ -793,10 +796,21 @@ multiclass SMLoad_Pattern <string Instr, ValueType vt> {
 // selector to prefer those.
 let AddedComplexity = 100 in {
 
-defm : SMRD_Pattern <"S_LOAD_DWORD",    i32>;
-defm : SMRD_Pattern <"S_LOAD_DWORDX2",  v2i32>;
-defm : SMRD_Pattern <"S_LOAD_DWORDX4",  v4i32>;
-defm : SMRD_Pattern <"S_LOAD_DWORDX8",  v8i32>;
+foreach vt = Reg32Types.types in {
+defm : SMRD_Pattern <"S_LOAD_DWORD", vt>;
+}
+
+foreach vt = SReg_64.RegTypes in {
+defm : SMRD_Pattern <"S_LOAD_DWORDX2", vt>;
+}
+
+foreach vt = SReg_128.RegTypes in {
+defm : SMRD_Pattern <"S_LOAD_DWORDX4", vt>;
+}
+
+foreach vt = SReg_256.RegTypes in {
+defm : SMRD_Pattern <"S_LOAD_DWORDX8", vt>;
+}
 defm : SMRD_Pattern <"S_LOAD_DWORDX16", v16i32>;
 
 defm : SMLoad_Pattern <"S_BUFFER_LOAD_DWORD",     i32>;
@@ -826,7 +840,7 @@ class SMEM_Real_gfx10<bits<8> op, SM_Pseudo ps> :
   bit glc;
   bit dlc;
 
-  let AssemblerPredicates = [isGFX10Plus];
+  let AssemblerPredicate = isGFX10Plus;
   let DecoderNamespace = "GFX10";
 
   let Inst{5-0}   = !if(ps.has_sbase, sbase{6-1}, ?);

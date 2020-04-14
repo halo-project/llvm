@@ -33,7 +33,7 @@ void monitor_loop(MonitorState &M, std::atomic<bool> &ShutdownRequested) {
     // enroll ourselves with the server.
     pb::ClientEnroll CE;
     CE.set_process_triple(llvm::sys::getProcessTriple());
-    CE.set_host_cpu(llvm::sys::getHostCPUName());
+    CE.set_host_cpu(llvm::sys::getHostCPUName().str());
     auto Error = M.gather_module_info(M.ExePath, M.Patcher, CE.mutable_module());
     if (Error)
       warning(Error);

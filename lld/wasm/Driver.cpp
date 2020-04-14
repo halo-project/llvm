@@ -15,6 +15,7 @@
 #include "Writer.h"
 #include "lld/Common/Args.h"
 #include "lld/Common/ErrorHandler.h"
+#include "lld/Common/Filesystem.h"
 #include "lld/Common/Memory.h"
 #include "lld/Common/Reproduce.h"
 #include "lld/Common/Strings.h"
@@ -25,6 +26,7 @@
 #include "llvm/Option/Arg.h"
 #include "llvm/Option/ArgList.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/Host.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/TarWriter.h"
@@ -37,10 +39,9 @@ using namespace llvm::object;
 using namespace llvm::sys;
 using namespace llvm::wasm;
 
-using namespace lld;
-using namespace lld::wasm;
-
-Configuration *lld::wasm::config;
+namespace lld {
+namespace wasm {
+Configuration *config;
 
 namespace {
 
@@ -79,14 +80,16 @@ private:
 };
 } // anonymous namespace
 
-bool lld::wasm::link(ArrayRef<const char *> args, bool canExitEarly,
-                     raw_ostream &error) {
+bool link(ArrayRef<const char *> args, bool canExitEarly, raw_ostream &stdoutOS,
+          raw_ostream &stderrOS) {
+  lld::stdoutOS = &stdoutOS;
+  lld::stderrOS = &stderrOS;
+
   errorHandler().logName = args::getFilenameWithoutExe(args[0]);
-  errorHandler().errorOS = &error;
   errorHandler().errorLimitExceededMsg =
       "too many errors emitted, stopping now (use "
       "-error-limit=0 to see all errors)";
-  enableColors(error.has_colors());
+  stderrOS.enable_colors(stderrOS.has_colors());
 
   config = make<Configuration>();
   symtab = make<SymbolTable>();
@@ -134,18 +137,32 @@ static void handleColorDiagnostics(opt::InputArgList &args) {
   if (!arg)
     return;
   if (arg->getOption().getID() == OPT_color_diagnostics) {
-    enableColors(true);
+    lld::errs().enable_colors(true);
   } else if (arg->getOption().getID() == OPT_no_color_diagnostics) {
-    enableColors(false);
+    lld::errs().enable_colors(false);
   } else {
     StringRef s = arg->getValue();
     if (s == "always")
-      enableColors(true);
+      lld::errs().enable_colors(true);
     else if (s == "never")
-      enableColors(false);
+      lld::errs().enable_colors(false);
     else if (s != "auto")
       error("unknown option: --color-diagnostics=" + s);
   }
+}
+
+static cl::TokenizerCallback getQuotingStyle(opt::InputArgList &args) {
+  if (auto *arg = args.getLastArg(OPT_rsp_quoting)) {
+    StringRef s = arg->getValue();
+    if (s != "windows" && s != "posix")
+      error("invalid response file quoting: " + s);
+    if (s == "windows")
+      return cl::TokenizeWindowsCommandLine;
+    return cl::TokenizeGNUCommandLine;
+  }
+  if (Triple(sys::getProcessTriple()).isOSWindows())
+    return cl::TokenizeWindowsCommandLine;
+  return cl::TokenizeGNUCommandLine;
 }
 
 // Find a file by concatenating given paths.
@@ -153,7 +170,7 @@ static Optional<std::string> findFile(StringRef path1, const Twine &path2) {
   SmallString<128> s;
   path::append(s, path1, path2);
   if (fs::exists(s))
-    return s.str().str();
+    return std::string(s);
   return None;
 }
 
@@ -163,10 +180,15 @@ opt::InputArgList WasmOptTable::parse(ArrayRef<const char *> argv) {
   unsigned missingIndex;
   unsigned missingCount;
 
-  // Expand response files (arguments in the form of @<filename>)
-  cl::ExpandResponseFiles(saver, cl::TokenizeGNUCommandLine, vec);
-
+  // We need to get the quoting style for response files before parsing all
+  // options so we parse here before and ignore all the options but
+  // --rsp-quoting.
   opt::InputArgList args = this->ParseArgs(vec, missingIndex, missingCount);
+
+  // Expand response files (arguments in the form of @<filename>)
+  // and then parse the argument again.
+  cl::ExpandResponseFiles(saver, getQuotingStyle(args), vec);
+  args = this->ParseArgs(vec, missingIndex, missingCount);
 
   handleColorDiagnostics(args);
   for (auto *arg : args.filtered(OPT_UNKNOWN))
@@ -196,10 +218,7 @@ std::vector<MemoryBufferRef> static getArchiveMembers(MemoryBufferRef mb) {
 
   std::vector<MemoryBufferRef> v;
   Error err = Error::success();
-  for (const ErrorOr<Archive::Child> &cOrErr : file->children(err)) {
-    Archive::Child c =
-        CHECK(cOrErr, mb.getBufferIdentifier() +
-                          ": could not get the child of the archive");
+  for (const Archive::Child &c : file->children(err)) {
     MemoryBufferRef mbref =
         CHECK(c.getMemoryBufferRef(),
               mb.getBufferIdentifier() +
@@ -286,6 +305,8 @@ void LinkerDriver::createFiles(opt::InputArgList &args) {
       break;
     }
   }
+  if (files.empty() && errorCount() == 0)
+    error("no input files");
 }
 
 static StringRef getEntry(opt::InputArgList &args) {
@@ -313,15 +334,12 @@ static void readConfigs(opt::InputArgList &args) {
   config->emitRelocs = args.hasArg(OPT_emit_relocs);
   config->entry = getEntry(args);
   config->exportAll = args.hasArg(OPT_export_all);
-  config->exportDynamic = args.hasFlag(OPT_export_dynamic,
-      OPT_no_export_dynamic, false);
   config->exportTable = args.hasArg(OPT_export_table);
+  config->growableTable = args.hasArg(OPT_growable_table);
   errorHandler().fatalWarnings =
       args.hasFlag(OPT_fatal_warnings, OPT_no_fatal_warnings, false);
   config->importMemory = args.hasArg(OPT_import_memory);
   config->sharedMemory = args.hasArg(OPT_shared_memory);
-  config->passiveSegments = args.hasFlag(
-      OPT_passive_segments, OPT_active_segments, config->sharedMemory);
   config->importTable = args.hasArg(OPT_import_table);
   config->ltoo = args::getInteger(args, OPT_lto_O, 2);
   config->ltoPartitions = args::getInteger(args, OPT_lto_partitions, 1);
@@ -347,10 +365,8 @@ static void readConfigs(opt::InputArgList &args) {
   config->thinLTOCachePolicy = CHECK(
       parseCachePruningPolicy(args.getLastArgValue(OPT_thinlto_cache_policy)),
       "--thinlto-cache-policy: invalid cache policy");
-  config->thinLTOJobs = args::getInteger(args, OPT_thinlto_jobs, -1u);
   errorHandler().verbose = args.hasArg(OPT_verbose);
   LLVM_DEBUG(errorHandler().verbose = true);
-  threadsEnabled = args.hasFlag(OPT_threads, OPT_no_threads, true);
 
   config->initialMemory = args::getInteger(args, OPT_initial_memory, 0);
   config->globalBase = args::getInteger(args, OPT_global_base, 1024);
@@ -358,11 +374,29 @@ static void readConfigs(opt::InputArgList &args) {
   config->zStackSize =
       args::getZOptionValue(args, OPT_z, "stack-size", WasmPageSize);
 
+  // Default value of exportDynamic depends on `-shared`
+  config->exportDynamic =
+      args.hasFlag(OPT_export_dynamic, OPT_no_export_dynamic, config->shared);
+
+  // --threads= takes a positive integer and provides the default value for
+  // --thinlto-jobs=.
+  if (auto *arg = args.getLastArg(OPT_threads)) {
+    StringRef v(arg->getValue());
+    unsigned threads = 0;
+    if (!llvm::to_integer(v, threads, 0) || threads == 0)
+      error(arg->getSpelling() + ": expected a positive integer, but got '" +
+            arg->getValue() + "'");
+    parallel::strategy = hardware_concurrency(threads);
+    config->thinLTOJobs = v;
+  }
+  if (auto *arg = args.getLastArg(OPT_thinlto_jobs))
+    config->thinLTOJobs = arg->getValue();
+
   if (auto *arg = args.getLastArg(OPT_features)) {
     config->features =
         llvm::Optional<std::vector<std::string>>(std::vector<std::string>());
     for (StringRef s : arg->getValues())
-      config->features->push_back(s);
+      config->features->push_back(std::string(s));
   }
 }
 
@@ -381,7 +415,6 @@ static void setConfigs() {
 
   if (config->shared) {
     config->importMemory = true;
-    config->exportDynamic = true;
     config->allowUndefined = true;
   }
 }
@@ -397,8 +430,8 @@ static void checkOptions(opt::InputArgList &args) {
     error("invalid optimization level for LTO: " + Twine(config->ltoo));
   if (config->ltoPartitions == 0)
     error("--lto-partitions: number of threads must be > 0");
-  if (config->thinLTOJobs == 0)
-    error("--thinlto-jobs: number of threads must be > 0");
+  if (!get_threadpool_strategy(config->thinLTOJobs))
+    error("--thinlto-jobs: invalid job count: " + config->thinLTOJobs);
 
   if (config->pie && config->shared)
     error("-shared and -pie may not be used together");
@@ -439,12 +472,22 @@ static Symbol *handleUndefined(StringRef name) {
   return sym;
 }
 
+static void handleLibcall(StringRef name) {
+  Symbol *sym = symtab->find(name);
+  if (!sym)
+    return;
+
+  if (auto *lazySym = dyn_cast<LazySymbol>(sym)) {
+    MemoryBufferRef mb = lazySym->getMemberBuffer();
+    if (isBitcode(mb))
+      lazySym->fetch();
+  }
+}
+
 static UndefinedGlobal *
 createUndefinedGlobal(StringRef name, llvm::wasm::WasmGlobalType *type) {
-  auto *sym =
-      cast<UndefinedGlobal>(symtab->addUndefinedGlobal(name, name,
-                                                       defaultModule, 0,
-                                                       nullptr, type));
+  auto *sym = cast<UndefinedGlobal>(symtab->addUndefinedGlobal(
+      name, None, None, WASM_SYMBOL_UNDEFINED, nullptr, type));
   config->allowUndefinedSymbols.insert(sym->getName());
   sym->isUsedInRegularObj = true;
   return sym;
@@ -471,20 +514,9 @@ static void createSyntheticSymbols() {
   static llvm::wasm::WasmGlobalType globalTypeI32 = {WASM_TYPE_I32, false};
   static llvm::wasm::WasmGlobalType mutableGlobalTypeI32 = {WASM_TYPE_I32,
                                                             true};
-
   WasmSym::callCtors = symtab->addSyntheticFunction(
       "__wasm_call_ctors", WASM_SYMBOL_VISIBILITY_HIDDEN,
       make<SyntheticFunction>(nullSignature, "__wasm_call_ctors"));
-
-  if (config->passiveSegments) {
-    // Passive segments are used to avoid memory being reinitialized on each
-    // thread's instantiation. These passive segments are initialized and
-    // dropped in __wasm_init_memory, which is the first function called from
-    // __wasm_call_ctors.
-    WasmSym::initMemory = symtab->addSyntheticFunction(
-        "__wasm_init_memory", WASM_SYMBOL_VISIBILITY_HIDDEN,
-        make<SyntheticFunction>(nullSignature, "__wasm_init_memory"));
-  }
 
   if (config->isPic) {
     // For PIC code we create a synthetic function __wasm_apply_relocs which
@@ -515,6 +547,15 @@ static void createSyntheticSymbols() {
   }
 
   if (config->sharedMemory && !config->shared) {
+    // Passive segments are used to avoid memory being reinitialized on each
+    // thread's instantiation. These passive segments are initialized and
+    // dropped in __wasm_init_memory, which is registered as the start function
+    WasmSym::initMemory = symtab->addSyntheticFunction(
+        "__wasm_init_memory", WASM_SYMBOL_VISIBILITY_HIDDEN,
+        make<SyntheticFunction>(nullSignature, "__wasm_init_memory"));
+    WasmSym::initMemoryFlag = symtab->addSyntheticDataSymbol(
+        "__wasm_init_memory_flag", WASM_SYMBOL_VISIBILITY_HIDDEN);
+    assert(WasmSym::initMemoryFlag);
     WasmSym::tlsBase = createGlobalVariable("__tls_base", true, 0);
     WasmSym::tlsSize = createGlobalVariable("__tls_size", false, 0);
     WasmSym::tlsAlign = createGlobalVariable("__tls_align", false, 1);
@@ -566,7 +607,7 @@ static std::string createResponseFile(const opt::InputArgList &args) {
       os << toString(*arg) << "\n";
     }
   }
-  return data.str();
+  return std::string(data.str());
 }
 
 // The --wrap option is a feature to rename symbols so that you can write
@@ -584,7 +625,8 @@ struct WrappedSymbol {
 };
 
 static Symbol *addUndefined(StringRef name) {
-  return symtab->addUndefinedFunction(name, "", "", 0, nullptr, nullptr, false);
+  return symtab->addUndefinedFunction(name, None, None, WASM_SYMBOL_UNDEFINED,
+                                      nullptr, nullptr, false);
 }
 
 // Handles -wrap option.
@@ -653,7 +695,7 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
 
   // Handle --help
   if (args.hasArg(OPT_help)) {
-    parser.PrintHelp(outs(),
+    parser.PrintHelp(lld::outs(),
                      (std::string(argsArr[0]) + " [options] file...").c_str(),
                      "LLVM Linker", false);
     return;
@@ -661,7 +703,7 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
 
   // Handle --version
   if (args.hasArg(OPT_version) || args.hasArg(OPT_v)) {
-    outs() << getLLDVersion() << "\n";
+    lld::outs() << getLLDVersion() << "\n";
     return;
   }
 
@@ -689,16 +731,27 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
   errorHandler().errorLimit = args::getInteger(args, OPT_error_limit, 20);
 
   readConfigs(args);
+
+  createFiles(args);
+  if (errorCount())
+    return;
+
   setConfigs();
   checkOptions(args);
+  if (errorCount())
+    return;
 
   if (auto *arg = args.getLastArg(OPT_allow_undefined_file))
     readImportFile(arg->getValue());
 
-  if (!args.hasArg(OPT_INPUT)) {
-    error("no input files");
+  // Fail early if the output file or map file is not writable. If a user has a
+  // long link, e.g. due to a large LTO link, they do not wish to run it and
+  // find that it failed because there was a mistake in their command-line.
+  if (auto e = tryCreateFile(config->outputFile))
+    error("cannot open output file " + config->outputFile + ": " + e.message());
+  // TODO(sbc): add check for map file too once we add support for that.
+  if (errorCount())
     return;
-  }
 
   // Handle --trace-symbol.
   for (auto *arg : args.filtered(OPT_trace_symbol))
@@ -709,18 +762,12 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
 
   createSyntheticSymbols();
 
-  createFiles(args);
-  if (errorCount())
-    return;
-
   // Add all files to the symbol table. This will add almost all
   // symbols that we need to the symbol table.
   for (InputFile *f : files)
     symtab->addFile(f);
   if (errorCount())
     return;
-
-  createOptionalSymbols();
 
   // Handle the `--undefined <sym>` options.
   for (auto *arg : args.filtered(OPT_undefined))
@@ -737,15 +784,32 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
     if (entrySym && entrySym->isDefined())
       entrySym->forceExport = true;
     else
-      error("entry symbol not defined (pass --no-entry to supress): " +
+      error("entry symbol not defined (pass --no-entry to suppress): " +
             config->entry);
   }
+
+  createOptionalSymbols();
 
   if (errorCount())
     return;
 
   // Create wrapped symbols for -wrap option.
   std::vector<WrappedSymbol> wrapped = addWrappedSymbols(args);
+
+  // If any of our inputs are bitcode files, the LTO code generator may create
+  // references to certain library functions that might not be explicit in the
+  // bitcode file's symbol table. If any of those library functions are defined
+  // in a bitcode file in an archive member, we need to arrange to use LTO to
+  // compile those archive members by adding them to the link beforehand.
+  //
+  // We only need to add libcall symbols to the link before LTO if the symbol's
+  // definition is in bitcode. Any other required libcall symbols will be added
+  // to the link after LTO when we add the LTO object file to the link.
+  if (!symtab->bitcodeFiles.empty())
+    for (auto *s : lto::LTO::getRuntimeLibcallSymbols())
+      handleLibcall(s);
+  if (errorCount())
+    return;
 
   // Do link-time optimization if given files are LLVM bitcode files.
   // This compiles bitcode files into real object files.
@@ -790,3 +854,6 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
   // Write the result to the file.
   writeResult();
 }
+
+} // namespace wasm
+} // namespace lld

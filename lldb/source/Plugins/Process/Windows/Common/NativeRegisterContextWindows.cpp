@@ -1,4 +1,4 @@
-//===-- NativeRegisterContextWindows.cpp ------------------------*- C++ -*-===//
+//===-- NativeRegisterContextWindows.cpp ----------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -7,7 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "lldb/Host/HostThread.h"
-#include "lldb/Host/Windows/HostThreadWindows.h"
+#include "lldb/Host/windows/HostThreadWindows.h"
 #include "lldb/Host/windows/windows.h"
 #include "lldb/Utility/Log.h"
 

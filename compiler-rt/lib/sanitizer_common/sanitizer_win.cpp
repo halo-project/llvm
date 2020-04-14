@@ -94,6 +94,10 @@ uptr internal_getpid() {
   return GetProcessId(GetCurrentProcess());
 }
 
+int internal_dlinfo(void *handle, int request, void *p) {
+  UNIMPLEMENTED();
+}
+
 // In contrast to POSIX, on Windows GetCurrentThreadId()
 // returns a system-unique identifier.
 tid_t GetTid() {
@@ -237,6 +241,11 @@ bool MmapFixedNoReserve(uptr fixed_addr, uptr size, const char *name) {
     return false;
   }
   return true;
+}
+
+bool MmapFixedSuperNoReserve(uptr fixed_addr, uptr size, const char *name) {
+  // FIXME: Windows support large pages too. Might be worth checking
+  return MmapFixedNoReserve(fixed_addr, size, name);
 }
 
 // Memory space mapped by 'MmapFixedOrDie' must have been reserved by
@@ -671,7 +680,7 @@ static int RunAtexit() {
   return ret;
 }
 
-#pragma section(".CRT$XID", long, read)  // NOLINT
+#pragma section(".CRT$XID", long, read)
 __declspec(allocate(".CRT$XID")) int (*__run_atexit)() = RunAtexit;
 #endif
 
@@ -782,7 +791,7 @@ uptr GetRSS() {
   return counters.WorkingSetSize;
 }
 
-void *internal_start_thread(void (*func)(void *arg), void *arg) { return 0; }
+void *internal_start_thread(void *(*func)(void *arg), void *arg) { return 0; }
 void internal_join_thread(void *th) { }
 
 // ---------------------- BlockingMutex ---------------- {{{1
@@ -940,6 +949,11 @@ bool SignalContext::IsMemoryAccess() const {
   return GetWriteFlag() != SignalContext::UNKNOWN;
 }
 
+bool SignalContext::IsTrueFaultingAddress() const {
+  // FIXME: Provide real implementation for this. See Linux and Mac variants.
+  return IsMemoryAccess();
+}
+
 SignalContext::WriteFlag SignalContext::GetWriteFlag() const {
   EXCEPTION_RECORD *exception_record = (EXCEPTION_RECORD *)siginfo;
   // The contents of this array are documented at
@@ -1050,7 +1064,8 @@ char **GetEnviron() {
 }
 
 pid_t StartSubprocess(const char *program, const char *const argv[],
-                      fd_t stdin_fd, fd_t stdout_fd, fd_t stderr_fd) {
+                      const char *const envp[], fd_t stdin_fd, fd_t stdout_fd,
+                      fd_t stderr_fd) {
   // FIXME: implement on this platform
   // Should be implemented based on
   // SymbolizerProcess::StarAtSymbolizerSubprocess

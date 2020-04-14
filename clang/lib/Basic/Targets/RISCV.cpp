@@ -88,18 +88,25 @@ void RISCVTargetInfo::getTargetDefines(const LangOptions &Opts,
   Builder.defineMacro("__riscv");
   bool Is64Bit = getTriple().getArch() == llvm::Triple::riscv64;
   Builder.defineMacro("__riscv_xlen", Is64Bit ? "64" : "32");
-  // TODO: modify when more code models are supported.
-  Builder.defineMacro("__riscv_cmodel_medlow");
+  StringRef CodeModel = getTargetOpts().CodeModel;
+  if (CodeModel == "default")
+    CodeModel = "small";
+
+  if (CodeModel == "small")
+    Builder.defineMacro("__riscv_cmodel_medlow");
+  else if (CodeModel == "medium")
+    Builder.defineMacro("__riscv_cmodel_medany");
 
   StringRef ABIName = getABI();
   if (ABIName == "ilp32f" || ABIName == "lp64f")
     Builder.defineMacro("__riscv_float_abi_single");
   else if (ABIName == "ilp32d" || ABIName == "lp64d")
     Builder.defineMacro("__riscv_float_abi_double");
-  else if (ABIName == "ilp32e")
-    Builder.defineMacro("__riscv_abi_rve");
   else
     Builder.defineMacro("__riscv_float_abi_soft");
+
+  if (ABIName == "ilp32e")
+    Builder.defineMacro("__riscv_abi_rve");
 
   if (HasM) {
     Builder.defineMacro("__riscv_mul");
@@ -118,6 +125,9 @@ void RISCVTargetInfo::getTargetDefines(const LangOptions &Opts,
 
   if (HasC)
     Builder.defineMacro("__riscv_compressed");
+
+  if (HasB)
+    Builder.defineMacro("__riscv_bitmanip");
 }
 
 /// Return true if has this feature, need to sync with handleTargetFeatures.
@@ -132,6 +142,7 @@ bool RISCVTargetInfo::hasFeature(StringRef Feature) const {
       .Case("f", HasF)
       .Case("d", HasD)
       .Case("c", HasC)
+      .Case("experimental-b", HasB)
       .Default(false);
 }
 
@@ -149,6 +160,8 @@ bool RISCVTargetInfo::handleTargetFeatures(std::vector<std::string> &Features,
       HasD = true;
     else if (Feature == "+c")
       HasC = true;
+    else if (Feature == "+experimental-b")
+      HasB = true;
   }
 
   return true;

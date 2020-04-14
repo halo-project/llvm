@@ -101,11 +101,6 @@ class InlineTest(TestBase):
 
         makefile = open(makefilePath, 'w+')
 
-        level = os.sep.join(
-            [".."] * len(self.mydir.split(os.sep))) + os.sep + "make"
-
-        makefile.write("LEVEL = " + level + "\n")
-
         for t in list(categories.keys()):
             line = t + " := " + " ".join(categories[t])
             makefile.write(line + "\n")
@@ -118,7 +113,7 @@ class InlineTest(TestBase):
         if ('CXX_SOURCES' in list(categories.keys())):
             makefile.write("CXXFLAGS += -std=c++11\n")
 
-        makefile.write("include $(LEVEL)/Makefile.rules\n")
+        makefile.write("include Makefile.rules\n")
         makefile.write("\ncleanup:\n\trm -f Makefile *.d\n\n")
         makefile.flush()
         makefile.close()
@@ -142,6 +137,8 @@ class InlineTest(TestBase):
         parser.set_breakpoints(target)
 
         process = target.LaunchSimple(None, None, self.get_process_working_directory())
+        self.assertIsNotNone(process, PROCESS_IS_VALID)
+
         hit_breakpoints = 0
 
         while lldbutil.get_stopped_thread(process, lldb.eStopReasonBreakpoint):

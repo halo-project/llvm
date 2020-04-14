@@ -46,7 +46,7 @@ private:
     ParseInputs PI;
     PI.CompileCommand = *Cmd;
     PI.FS = VFS;
-    auto CI = buildCompilerInvocation(PI);
+    auto CI = buildCompilerInvocation(PI, IgnoreDiags);
     EXPECT_TRUE(static_cast<bool>(CI));
     // The diagnostic options must be set before creating a CompilerInstance.
     CI->getDiagnosticOpts().IgnoreWarnings = true;
@@ -85,7 +85,7 @@ protected:
     if (Preferred.empty())
       Preferred = Original;
     auto ToHeaderFile = [](llvm::StringRef Header) {
-      return HeaderFile{Header,
+      return HeaderFile{std::string(Header),
                         /*Verbatim=*/!llvm::sys::path::is_absolute(Header)};
     };
 

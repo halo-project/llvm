@@ -114,6 +114,9 @@ static types::ID foldType(types::ID Lang) {
   case types::TY_ObjCXX:
   case types::TY_ObjCXXHeader:
     return types::TY_ObjCXX;
+  case types::TY_CUDA:
+  case types::TY_CUDA_DEVICE:
+    return types::TY_CUDA;
   default:
     return types::TY_INVALID;
   }
@@ -149,17 +152,17 @@ struct TransferableCommand {
     // We parse each argument individually so that we can retain the exact
     // spelling of each argument; re-rendering is lossy for aliased flags.
     // E.g. in CL mode, /W4 maps to -Wall.
-    auto OptTable = clang::driver::createDriverOptTable();
+    auto &OptTable = clang::driver::getDriverOptTable();
     if (!OldArgs.empty())
       Cmd.CommandLine.emplace_back(OldArgs.front());
     for (unsigned Pos = 1; Pos < OldArgs.size();) {
       using namespace driver::options;
 
       const unsigned OldPos = Pos;
-      std::unique_ptr<llvm::opt::Arg> Arg(OptTable->ParseOneArg(
+      std::unique_ptr<llvm::opt::Arg> Arg(OptTable.ParseOneArg(
           ArgList, Pos,
-          /* Include */ClangCLMode ? CoreOption | CLOption : 0,
-          /* Exclude */ClangCLMode ? 0 : CLOption));
+          /* Include */ ClangCLMode ? CoreOption | CLOption : 0,
+          /* Exclude */ ClangCLMode ? 0 : CLOption));
 
       if (!Arg)
         continue;
@@ -191,7 +194,8 @@ struct TransferableCommand {
                              OldArgs.data() + OldPos, OldArgs.data() + Pos);
     }
 
-    if (Std != LangStandard::lang_unspecified) // -std take precedence over -x
+    // Make use of -std iff -x was missing.
+    if (Type == types::TY_INVALID && Std != LangStandard::lang_unspecified)
       Type = toType(LangStandard::getLangStandardForKind(Std).getLanguage());
     Type = foldType(*Type);
     // The contract is to store None instead of TY_INVALID.
@@ -202,7 +206,7 @@ struct TransferableCommand {
   // Produce a CompileCommand for \p filename, based on this one.
   CompileCommand transferTo(StringRef Filename) const {
     CompileCommand Result = Cmd;
-    Result.Filename = Filename;
+    Result.Filename = std::string(Filename);
     bool TypeCertain;
     auto TargetType = guessType(Filename, &TypeCertain);
     // If the filename doesn't determine the language (.h), transfer with -x.
@@ -216,7 +220,7 @@ struct TransferableCommand {
       if (ClangCLMode) {
         const StringRef Flag = toCLFlag(TargetType);
         if (!Flag.empty())
-          Result.CommandLine.push_back(Flag);
+          Result.CommandLine.push_back(std::string(Flag));
       } else {
         Result.CommandLine.push_back("-x");
         Result.CommandLine.push_back(types::getTypeName(TargetType));
@@ -229,7 +233,7 @@ struct TransferableCommand {
           llvm::Twine(ClangCLMode ? "/std:" : "-std=") +
           LangStandard::getLangStandardForKind(Std).getName()).str());
     }
-    Result.CommandLine.push_back(Filename);
+    Result.CommandLine.push_back(std::string(Filename));
     Result.Heuristic = "inferred from " + Cmd.Filename;
     return Result;
   }

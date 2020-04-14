@@ -12,6 +12,7 @@
 
 #include "clang/AST/DeclBase.h"
 #include "clang/AST/ASTContext.h"
+#include "clang/AST/ASTLambda.h"
 #include "clang/AST/ASTMutationListener.h"
 #include "clang/AST/Attr.h"
 #include "clang/AST/AttrIterator.h"
@@ -99,7 +100,7 @@ void *Decl::operator new(std::size_t Size, const ASTContext &Ctx,
     // Ensure required alignment of the resulting object by adding extra
     // padding at the start if required.
     size_t ExtraAlign =
-        llvm::OffsetToAlignment(sizeof(Module *), alignof(Decl));
+        llvm::offsetToAlignment(sizeof(Module *), llvm::Align(alignof(Decl)));
     auto *Buffer = reinterpret_cast<char *>(
         ::operator new(ExtraAlign + sizeof(Module *) + Size + Extra, Ctx));
     Buffer += ExtraAlign;
@@ -377,6 +378,12 @@ ASTContext &Decl::getASTContext() const {
   return getTranslationUnitDecl()->getASTContext();
 }
 
+/// Helper to get the language options from the ASTContext.
+/// Defined out of line to avoid depending on ASTContext.h.
+const LangOptions &Decl::getLangOpts() const {
+  return getASTContext().getLangOpts();
+}
+
 ASTMutationListener *Decl::getASTMutationListener() const {
   return getASTContext().getASTMutationListener();
 }
@@ -453,7 +460,8 @@ ExternalSourceSymbolAttr *Decl::getExternalSourceSymbolAttr() const {
 }
 
 bool Decl::hasDefiningAttr() const {
-  return hasAttr<AliasAttr>() || hasAttr<IFuncAttr>();
+  return hasAttr<AliasAttr>() || hasAttr<IFuncAttr>() ||
+         hasAttr<LoaderUninitializedAttr>();
 }
 
 const Attr *Decl::getDefiningAttr() const {
@@ -461,6 +469,8 @@ const Attr *Decl::getDefiningAttr() const {
     return AA;
   if (auto *IFA = getAttr<IFuncAttr>())
     return IFA;
+  if (auto *NZA = getAttr<LoaderUninitializedAttr>())
+    return NZA;
   return nullptr;
 }
 
@@ -586,7 +596,7 @@ AvailabilityResult Decl::getAvailability(std::string *Message,
         continue;
 
       if (Message)
-        ResultMessage = Deprecated->getMessage();
+        ResultMessage = std::string(Deprecated->getMessage());
 
       Result = AR_Deprecated;
       continue;
@@ -594,7 +604,7 @@ AvailabilityResult Decl::getAvailability(std::string *Message,
 
     if (const auto *Unavailable = dyn_cast<UnavailableAttr>(A)) {
       if (Message)
-        *Message = Unavailable->getMessage();
+        *Message = std::string(Unavailable->getMessage());
       return AR_Unavailable;
     }
 
@@ -802,6 +812,8 @@ unsigned Decl::getIdentifierNamespaceForKind(Kind DeclKind) {
     case OMPRequires:
     case OMPCapturedExpr:
     case Empty:
+    case LifetimeExtendedTemporary:
+    case RequiresExprBody:
       // Never looked up by name.
       return 0;
   }
@@ -958,11 +970,11 @@ const FunctionType *Decl::getFunctionType(bool BlocksToo) const {
     return nullptr;
 
   if (Ty->isFunctionPointerType())
-    Ty = Ty->getAs<PointerType>()->getPointeeType();
+    Ty = Ty->castAs<PointerType>()->getPointeeType();
   else if (Ty->isFunctionReferenceType())
-    Ty = Ty->getAs<ReferenceType>()->getPointeeType();
+    Ty = Ty->castAs<ReferenceType>()->getPointeeType();
   else if (BlocksToo && Ty->isBlockPointerType())
-    Ty = Ty->getAs<BlockPointerType>()->getPointeeType();
+    Ty = Ty->castAs<BlockPointerType>()->getPointeeType();
 
   return Ty->getAs<FunctionType>();
 }
@@ -1042,6 +1054,12 @@ DeclContext *DeclContext::getLookupParent() {
     if (getParent()->getRedeclContext()->isFileContext() &&
         getLexicalParent()->getRedeclContext()->isRecord())
       return getLexicalParent();
+
+  // A lookup within the call operator of a lambda never looks in the lambda
+  // class; instead, skip to the context in which that closure type is
+  // declared.
+  if (isLambdaCallOperator(this))
+    return getParent()->getParent();
 
   return getParent();
 }
@@ -1169,6 +1187,7 @@ DeclContext *DeclContext::getPrimaryContext() {
   case Decl::Captured:
   case Decl::OMPDeclareReduction:
   case Decl::OMPDeclareMapper:
+  case Decl::RequiresExprBody:
     // There is only one DeclContext for these entities.
     return this;
 

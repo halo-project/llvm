@@ -207,7 +207,7 @@ TEST_F(FormatTestObjC, FormatObjCAutoreleasepool) {
                "  f();\n"
                "}\n");
   Style.BreakBeforeBraces = FormatStyle::BS_Custom;
-  Style.BraceWrapping.AfterControlStatement = true;
+  Style.BraceWrapping.AfterControlStatement = FormatStyle::BWACS_Always;
   verifyFormat("@autoreleasepool\n"
                "{\n"
                "  f();\n"
@@ -237,7 +237,7 @@ TEST_F(FormatTestObjC, FormatObjCSynchronized) {
                "  f();\n"
                "}\n");
   Style.BreakBeforeBraces = FormatStyle::BS_Custom;
-  Style.BraceWrapping.AfterControlStatement = true;
+  Style.BraceWrapping.AfterControlStatement = FormatStyle::BWACS_Always;
   verifyFormat("@synchronized(self)\n"
                "{\n"
                "  f();\n"
@@ -1396,6 +1396,41 @@ TEST_F(FormatTestObjC,  DisambiguatesCallsFromStructuredBindings) {
       "  for (auto /**/ const /**/ volatile /**/ && /**/ [elem] : list)\n"
       "    return 0;\n"
       "}");
+}
+
+TEST_F(FormatTestObjC, BreakLineBeforeNestedBlockParam) {
+  Style = getGoogleStyle(FormatStyle::LK_ObjC);
+  Style.ObjCBreakBeforeNestedBlockParam = false;
+  Style.ColumnLimit = 0;
+
+  verifyFormat("[self.test1 t:self callback:^(typeof(self) self, NSNumber *u, "
+               "NSNumber *v) {\n"
+               "  u = v;\n"
+               "}]");
+
+  verifyFormat("[self.test1 t:self w:self callback:^(typeof(self) self, "
+               "NSNumber *u, NSNumber *v) {\n"
+               "  u = v;\n"
+               "}]");
+
+  verifyFormat("[self.test1 t:self w:self callback:^(typeof(self) self, "
+               "NSNumber *u, NSNumber *v) {\n"
+               "  u = c;\n"
+               "} w:self callback2:^(typeof(self) self, NSNumber *a, NSNumber "
+               "*b, NSNumber *c) {\n"
+               "  b = c;\n"
+               "}]");
+  verifyFormat("[self.test1 t:self w:self callback:^(typeof(self) self, "
+               "NSNumber *u, NSNumber *v) {\n"
+               "  u = v;\n"
+               "} z:self]");
+
+  Style.ColumnLimit = 80;
+  verifyFormat(
+      "[self.test_method a:self b:self\n"
+      "           callback:^(typeof(self) self, NSNumber *u, NSNumber *v) {\n"
+      "             u = v;\n"
+      "           }]");
 }
 
 } // end namespace

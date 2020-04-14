@@ -15,9 +15,13 @@
 
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/DataTypes.h"
-#include "llvm/Support/Host.h"
+#include "llvm/Support/Error.h"
+#include "llvm/Support/SwapByteOrder.h"
 
 namespace llvm {
+
+class Triple;
+
 namespace MachO {
 // Enums from <mach-o/loader.h>
 enum : uint32_t {
@@ -580,6 +584,11 @@ struct section_64 {
   uint32_t reserved2;
   uint32_t reserved3;
 };
+
+inline bool isVirtualSection(uint8_t type) {
+  return (type == MachO::S_ZEROFILL || type == MachO::S_GB_ZEROFILL ||
+          type == MachO::S_THREAD_LOCAL_ZEROFILL);
+}
 
 struct fvmlib {
   uint32_t name;
@@ -1512,6 +1521,9 @@ enum CPUSubTypePowerPC {
   CPU_SUBTYPE_MC980000_ALL = CPU_SUBTYPE_POWERPC_ALL,
   CPU_SUBTYPE_MC98601 = CPU_SUBTYPE_POWERPC_601
 };
+
+Expected<uint32_t> getCPUType(const Triple &T);
+Expected<uint32_t> getCPUSubType(const Triple &T);
 
 struct x86_thread_state32_t {
   uint32_t eax;

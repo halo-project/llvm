@@ -261,15 +261,25 @@ void CriticalAntiDepBreaker::ScanInstruction(MachineInstr &MI, unsigned Count) {
     for (unsigned i = 0, e = MI.getNumOperands(); i != e; ++i) {
       MachineOperand &MO = MI.getOperand(i);
 
-      if (MO.isRegMask())
-        for (unsigned i = 0, e = TRI->getNumRegs(); i != e; ++i)
-          if (MO.clobbersPhysReg(i)) {
+      if (MO.isRegMask()) {
+        auto ClobbersPhysRegAndSubRegs = [&](unsigned PhysReg) {
+          for (MCSubRegIterator SRI(PhysReg, TRI, true); SRI.isValid(); ++SRI)
+            if (!MO.clobbersPhysReg(*SRI))
+              return false;
+
+          return true;
+        };
+
+        for (unsigned i = 0, e = TRI->getNumRegs(); i != e; ++i) {
+          if (ClobbersPhysRegAndSubRegs(i)) {
             DefIndices[i] = Count;
             KillIndices[i] = ~0u;
             KeepRegs.reset(i);
             Classes[i] = nullptr;
             RegRefs.erase(i);
           }
+        }
+      }
 
       if (!MO.isReg()) continue;
       Register Reg = MO.getReg();
@@ -457,6 +467,7 @@ BreakAntiDependencies(const std::vector<SUnit> &SUnits,
     if (!Max || SU->getDepth() + SU->Latency > Max->getDepth() + Max->Latency)
       Max = SU;
   }
+  assert(Max && "Failed to find bottom of the critical path");
 
 #ifndef NDEBUG
   {
@@ -690,4 +701,10 @@ BreakAntiDependencies(const std::vector<SUnit> &SUnits,
   }
 
   return Broken;
+}
+
+AntiDepBreaker *
+llvm::createCriticalAntiDepBreaker(MachineFunction &MFi,
+                                   const RegisterClassInfo &RCI) {
+  return new CriticalAntiDepBreaker(MFi, RCI);
 }

@@ -1,4 +1,5 @@
 add_lldb_unittest(SymbolFileDWARFTests
+  DWARFASTParserClangTests.cpp
   SymbolFileDWARFTests.cpp
 
   LINK_LIBS
@@ -8,6 +9,7 @@ add_lldb_unittest(SymbolFileDWARFTests
     lldbPluginObjectFilePECOFF
     lldbPluginSymbolFileDWARF
     lldbPluginSymbolFilePDB
+    lldbPluginTypeSystemClang
     lldbUtilityHelpers
   LINK_COMPONENTS
     Support

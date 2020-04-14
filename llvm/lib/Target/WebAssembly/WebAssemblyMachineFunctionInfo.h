@@ -55,6 +55,12 @@ class WebAssemblyFunctionInfo final : public MachineFunctionInfo {
   // A virtual register holding the base pointer for functions that have
   // overaligned values on the user stack.
   unsigned BasePtrVreg = -1U;
+  // A virtual register holding the frame base. This is either FP or SP
+  // after it has been replaced by a vreg
+  unsigned FrameBaseVreg = -1U;
+  // The local holding the frame base. This is either FP or SP
+  // after WebAssemblyExplicitLocals
+  unsigned FrameBaseLocal = -1U;
 
   // Function properties.
   bool CFGStackified = false;
@@ -90,6 +96,19 @@ public:
     assert(BasePtrVreg != -1U && "Base ptr vreg hasn't been set");
     return BasePtrVreg;
   }
+  void setFrameBaseVreg(unsigned Reg) { FrameBaseVreg = Reg; }
+  unsigned getFrameBaseVreg() const {
+    assert(FrameBaseVreg != -1U && "Frame base vreg hasn't been set");
+    return FrameBaseVreg;
+  }
+  void clearFrameBaseVreg() { FrameBaseVreg = -1U; }
+  // Return true if the frame base physreg has been replaced by a virtual reg.
+  bool isFrameBaseVirtual() const { return FrameBaseVreg != -1U; }
+  void setFrameBaseLocal(unsigned Local) { FrameBaseLocal = Local; }
+  unsigned getFrameBaseLocal() const {
+    assert(FrameBaseLocal != -1U && "Frame base local hasn't been set");
+    return FrameBaseLocal;
+  }
   void setBasePointerVreg(unsigned Reg) { BasePtrVreg = Reg; }
 
   static const unsigned UnusedReg = -1u;
@@ -100,6 +119,11 @@ public:
     if (I >= VRegStackified.size())
       VRegStackified.resize(I + 1);
     VRegStackified.set(I);
+  }
+  void unstackifyVReg(unsigned VReg) {
+    auto I = Register::virtReg2Index(VReg);
+    if (I < VRegStackified.size())
+      VRegStackified.reset(I);
   }
   bool isVRegStackified(unsigned VReg) const {
     auto I = Register::virtReg2Index(VReg);
@@ -135,9 +159,10 @@ void computeLegalValueVTs(const Function &F, const TargetMachine &TM, Type *Ty,
                           SmallVectorImpl<MVT> &ValueVTs);
 
 // Compute the signature for a given FunctionType (Ty). Note that it's not the
-// signature for F (F is just used to get varous context)
-void computeSignatureVTs(const FunctionType *Ty, const Function &F,
-                         const TargetMachine &TM, SmallVectorImpl<MVT> &Params,
+// signature for ContextFunc (ContextFunc is just used to get varous context)
+void computeSignatureVTs(const FunctionType *Ty, const Function *TargetFunc,
+                         const Function &ContextFunc, const TargetMachine &TM,
+                         SmallVectorImpl<MVT> &Params,
                          SmallVectorImpl<MVT> &Results);
 
 void valTypesFromMVTs(const ArrayRef<MVT> &In,

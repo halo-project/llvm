@@ -1,4 +1,4 @@
-//===-- RemoteAwarePlatform.cpp ---------------------------------*- C++ -*-===//
+//===-- RemoteAwarePlatform.cpp -------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -61,8 +61,8 @@ Status RemoteAwarePlatform::SetFilePermissions(const FileSpec &file_spec,
 }
 
 lldb::user_id_t RemoteAwarePlatform::OpenFile(const FileSpec &file_spec,
-                                              uint32_t flags, uint32_t mode,
-                                              Status &error) {
+                                              File::OpenOptions flags,
+                                              uint32_t mode, Status &error) {
   if (IsHost())
     return FileCache::GetInstance().OpenFile(file_spec, flags, mode, error);
   if (m_remote_platform_sp)

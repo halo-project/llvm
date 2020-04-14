@@ -1,10 +1,14 @@
-set(LLVM_LINK_COMPONENTS support)
+set(LLVM_LINK_COMPONENTS
+  FrontendOpenMP
+  Support
+  )
 
 add_clang_library(clangTidyLLVMModule
   HeaderGuardCheck.cpp
   IncludeOrderCheck.cpp
   LLVMTidyModule.cpp
   PreferIsaOrDynCastInConditionalsCheck.cpp
+  PreferRegisterOverUnsignedCheck.cpp
   TwineLocalCheck.cpp
 
   LINK_LIBS

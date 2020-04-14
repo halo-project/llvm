@@ -15,6 +15,7 @@
 #include "llvm/CodeGen/CostTable.h"
 #include "llvm/CodeGen/TargetLowering.h"
 #include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/IntrinsicsAArch64.h"
 #include "llvm/Support/Debug.h"
 #include <algorithm>
 using namespace llvm;
@@ -80,8 +81,8 @@ int AArch64TTIImpl::getIntImmCost(const APInt &Imm, Type *Ty) {
   return std::max(1, Cost);
 }
 
-int AArch64TTIImpl::getIntImmCost(unsigned Opcode, unsigned Idx,
-                                  const APInt &Imm, Type *Ty) {
+int AArch64TTIImpl::getIntImmCostInst(unsigned Opcode, unsigned Idx,
+                                      const APInt &Imm, Type *Ty) {
   assert(Ty->isIntegerTy());
 
   unsigned BitSize = Ty->getPrimitiveSizeInBits();
@@ -146,8 +147,8 @@ int AArch64TTIImpl::getIntImmCost(unsigned Opcode, unsigned Idx,
   return AArch64TTIImpl::getIntImmCost(Imm, Ty);
 }
 
-int AArch64TTIImpl::getIntImmCost(Intrinsic::ID IID, unsigned Idx,
-                                  const APInt &Imm, Type *Ty) {
+int AArch64TTIImpl::getIntImmCostIntrin(Intrinsic::ID IID, unsigned Idx,
+                                        const APInt &Imm, Type *Ty) {
   assert(Ty->isIntegerTy());
 
   unsigned BitSize = Ty->getPrimitiveSizeInBits();
@@ -155,6 +156,12 @@ int AArch64TTIImpl::getIntImmCost(Intrinsic::ID IID, unsigned Idx,
   // here, so that constant hoisting will ignore this constant.
   if (BitSize == 0)
     return TTI::TCC_Free;
+
+  // Most (all?) AArch64 intrinsics do not support folding immediates into the
+  // selected instruction, so we compute the materialization cost for the
+  // immediate directly.
+  if (IID >= Intrinsic::aarch64_addg && IID <= Intrinsic::aarch64_udiv)
+    return AArch64TTIImpl::getIntImmCost(Imm, Ty);
 
   switch (IID) {
   default:
@@ -202,7 +209,7 @@ bool AArch64TTIImpl::isWideningInstruction(Type *DstTy, unsigned Opcode,
   // elements in type Ty determine the vector width.
   auto toVectorTy = [&](Type *ArgTy) {
     return VectorType::get(ArgTy->getScalarType(),
-                           DstTy->getVectorNumElements());
+                           cast<VectorType>(DstTy)->getNumElements());
   };
 
   // Exit early if DstTy is not a vector type whose elements are at least
@@ -478,7 +485,8 @@ int AArch64TTIImpl::getVectorInstrCost(unsigned Opcode, Type *Val,
 int AArch64TTIImpl::getArithmeticInstrCost(
     unsigned Opcode, Type *Ty, TTI::OperandValueKind Opd1Info,
     TTI::OperandValueKind Opd2Info, TTI::OperandValueProperties Opd1PropInfo,
-    TTI::OperandValueProperties Opd2PropInfo, ArrayRef<const Value *> Args) {
+    TTI::OperandValueProperties Opd2PropInfo, ArrayRef<const Value *> Args,
+    const Instruction *CxtI) {
   // Legalize the type.
   std::pair<int, MVT> LT = TLI->getTypeLegalizationCost(DL, Ty);
 
@@ -621,7 +629,12 @@ int AArch64TTIImpl::getCmpSelInstrCost(unsigned Opcode, Type *ValTy,
 AArch64TTIImpl::TTI::MemCmpExpansionOptions
 AArch64TTIImpl::enableMemCmpExpansion(bool OptSize, bool IsZeroCmp) const {
   TTI::MemCmpExpansionOptions Options;
-  Options.AllowOverlappingLoads = !ST->requiresStrictAlign();
+  if (ST->requiresStrictAlign()) {
+    // TODO: Add cost modeling for strict align. Misaligned loads expand to
+    // a bunch of instructions when strict align is enabled.
+    return Options;
+  }
+  Options.AllowOverlappingLoads = true;
   Options.MaxNumLoads = TLI->getMaxExpandSizeMemcmp(OptSize);
   Options.NumLoadsPerBlock = Options.MaxNumLoads;
   // TODO: Though vector loads usually perform well on AArch64, in some targets
@@ -632,12 +645,12 @@ AArch64TTIImpl::enableMemCmpExpansion(bool OptSize, bool IsZeroCmp) const {
 }
 
 int AArch64TTIImpl::getMemoryOpCost(unsigned Opcode, Type *Ty,
-                                    unsigned Alignment, unsigned AddressSpace,
+                                    MaybeAlign Alignment, unsigned AddressSpace,
                                     const Instruction *I) {
   auto LT = TLI->getTypeLegalizationCost(DL, Ty);
 
   if (ST->isMisaligned128StoreSlow() && Opcode == Instruction::Store &&
-      LT.second.is128BitVector() && Alignment < 16) {
+      LT.second.is128BitVector() && (!Alignment || *Alignment < Align(16))) {
     // Unaligned stores are extremely inefficient. We don't split all
     // unaligned 128-bit stores because the negative impact that has shown in
     // practice on inlined block copy code.
@@ -648,7 +661,8 @@ int AArch64TTIImpl::getMemoryOpCost(unsigned Opcode, Type *Ty,
     return LT.first * 2 * AmortizationCost;
   }
 
-  if (Ty->isVectorTy() && Ty->getVectorElementType()->isIntegerTy(8)) {
+  if (Ty->isVectorTy() &&
+      cast<VectorType>(Ty)->getElementType()->isIntegerTy(8)) {
     unsigned ProfitableNumElements;
     if (Opcode == Instruction::Store)
       // We use a custom trunc store lowering so v.4b should be profitable.
@@ -658,8 +672,8 @@ int AArch64TTIImpl::getMemoryOpCost(unsigned Opcode, Type *Ty,
       // have to promote the elements to v.2.
       ProfitableNumElements = 8;
 
-    if (Ty->getVectorNumElements() < ProfitableNumElements) {
-      unsigned NumVecElts = Ty->getVectorNumElements();
+    if (cast<VectorType>(Ty)->getNumElements() < ProfitableNumElements) {
+      unsigned NumVecElts = cast<VectorType>(Ty)->getNumElements();
       unsigned NumVectorizableInstsToAmortize = NumVecElts * 2;
       // We generate 2 instructions per vector element.
       return NumVectorizableInstsToAmortize * NumVecElts * 2;
@@ -677,11 +691,11 @@ int AArch64TTIImpl::getInterleavedMemoryOpCost(unsigned Opcode, Type *VecTy,
                                                bool UseMaskForCond,
                                                bool UseMaskForGaps) {
   assert(Factor >= 2 && "Invalid interleave factor");
-  assert(isa<VectorType>(VecTy) && "Expect a vector type");
+  auto *VecVTy = cast<VectorType>(VecTy);
 
   if (!UseMaskForCond && !UseMaskForGaps &&
       Factor <= TLI->getMaxSupportedInterleaveFactor()) {
-    unsigned NumElts = VecTy->getVectorNumElements();
+    unsigned NumElts = VecVTy->getNumElements();
     auto *SubVecTy = VectorType::get(VecTy->getScalarType(), NumElts / Factor);
 
     // ldN/stN only support legal vector types of size 64 or 128 in bits.
@@ -702,9 +716,9 @@ int AArch64TTIImpl::getCostOfKeepingLiveOverCall(ArrayRef<Type *> Tys) {
   for (auto *I : Tys) {
     if (!I->isVectorTy())
       continue;
-    if (I->getScalarSizeInBits() * I->getVectorNumElements() == 128)
-      Cost += getMemoryOpCost(Instruction::Store, I, 128, 0) +
-        getMemoryOpCost(Instruction::Load, I, 128, 0);
+    if (I->getScalarSizeInBits() * cast<VectorType>(I)->getNumElements() == 128)
+      Cost += getMemoryOpCost(Instruction::Store, I, Align(128), 0) +
+              getMemoryOpCost(Instruction::Load, I, Align(128), 0);
   }
   return Cost;
 }
@@ -892,25 +906,9 @@ bool AArch64TTIImpl::shouldConsiderAddressTypePromotion(
   return Considerable;
 }
 
-unsigned AArch64TTIImpl::getCacheLineSize() {
-  return ST->getCacheLineSize();
-}
-
-unsigned AArch64TTIImpl::getPrefetchDistance() {
-  return ST->getPrefetchDistance();
-}
-
-unsigned AArch64TTIImpl::getMinPrefetchStride() {
-  return ST->getMinPrefetchStride();
-}
-
-unsigned AArch64TTIImpl::getMaxPrefetchIterationsAhead() {
-  return ST->getMaxPrefetchIterationsAhead();
-}
-
 bool AArch64TTIImpl::useReductionIntrinsic(unsigned Opcode, Type *Ty,
                                            TTI::ReductionFlags Flags) const {
-  assert(isa<VectorType>(Ty) && "Expected Ty to be a vector type");
+  auto *VTy = cast<VectorType>(Ty);
   unsigned ScalarBits = Ty->getScalarSizeInBits();
   switch (Opcode) {
   case Instruction::FAdd:
@@ -921,10 +919,9 @@ bool AArch64TTIImpl::useReductionIntrinsic(unsigned Opcode, Type *Ty,
   case Instruction::Mul:
     return false;
   case Instruction::Add:
-    return ScalarBits * Ty->getVectorNumElements() >= 128;
+    return ScalarBits * VTy->getNumElements() >= 128;
   case Instruction::ICmp:
-    return (ScalarBits < 64) &&
-           (ScalarBits * Ty->getVectorNumElements() >= 128);
+    return (ScalarBits < 64) && (ScalarBits * VTy->getNumElements() >= 128);
   case Instruction::FCmp:
     return Flags.NoNaN;
   default:

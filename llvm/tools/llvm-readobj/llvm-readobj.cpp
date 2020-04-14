@@ -58,6 +58,11 @@ namespace opts {
                    "--section-groups and --elf-hash-histogram."));
   cl::alias AllShort("a", cl::desc("Alias for --all"), cl::aliasopt(All));
 
+  // --dependent-libraries
+  cl::opt<bool>
+      DependentLibraries("dependent-libraries",
+                         cl::desc("Display the dependent libraries section"));
+
   // --headers -e
   cl::opt<bool>
       Headers("headers",
@@ -231,26 +236,11 @@ namespace opts {
       "codeview-subsection-bytes",
       cl::desc("Dump raw contents of codeview debug sections and records"));
 
-  // --arm-attributes
-  cl::opt<bool> ARMAttributes("arm-attributes",
-                              cl::desc("Display the ARM attributes section"));
-
-  // --mips-plt-got
-  cl::opt<bool>
-  MipsPLTGOT("mips-plt-got",
-             cl::desc("Display the MIPS GOT and PLT GOT sections"));
-
-  // --mips-abi-flags
-  cl::opt<bool> MipsABIFlags("mips-abi-flags",
-                             cl::desc("Display the MIPS.abiflags section"));
-
-  // --mips-reginfo
-  cl::opt<bool> MipsReginfo("mips-reginfo",
-                            cl::desc("Display the MIPS .reginfo section"));
-
-  // --mips-options
-  cl::opt<bool> MipsOptions("mips-options",
-                            cl::desc("Display the MIPS .MIPS.options section"));
+  // --arch-specific
+  cl::opt<bool> ArchSpecificInfo("arch-specific",
+                              cl::desc("Displays architecture-specific information, if there is any."));
+  cl::alias ArchSpecifcInfoShort("A", cl::desc("Alias for --arch-specific"),
+                                 cl::aliasopt(ArchSpecificInfo), cl::NotHidden);
 
   // --coff-imports
   cl::opt<bool>
@@ -373,14 +363,15 @@ namespace opts {
       HelpResponse("\nPass @FILE as argument to read options from FILE.\n");
 } // namespace opts
 
+static StringRef ToolName;
+
 namespace llvm {
 
 LLVM_ATTRIBUTE_NORETURN static void error(Twine Msg) {
   // Flush the standard output to print the error at a
   // proper place.
   fouts().flush();
-  errs() << "\n";
-  WithColor::error(errs()) << Msg << "\n";
+  WithColor::error(errs(), ToolName) << Msg << "\n";
   exit(1);
 }
 
@@ -401,31 +392,14 @@ void reportWarning(Error Err, StringRef Input) {
   // Flush the standard output to print the warning at a
   // proper place.
   fouts().flush();
-  handleAllErrors(createFileError(Input, std::move(Err)),
-                  [&](const ErrorInfoBase &EI) {
-                    errs() << "\n";
-                    WithColor::warning(errs()) << EI.message() << "\n";
-                  });
-}
-
-LLVM_ATTRIBUTE_NORETURN void reportError(std::error_code EC, StringRef Input) {
-  assert(EC != readobj_error::success);
-  reportError(errorCodeToError(EC), Input);
+  handleAllErrors(
+      createFileError(Input, std::move(Err)), [&](const ErrorInfoBase &EI) {
+        WithColor::warning(errs(), ToolName) << EI.message() << "\n";
+      });
 }
 
 } // namespace llvm
 
-static bool isMipsArch(unsigned Arch) {
-  switch (Arch) {
-  case llvm::Triple::mips:
-  case llvm::Triple::mipsel:
-  case llvm::Triple::mips64:
-  case llvm::Triple::mips64el:
-    return true;
-  default:
-    return false;
-  }
-}
 namespace {
 struct ReadObjTypeTableBuilder {
   ReadObjTypeTableBuilder()
@@ -472,7 +446,7 @@ static void dumpObject(const ObjectFile *Obj, ScopedPrinter &Writer,
 
   std::unique_ptr<ObjDumper> Dumper;
   if (std::error_code EC = createDumper(Obj, Writer, Dumper))
-    reportError(EC, FileStr);
+    reportError(errorCodeToError(EC), FileStr);
 
   if (opts::Output == opts::LLVM || opts::InputFilenames.size() > 1 || A) {
     Writer.startLine() << "\n";
@@ -482,8 +456,9 @@ static void dumpObject(const ObjectFile *Obj, ScopedPrinter &Writer,
     Writer.printString("Format", Obj->getFileFormatName());
     Writer.printString("Arch", Triple::getArchTypeName(
                                    (llvm::Triple::ArchType)Obj->getArch()));
-    Writer.printString("AddressSize",
-                       formatv("{0}bit", 8 * Obj->getBytesInAddress()));
+    Writer.printString(
+        "AddressSize",
+        std::string(formatv("{0}bit", 8 * Obj->getBytesInAddress())));
     Dumper->printLoadName();
   }
 
@@ -491,22 +466,22 @@ static void dumpObject(const ObjectFile *Obj, ScopedPrinter &Writer,
     Dumper->printFileHeaders();
   if (opts::SectionHeaders)
     Dumper->printSectionHeaders();
-  if (opts::Relocations)
-    Dumper->printRelocations();
-  if (opts::DynRelocs)
-    Dumper->printDynamicRelocations();
-  if (opts::Symbols || opts::DynamicSymbols)
-    Dumper->printSymbols(opts::Symbols, opts::DynamicSymbols);
   if (opts::HashSymbols)
     Dumper->printHashSymbols();
-  if (opts::UnwindInfo)
-    Dumper->printUnwindInfo();
+  if (opts::ProgramHeaders || opts::SectionMapping == cl::BOU_TRUE)
+    Dumper->printProgramHeaders(opts::ProgramHeaders, opts::SectionMapping);
   if (opts::DynamicTable)
     Dumper->printDynamicTable();
   if (opts::NeededLibraries)
     Dumper->printNeededLibraries();
-  if (opts::ProgramHeaders || opts::SectionMapping == cl::BOU_TRUE)
-    Dumper->printProgramHeaders(opts::ProgramHeaders, opts::SectionMapping);
+  if (opts::Relocations)
+    Dumper->printRelocations();
+  if (opts::DynRelocs)
+    Dumper->printDynamicRelocations();
+  if (opts::UnwindInfo)
+    Dumper->printUnwindInfo();
+  if (opts::Symbols || opts::DynamicSymbols)
+    Dumper->printSymbols(opts::Symbols, opts::DynamicSymbols);
   if (!opts::StringDump.empty())
     Dumper->printSectionsAsString(Obj, opts::StringDump);
   if (!opts::HexDump.empty())
@@ -518,21 +493,12 @@ static void dumpObject(const ObjectFile *Obj, ScopedPrinter &Writer,
   if (opts::VersionInfo)
     Dumper->printVersionInfo();
   if (Obj->isELF()) {
+    if (opts::DependentLibraries)
+      Dumper->printDependentLibs();
     if (opts::ELFLinkerOptions)
       Dumper->printELFLinkerOptions();
-    if (Obj->getArch() == llvm::Triple::arm)
-      if (opts::ARMAttributes)
-        Dumper->printAttributes();
-    if (isMipsArch(Obj->getArch())) {
-      if (opts::MipsPLTGOT)
-        Dumper->printMipsPLTGOT();
-      if (opts::MipsABIFlags)
-        Dumper->printMipsABIFlags();
-      if (opts::MipsReginfo)
-        Dumper->printMipsReginfo();
-      if (opts::MipsOptions)
-        Dumper->printMipsOptions();
-    }
+    if (opts::ArchSpecificInfo)
+      Dumper->printArchSpecificInfo();
     if (opts::SectionGroups)
       Dumper->printGroupSections();
     if (opts::HashHistogram)
@@ -603,7 +569,8 @@ static void dumpArchive(const Archive *Arc, ScopedPrinter &Writer) {
     else if (COFFImportFile *Imp = dyn_cast<COFFImportFile>(&*ChildOrErr.get()))
       dumpCOFFImportFile(Imp, Writer);
     else
-      reportError(readobj_error::unrecognized_file_format, Arc->getFileName());
+      reportError(errorCodeToError(readobj_error::unrecognized_file_format),
+                  Arc->getFileName());
   }
   if (Err)
     reportError(std::move(Err), Arc->getFileName());
@@ -652,7 +619,8 @@ static void dumpInput(StringRef File, ScopedPrinter &Writer) {
   else if (WindowsResource *WinRes = dyn_cast<WindowsResource>(&Binary))
     dumpWindowsResourceFile(WinRes, Writer);
   else
-    reportError(readobj_error::unrecognized_file_format, File);
+    reportError(errorCodeToError(readobj_error::unrecognized_file_format),
+                File);
 
   CVTypes.Binaries.push_back(std::move(*BinaryOrErr));
 }
@@ -703,6 +671,7 @@ static void registerReadelfAliases() {
 
 int main(int argc, const char *argv[]) {
   InitLLVM X(argc, argv);
+  ToolName = argv[0];
 
   // Register the target printer for --version.
   cl::AddExtraVersionPrinter(TargetRegistry::printRegisteredTargetsForVersion);
@@ -728,10 +697,10 @@ int main(int argc, const char *argv[]) {
     opts::UnwindInfo = true;
     opts::SectionGroups = true;
     opts::HashHistogram = true;
-    // FIXME: As soon as we implement LLVM-style printing of the .stack_size
-    // section, we will enable it with --all (only for LLVM-style).
-    if (opts::Output == opts::LLVM)
-      opts::PrintStackSizes = false;
+    if (opts::Output == opts::LLVM) {
+      opts::Addrsig = true;
+      opts::PrintStackSizes = true;
+    }
   }
 
   if (opts::Headers) {

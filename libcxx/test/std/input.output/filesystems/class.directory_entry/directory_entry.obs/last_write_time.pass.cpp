@@ -6,6 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+// FILE_DEPENDENCIES: ../../Inputs/static_test_env
 // UNSUPPORTED: c++98, c++03
 
 // <filesystem>
@@ -15,12 +16,12 @@
 // file_time_type last_write_time() const;
 // file_time_type last_write_time(error_code const&) const noexcept;
 
-#include "filesystem_include.hpp"
+#include "filesystem_include.h"
 #include <type_traits>
 #include <cassert>
 
-#include "filesystem_test_helper.hpp"
-#include "rapid-cxx-test.hpp"
+#include "filesystem_test_helper.h"
+#include "rapid-cxx-test.h"
 
 #include "test_macros.h"
 

@@ -102,21 +102,21 @@ struct OutgoingValueHandler : public CallLowering::ValueHandler {
         DL(MIRBuilder.getMF().getDataLayout()),
         STI(MIRBuilder.getMF().getSubtarget<X86Subtarget>()) {}
 
+  bool isIncomingArgumentHandler() const override { return false; }
+
   Register getStackAddress(uint64_t Size, int64_t Offset,
                            MachinePointerInfo &MPO) override {
     LLT p0 = LLT::pointer(0, DL.getPointerSizeInBits(0));
     LLT SType = LLT::scalar(DL.getPointerSizeInBits(0));
-    Register SPReg = MRI.createGenericVirtualRegister(p0);
-    MIRBuilder.buildCopy(SPReg, STI.getRegisterInfo()->getStackRegister());
+    auto SPReg =
+        MIRBuilder.buildCopy(p0, STI.getRegisterInfo()->getStackRegister());
 
-    Register OffsetReg = MRI.createGenericVirtualRegister(SType);
-    MIRBuilder.buildConstant(OffsetReg, Offset);
+    auto OffsetReg = MIRBuilder.buildConstant(SType, Offset);
 
-    Register AddrReg = MRI.createGenericVirtualRegister(p0);
-    MIRBuilder.buildGEP(AddrReg, SPReg, OffsetReg);
+    auto AddrReg = MIRBuilder.buildPtrAdd(p0, SPReg, OffsetReg);
 
     MPO = MachinePointerInfo::getStack(MIRBuilder.getMF(), Offset);
-    return AddrReg;
+    return AddrReg.getReg(0);
   }
 
   void assignValueToReg(Register ValVReg, Register PhysReg,
@@ -137,7 +137,7 @@ struct OutgoingValueHandler : public CallLowering::ValueHandler {
     if (PhysRegSize > ValSize && LocSize == ValSize) {
       assert((PhysRegSize == 128 || PhysRegSize == 80)  && "We expect that to be 128 bit");
       auto MIB = MIRBuilder.buildAnyExt(LLT::scalar(PhysRegSize), ValVReg);
-      ExtReg = MIB->getOperand(0).getReg();
+      ExtReg = MIB.getReg(0);
     } else
       ExtReg = extendRegister(ValVReg, VA);
 
@@ -146,17 +146,20 @@ struct OutgoingValueHandler : public CallLowering::ValueHandler {
 
   void assignValueToAddress(Register ValVReg, Register Addr, uint64_t Size,
                             MachinePointerInfo &MPO, CCValAssign &VA) override {
+    MachineFunction &MF = MIRBuilder.getMF();
     Register ExtReg = extendRegister(ValVReg, VA);
-    auto MMO = MIRBuilder.getMF().getMachineMemOperand(
-        MPO, MachineMemOperand::MOStore, VA.getLocVT().getStoreSize(),
-        /* Alignment */ 1);
+
+    auto MMO = MF.getMachineMemOperand(MPO, MachineMemOperand::MOStore,
+                                       VA.getLocVT().getStoreSize(),
+                                       inferAlignFromPtrInfo(MF, MPO));
     MIRBuilder.buildStore(ExtReg, Addr, *MMO);
   }
 
   bool assignArg(unsigned ValNo, MVT ValVT, MVT LocVT,
                  CCValAssign::LocInfo LocInfo,
-                 const CallLowering::ArgInfo &Info, CCState &State) override {
-    bool Res = AssignFn(ValNo, ValVT, LocVT, LocInfo, Info.Flags, State);
+                 const CallLowering::ArgInfo &Info, ISD::ArgFlagsTy Flags,
+                 CCState &State) override {
+    bool Res = AssignFn(ValNo, ValVT, LocVT, LocInfo, Flags, State);
     StackSize = State.getNextStackOffset();
 
     static const MCPhysReg XMMArgRegs[] = {X86::XMM0, X86::XMM1, X86::XMM2,
@@ -237,17 +240,17 @@ struct IncomingValueHandler : public CallLowering::ValueHandler {
     int FI = MFI.CreateFixedObject(Size, Offset, true);
     MPO = MachinePointerInfo::getFixedStack(MIRBuilder.getMF(), FI);
 
-    Register AddrReg = MRI.createGenericVirtualRegister(
-        LLT::pointer(0, DL.getPointerSizeInBits(0)));
-    MIRBuilder.buildFrameIndex(AddrReg, FI);
-    return AddrReg;
+    return MIRBuilder
+        .buildFrameIndex(LLT::pointer(0, DL.getPointerSizeInBits(0)), FI)
+        .getReg(0);
   }
 
   void assignValueToAddress(Register ValVReg, Register Addr, uint64_t Size,
                             MachinePointerInfo &MPO, CCValAssign &VA) override {
-    auto MMO = MIRBuilder.getMF().getMachineMemOperand(
+    MachineFunction &MF = MIRBuilder.getMF();
+    auto MMO = MF.getMachineMemOperand(
         MPO, MachineMemOperand::MOLoad | MachineMemOperand::MOInvariant, Size,
-        1);
+        inferAlignFromPtrInfo(MF, MPO));
     MIRBuilder.buildLoad(ValVReg, Addr, *MMO);
   }
 
@@ -405,7 +408,7 @@ bool X86CallLowering::lowerCall(MachineIRBuilder &MIRBuilder,
   for (const auto &OrigArg : Info.OrigArgs) {
 
     // TODO: handle not simple cases.
-    if (OrigArg.Flags.isByVal())
+    if (OrigArg.Flags[0].isByVal())
       return false;
 
     if (OrigArg.Regs.size() > 1)

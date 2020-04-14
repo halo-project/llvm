@@ -48,10 +48,6 @@ private:
 
   bool evaluateAsAbsolute(int64_t &Res, const MCAssembler *Asm,
                           const MCAsmLayout *Layout,
-                          const SectionAddrMap *Addrs) const;
-
-  bool evaluateAsAbsolute(int64_t &Res, const MCAssembler *Asm,
-                          const MCAsmLayout *Layout,
                           const SectionAddrMap *Addrs, bool InSet) const;
 
 protected:
@@ -135,6 +131,7 @@ inline raw_ostream &operator<<(raw_ostream &OS, const MCExpr &E) {
 class MCConstantExpr : public MCExpr {
   int64_t Value;
   bool PrintInHex = false;
+  unsigned SizeInBytes = 0;
 
   explicit MCConstantExpr(int64_t Value)
       : MCExpr(MCExpr::Constant, SMLoc()), Value(Value) {}
@@ -143,18 +140,24 @@ class MCConstantExpr : public MCExpr {
       : MCExpr(MCExpr::Constant, SMLoc()), Value(Value),
         PrintInHex(PrintInHex) {}
 
+  MCConstantExpr(int64_t Value, bool PrintInHex, unsigned SizeInBytes)
+      : MCExpr(MCExpr::Constant, SMLoc()), Value(Value), PrintInHex(PrintInHex),
+        SizeInBytes(SizeInBytes) {}
+
 public:
   /// \name Construction
   /// @{
 
   static const MCConstantExpr *create(int64_t Value, MCContext &Ctx,
-                                      bool PrintInHex = false);
+                                      bool PrintInHex = false,
+                                      unsigned SizeInBytes = 0);
 
   /// @}
   /// \name Accessors
   /// @{
 
   int64_t getValue() const { return Value; }
+  unsigned getSizeInBytes() const { return SizeInBytes; }
 
   bool useHexFormat() const { return PrintInHex; }
 
@@ -179,6 +182,7 @@ public:
     VK_GOT,
     VK_GOTOFF,
     VK_GOTREL,
+    VK_PCREL,
     VK_GOTPCREL,
     VK_GOTTPOFF,
     VK_INDNTPOFF,
@@ -239,6 +243,8 @@ public:
     VK_PPC_TOC_LO,         // symbol@toc@l
     VK_PPC_TOC_HI,         // symbol@toc@h
     VK_PPC_TOC_HA,         // symbol@toc@ha
+    VK_PPC_U,              // symbol@u
+    VK_PPC_L,              // symbol@l
     VK_PPC_DTPMOD,         // symbol@dtpmod
     VK_PPC_TPREL_LO,       // symbol@tprel@l
     VK_PPC_TPREL_HI,       // symbol@tprel@h
@@ -278,10 +284,10 @@ public:
     VK_PPC_GOT_TLSLD_HA,   // symbol@got@tlsld@ha
     VK_PPC_TLSLD,          // symbol@tlsld
     VK_PPC_LOCAL,          // symbol@local
+    VK_PPC_NOTOC,          // symbol@notoc
 
     VK_COFF_IMGREL32, // symbol@imgrel (image-relative)
 
-    VK_Hexagon_PCREL,
     VK_Hexagon_LO16,
     VK_Hexagon_HI16,
     VK_Hexagon_GPREL,

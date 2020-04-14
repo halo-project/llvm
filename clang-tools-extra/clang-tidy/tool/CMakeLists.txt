@@ -2,49 +2,47 @@ set(LLVM_LINK_COMPONENTS
   AllTargetsAsmParsers
   AllTargetsDescs
   AllTargetsInfos
+  FrontendOpenMP
   support
   )
 
-add_clang_tool(clang-tidy
+# Needed by LLVM's CMake checks because this file defines multiple targets.
+set(LLVM_OPTIONAL_SOURCES ClangTidyMain.cpp ClangTidyToolMain.cpp)
+
+add_clang_library(clangTidyMain
   ClangTidyMain.cpp
-  )
-add_dependencies(clang-tidy
-  clang-resource-headers
-  )
-target_link_libraries(clang-tidy
-  PRIVATE
+
+  LINK_LIBS
   clangAST
   clangASTMatchers
   clangBasic
   clangTidy
-  clangTidyAndroidModule
-  clangTidyAbseilModule
-  clangTidyBoostModule
-  clangTidyBugproneModule
-  clangTidyCERTModule
-  clangTidyCppCoreGuidelinesModule
-  clangTidyFuchsiaModule
-  clangTidyGoogleModule
-  clangTidyHICPPModule
-  clangTidyLinuxKernelModule
-  clangTidyLLVMModule
-  clangTidyMiscModule
-  clangTidyModernizeModule
-  clangTidyObjCModule
-  clangTidyOpenMPModule
-  clangTidyPerformanceModule
-  clangTidyPortabilityModule
-  clangTidyReadabilityModule
-  clangTidyZirconModule
+  ${ALL_CLANG_TIDY_CHECKS}
   clangTooling
   clangToolingCore
   )
 
-if(CLANG_ENABLE_STATIC_ANALYZER)
-  target_link_libraries(clang-tidy PRIVATE
-    clangTidyMPIModule
+add_clang_tool(clang-tidy
+  ClangTidyToolMain.cpp
   )
-endif()
+add_dependencies(clang-tidy
+  clang-resource-headers
+  )
+clang_target_link_libraries(clang-tidy
+  PRIVATE
+  clangAST
+  clangASTMatchers
+  clangBasic
+  clangTooling
+  clangToolingCore
+  )
+target_link_libraries(clang-tidy
+  PRIVATE
+  clangTidy
+  clangTidyMain
+  ${ALL_CLANG_TIDY_CHECKS}
+  )
+
 
 install(PROGRAMS clang-tidy-diff.py
   DESTINATION share/clang

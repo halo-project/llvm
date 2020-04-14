@@ -274,6 +274,7 @@ uptr ReadBinaryNameCached(/*out*/char *buf, uptr buf_len) {
   return name_len;
 }
 
+#if !SANITIZER_GO
 void PrintCmdline() {
   char **argv = GetArgv();
   if (!argv) return;
@@ -282,6 +283,7 @@ void PrintCmdline() {
     Printf("%s ", argv[i]);
   Printf("\n\n");
 }
+#endif
 
 // Malloc hooks.
 static const int kMaxMallocFreeHooks = 5;
@@ -323,7 +325,7 @@ static int InstallMallocFreeHooks(void (*malloc_hook)(const void *, uptr),
 
 } // namespace __sanitizer
 
-using namespace __sanitizer;  // NOLINT
+using namespace __sanitizer;
 
 extern "C" {
 SANITIZER_INTERFACE_WEAK_DEF(void, __sanitizer_report_error_summary,

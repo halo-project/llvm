@@ -36,14 +36,14 @@ class PerfEvent {
 public:
   // http://perfmon2.sourceforge.net/manv4/libpfm.html
   // Events are expressed as strings. e.g. "INSTRUCTION_RETIRED"
-  explicit PerfEvent(llvm::StringRef pfm_event_string);
+  explicit PerfEvent(StringRef pfm_event_string);
 
   PerfEvent(const PerfEvent &) = delete;
   PerfEvent(PerfEvent &&other);
   ~PerfEvent();
 
   // The pfm_event_string passed at construction time.
-  llvm::StringRef name() const;
+  StringRef name() const;
 
   // Whether the event was successfully created.
   bool valid() const;
@@ -53,7 +53,7 @@ public:
 
   // The fully qualified name for the event.
   // e.g. "snb_ep::INSTRUCTION_RETIRED:e=0:i=0:c=0:t=0:u=1:k=0:mg=0:mh=1"
-  llvm::StringRef getPfmEventString() const;
+  StringRef getPfmEventString() const;
 
 private:
   const std::string EventString;
@@ -65,7 +65,7 @@ private:
 // underlying event.
 struct Counter {
   // event: the PerfEvent to measure.
-  explicit Counter(const PerfEvent &event);
+  explicit Counter(PerfEvent &&event);
 
   Counter(const Counter &) = delete;
   Counter(Counter &&other) = default;
@@ -77,28 +77,11 @@ struct Counter {
   int64_t read() const; // Return the current value of the counter.
 
 private:
+  PerfEvent Event;
 #ifdef HAVE_LIBPFM
   int FileDescriptor = -1;
 #endif
 };
-
-// Helper to measure a list of PerfEvent for a particular function.
-// callback is called for each successful measure (PerfEvent needs to be valid).
-template <typename Function>
-void Measure(
-    llvm::ArrayRef<PerfEvent> Events,
-    const std::function<void(const PerfEvent &Event, int64_t Value)> &Callback,
-    Function Fn) {
-  for (const auto &Event : Events) {
-    if (!Event.valid())
-      continue;
-    Counter Cnt(Event);
-    Cnt.start();
-    Fn();
-    Cnt.stop();
-    Callback(Event, Cnt.read());
-  }
-}
 
 } // namespace pfm
 } // namespace exegesis

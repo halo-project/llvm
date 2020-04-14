@@ -145,7 +145,7 @@ namespace {
         assocExprs.reserve(numAssocs);
         assocTypes.reserve(numAssocs);
 
-        for (const GenericSelectionExpr::Association &assoc :
+        for (const GenericSelectionExpr::Association assoc :
              gse->associations()) {
           Expr *assocExpr = assoc.getAssociationExpr();
           if (assoc.isSelected())
@@ -167,16 +167,11 @@ namespace {
         Expr *&rebuiltExpr = ce->isConditionTrue() ? LHS : RHS;
         rebuiltExpr = rebuild(rebuiltExpr);
 
-        return new (S.Context) ChooseExpr(ce->getBuiltinLoc(),
-                                          ce->getCond(),
-                                          LHS, RHS,
-                                          rebuiltExpr->getType(),
-                                          rebuiltExpr->getValueKind(),
-                                          rebuiltExpr->getObjectKind(),
-                                          ce->getRParenLoc(),
-                                          ce->isConditionTrue(),
-                                          rebuiltExpr->isTypeDependent(),
-                                          rebuiltExpr->isValueDependent());
+        return new (S.Context)
+            ChooseExpr(ce->getBuiltinLoc(), ce->getCond(), LHS, RHS,
+                       rebuiltExpr->getType(), rebuiltExpr->getValueKind(),
+                       rebuiltExpr->getObjectKind(), ce->getRParenLoc(),
+                       ce->isConditionTrue());
       }
 
       llvm_unreachable("bad expression to rebuild!");
@@ -1190,16 +1185,15 @@ bool ObjCSubscriptOpBuilder::findAtIndexGetter() {
                                              true /*instance*/);
 
   if (!AtIndexGetter && S.getLangOpts().DebuggerObjCLiteral) {
-    AtIndexGetter = ObjCMethodDecl::Create(S.Context, SourceLocation(),
-                           SourceLocation(), AtIndexGetterSelector,
-                           S.Context.getObjCIdType() /*ReturnType*/,
-                           nullptr /*TypeSourceInfo */,
-                           S.Context.getTranslationUnitDecl(),
-                           true /*Instance*/, false/*isVariadic*/,
-                           /*isPropertyAccessor=*/false,
-                           /*isImplicitlyDeclared=*/true, /*isDefined=*/false,
-                           ObjCMethodDecl::Required,
-                           false);
+    AtIndexGetter = ObjCMethodDecl::Create(
+        S.Context, SourceLocation(), SourceLocation(), AtIndexGetterSelector,
+        S.Context.getObjCIdType() /*ReturnType*/, nullptr /*TypeSourceInfo */,
+        S.Context.getTranslationUnitDecl(), true /*Instance*/,
+        false /*isVariadic*/,
+        /*isPropertyAccessor=*/false,
+        /*isSynthesizedAccessorStub=*/false,
+        /*isImplicitlyDeclared=*/true, /*isDefined=*/false,
+        ObjCMethodDecl::Required, false);
     ParmVarDecl *Argument = ParmVarDecl::Create(S.Context, AtIndexGetter,
                                                 SourceLocation(), SourceLocation(),
                                                 arrayRef ? &S.Context.Idents.get("index")
@@ -1303,6 +1297,7 @@ bool ObjCSubscriptOpBuilder::findAtIndexSetter() {
         ReturnType, ReturnTInfo, S.Context.getTranslationUnitDecl(),
         true /*Instance*/, false /*isVariadic*/,
         /*isPropertyAccessor=*/false,
+        /*isSynthesizedAccessorStub=*/false,
         /*isImplicitlyDeclared=*/true, /*isDefined=*/false,
         ObjCMethodDecl::Required, false);
     SmallVector<ParmVarDecl *, 2> Params;
@@ -1668,6 +1663,8 @@ Expr *Sema::recreateSyntacticForm(PseudoObjectExpr *E) {
                                         bop->getType(), bop->getValueKind(),
                                         bop->getObjectKind(),
                                         bop->getOperatorLoc(), FPOptions());
+  } else if (isa<CallExpr>(syntax)) {
+    return syntax;
   } else {
     assert(syntax->hasPlaceholderType(BuiltinType::PseudoObject));
     return stripOpaqueValuesFromPseudoObjectRef(*this, syntax);

@@ -16,7 +16,7 @@
 #include <cassert>
 
 #include "test_macros.h"
-#include "count_new.hpp"
+#include "count_new.h"
 
 class A
 {
@@ -62,6 +62,7 @@ struct LValueCallable {
 
 int main(int, char**)
 {
+    globalMemCounter.reset();
     assert(globalMemCounter.checkOutstandingNewEq(0));
     {
     std::function<int(int)> f = A();

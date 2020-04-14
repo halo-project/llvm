@@ -175,7 +175,7 @@ static bool isDereferenceableForAllocaSize(const Value *V, const AllocaInst *AI,
   uint64_t AllocaSize = DL.getTypeStoreSize(AI->getAllocatedType());
   if (!AllocaSize)
     return false;
-  return isDereferenceableAndAlignedPointer(V, AI->getAlignment(),
+  return isDereferenceableAndAlignedPointer(V, Align(AI->getAlignment()),
                                             APInt(64, AllocaSize), DL);
 }
 
@@ -187,9 +187,7 @@ static Instruction *simplifyAllocaArraySize(InstCombiner &IC, AllocaInst &AI) {
       return nullptr;
 
     // Canonicalize it.
-    Value *V = IC.Builder.getInt32(1);
-    AI.setOperand(0, V);
-    return &AI;
+    return IC.replaceOperand(AI, 0, IC.Builder.getInt32(1));
   }
 
   // Convert: alloca Ty, C - where C is a constant != 1 into: alloca [C x Ty], 1
@@ -197,7 +195,7 @@ static Instruction *simplifyAllocaArraySize(InstCombiner &IC, AllocaInst &AI) {
     if (C->getValue().getActiveBits() <= 64) {
       Type *NewTy = ArrayType::get(AI.getAllocatedType(), C->getZExtValue());
       AllocaInst *New = IC.Builder.CreateAlloca(NewTy, nullptr, AI.getName());
-      New->setAlignment(AI.getAlignment());
+      New->setAlignment(MaybeAlign(AI.getAlignment()));
 
       // Scan to the end of the allocation instructions, to skip over a block of
       // allocas if possible...also skip interleaved debug info
@@ -230,8 +228,7 @@ static Instruction *simplifyAllocaArraySize(InstCombiner &IC, AllocaInst &AI) {
   Type *IntPtrTy = IC.getDataLayout().getIntPtrType(AI.getType());
   if (AI.getArraySize()->getType() != IntPtrTy) {
     Value *V = IC.Builder.CreateIntCast(AI.getArraySize(), IntPtrTy, false);
-    AI.setOperand(0, V);
-    return &AI;
+    return IC.replaceOperand(AI, 0, V);
   }
 
   return nullptr;
@@ -345,19 +342,19 @@ Instruction *InstCombiner::visitAllocaInst(AllocaInst &AI) {
   if (AI.getAllocatedType()->isSized()) {
     // If the alignment is 0 (unspecified), assign it the preferred alignment.
     if (AI.getAlignment() == 0)
-      AI.setAlignment(DL.getPrefTypeAlignment(AI.getAllocatedType()));
+      AI.setAlignment(
+          MaybeAlign(DL.getPrefTypeAlignment(AI.getAllocatedType())));
 
     // Move all alloca's of zero byte objects to the entry block and merge them
     // together.  Note that we only do this for alloca's, because malloc should
     // allocate and return a unique pointer, even for a zero byte allocation.
-    if (DL.getTypeAllocSize(AI.getAllocatedType()) == 0) {
+    if (DL.getTypeAllocSize(AI.getAllocatedType()).getKnownMinSize() == 0) {
       // For a zero sized alloca there is no point in doing an array allocation.
       // This is helpful if the array size is a complicated expression not used
       // elsewhere.
-      if (AI.isArrayAllocation()) {
-        AI.setOperand(0, ConstantInt::get(AI.getArraySize()->getType(), 1));
-        return &AI;
-      }
+      if (AI.isArrayAllocation())
+        return replaceOperand(AI, 0,
+            ConstantInt::get(AI.getArraySize()->getType(), 1));
 
       // Get the first instruction in the entry block.
       BasicBlock &EntryBlock = AI.getParent()->getParent()->getEntryBlock();
@@ -368,7 +365,8 @@ Instruction *InstCombiner::visitAllocaInst(AllocaInst &AI) {
         // dominance as the array size was forced to a constant earlier already.
         AllocaInst *EntryAI = dyn_cast<AllocaInst>(FirstInst);
         if (!EntryAI || !EntryAI->getAllocatedType()->isSized() ||
-            DL.getTypeAllocSize(EntryAI->getAllocatedType()) != 0) {
+            DL.getTypeAllocSize(EntryAI->getAllocatedType())
+                    .getKnownMinSize() != 0) {
           AI.moveBefore(FirstInst);
           return &AI;
         }
@@ -377,12 +375,12 @@ Instruction *InstCombiner::visitAllocaInst(AllocaInst &AI) {
         // assign it the preferred alignment.
         if (EntryAI->getAlignment() == 0)
           EntryAI->setAlignment(
-              DL.getPrefTypeAlignment(EntryAI->getAllocatedType()));
+              MaybeAlign(DL.getPrefTypeAlignment(EntryAI->getAllocatedType())));
         // Replace this zero-sized alloca with the one at the start of the entry
         // block after ensuring that the address will be aligned enough for both
         // types.
-        unsigned MaxAlign = std::max(EntryAI->getAlignment(),
-                                     AI.getAlignment());
+        const MaybeAlign MaxAlign(
+            std::max(EntryAI->getAlignment(), AI.getAlignment()));
         EntryAI->setAlignment(MaxAlign);
         if (AI.getType() != EntryAI->getType())
           return new BitCastInst(EntryAI, AI.getType());
@@ -448,8 +446,8 @@ static bool isSupportedAtomicType(Type *Ty) {
 ///
 /// Note that this will create all of the instructions with whatever insert
 /// point the \c InstCombiner currently is using.
-static LoadInst *combineLoadToNewType(InstCombiner &IC, LoadInst &LI, Type *NewTy,
-                                      const Twine &Suffix = "") {
+LoadInst *InstCombiner::combineLoadToNewType(LoadInst &LI, Type *NewTy,
+                                             const Twine &Suffix) {
   assert((!LI.isAtomic() || isSupportedAtomicType(NewTy)) &&
          "can't fold an atomic load to requested type");
 
@@ -459,10 +457,16 @@ static LoadInst *combineLoadToNewType(InstCombiner &IC, LoadInst &LI, Type *NewT
   if (!(match(Ptr, m_BitCast(m_Value(NewPtr))) &&
         NewPtr->getType()->getPointerElementType() == NewTy &&
         NewPtr->getType()->getPointerAddressSpace() == AS))
-    NewPtr = IC.Builder.CreateBitCast(Ptr, NewTy->getPointerTo(AS));
+    NewPtr = Builder.CreateBitCast(Ptr, NewTy->getPointerTo(AS));
 
-  LoadInst *NewLoad = IC.Builder.CreateAlignedLoad(
-      NewTy, NewPtr, LI.getAlignment(), LI.isVolatile(), LI.getName() + Suffix);
+    // If old load did not have an explicit alignment specified,
+    // manually preserve the implied (ABI) alignment of the load.
+    // Else we may inadvertently incorrectly over-promise alignment.
+  const auto Align =
+      getDataLayout().getValueOrABITypeAlignment(LI.getAlign(), LI.getType());
+
+  LoadInst *NewLoad = Builder.CreateAlignedLoad(
+      NewTy, NewPtr, Align, LI.isVolatile(), LI.getName() + Suffix);
   NewLoad->setAtomic(LI.getOrdering(), LI.getSyncScopeID());
   copyMetadataForLoad(*NewLoad, LI);
   return NewLoad;
@@ -482,7 +486,7 @@ static StoreInst *combineStoreToNewValue(InstCombiner &IC, StoreInst &SI, Value 
 
   StoreInst *NewStore = IC.Builder.CreateAlignedStore(
       V, IC.Builder.CreateBitCast(Ptr, V->getType()->getPointerTo(AS)),
-      SI.getAlignment(), SI.isVolatile());
+      SI.getAlign(), SI.isVolatile());
   NewStore->setAtomic(SI.getOrdering(), SI.getSyncScopeID());
   for (const auto &MDPair : MD) {
     unsigned ID = MDPair.first;
@@ -525,7 +529,7 @@ static StoreInst *combineStoreToNewValue(InstCombiner &IC, StoreInst &SI, Value 
 
 /// Returns true if instruction represent minmax pattern like:
 ///   select ((cmp load V1, load V2), V1, V2).
-static bool isMinMaxWithLoads(Value *V) {
+static bool isMinMaxWithLoads(Value *V, Type *&LoadTy) {
   assert(V->getType()->isPointerTy() && "Expected pointer type.");
   // Ignore possible ty* to ixx* bitcast.
   V = peekThroughBitcast(V);
@@ -539,6 +543,7 @@ static bool isMinMaxWithLoads(Value *V) {
   if (!match(V, m_Select(m_Cmp(Pred, m_Instruction(L1), m_Instruction(L2)),
                          m_Value(LHS), m_Value(RHS))))
     return false;
+  LoadTy = L1->getType();
   return (match(L1, m_Load(m_Specific(LHS))) &&
           match(L2, m_Load(m_Specific(RHS)))) ||
          (match(L1, m_Load(m_Specific(RHS))) &&
@@ -584,20 +589,21 @@ static Instruction *combineLoadToOperationType(InstCombiner &IC, LoadInst &LI) {
   // size is a legal integer type.
   // Do not perform canonicalization if minmax pattern is found (to avoid
   // infinite loop).
+  Type *Dummy;
   if (!Ty->isIntegerTy() && Ty->isSized() &&
+      !(Ty->isVectorTy() && cast<VectorType>(Ty)->isScalable()) &&
       DL.isLegalInteger(DL.getTypeStoreSizeInBits(Ty)) &&
-      DL.typeSizeEqualsStoreSize(Ty) &&
-      !DL.isNonIntegralPointerType(Ty) &&
+      DL.typeSizeEqualsStoreSize(Ty) && !DL.isNonIntegralPointerType(Ty) &&
       !isMinMaxWithLoads(
-          peekThroughBitcast(LI.getPointerOperand(), /*OneUseOnly=*/true))) {
+          peekThroughBitcast(LI.getPointerOperand(), /*OneUseOnly=*/true),
+          Dummy)) {
     if (all_of(LI.users(), [&LI](User *U) {
           auto *SI = dyn_cast<StoreInst>(U);
           return SI && SI->getPointerOperand() != &LI &&
                  !SI->getPointerOperand()->isSwiftError();
         })) {
-      LoadInst *NewLoad = combineLoadToNewType(
-          IC, LI,
-          Type::getIntNTy(LI.getContext(), DL.getTypeStoreSizeInBits(Ty)));
+      LoadInst *NewLoad = IC.combineLoadToNewType(
+          LI, Type::getIntNTy(LI.getContext(), DL.getTypeStoreSizeInBits(Ty)));
       // Replace all the stores with stores of the newly loaded value.
       for (auto UI = LI.user_begin(), UE = LI.user_end(); UI != UE;) {
         auto *SI = cast<StoreInst>(*UI++);
@@ -619,7 +625,7 @@ static Instruction *combineLoadToOperationType(InstCombiner &IC, LoadInst &LI) {
     if (auto* CI = dyn_cast<CastInst>(LI.user_back()))
       if (CI->isNoopCast(DL))
         if (!LI.isAtomic() || isSupportedAtomicType(CI->getDestTy())) {
-          LoadInst *NewLoad = combineLoadToNewType(IC, LI, CI->getDestTy());
+          LoadInst *NewLoad = IC.combineLoadToNewType(LI, CI->getDestTy());
           CI->replaceAllUsesWith(NewLoad);
           IC.eraseInstFromFunction(*CI);
           return &LI;
@@ -647,8 +653,8 @@ static Instruction *unpackLoadToAggregate(InstCombiner &IC, LoadInst &LI) {
     // If the struct only have one element, we unpack.
     auto NumElements = ST->getNumElements();
     if (NumElements == 1) {
-      LoadInst *NewLoad = combineLoadToNewType(IC, LI, ST->getTypeAtIndex(0U),
-                                               ".unpack");
+      LoadInst *NewLoad = IC.combineLoadToNewType(LI, ST->getTypeAtIndex(0U),
+                                                  ".unpack");
       AAMDNodes AAMD;
       LI.getAAMetadata(AAMD);
       NewLoad->setAAMetadata(AAMD);
@@ -663,9 +669,7 @@ static Instruction *unpackLoadToAggregate(InstCombiner &IC, LoadInst &LI) {
     if (SL->hasPadding())
       return nullptr;
 
-    auto Align = LI.getAlignment();
-    if (!Align)
-      Align = DL.getABITypeAlignment(ST);
+    const auto Align = DL.getValueOrABITypeAlignment(LI.getAlign(), ST);
 
     auto *Addr = LI.getPointerOperand();
     auto *IdxType = Type::getInt32Ty(T->getContext());
@@ -679,9 +683,9 @@ static Instruction *unpackLoadToAggregate(InstCombiner &IC, LoadInst &LI) {
       };
       auto *Ptr = IC.Builder.CreateInBoundsGEP(ST, Addr, makeArrayRef(Indices),
                                                Name + ".elt");
-      auto EltAlign = MinAlign(Align, SL->getElementOffset(i));
-      auto *L = IC.Builder.CreateAlignedLoad(ST->getElementType(i), Ptr,
-                                             EltAlign, Name + ".unpack");
+      auto *L = IC.Builder.CreateAlignedLoad(
+          ST->getElementType(i), Ptr,
+          commonAlignment(Align, SL->getElementOffset(i)), Name + ".unpack");
       // Propagate AA metadata. It'll still be valid on the narrowed load.
       AAMDNodes AAMD;
       LI.getAAMetadata(AAMD);
@@ -697,7 +701,7 @@ static Instruction *unpackLoadToAggregate(InstCombiner &IC, LoadInst &LI) {
     auto *ET = AT->getElementType();
     auto NumElements = AT->getNumElements();
     if (NumElements == 1) {
-      LoadInst *NewLoad = combineLoadToNewType(IC, LI, ET, ".unpack");
+      LoadInst *NewLoad = IC.combineLoadToNewType(LI, ET, ".unpack");
       AAMDNodes AAMD;
       LI.getAAMetadata(AAMD);
       NewLoad->setAAMetadata(AAMD);
@@ -714,9 +718,7 @@ static Instruction *unpackLoadToAggregate(InstCombiner &IC, LoadInst &LI) {
 
     const DataLayout &DL = IC.getDataLayout();
     auto EltSize = DL.getTypeAllocSize(ET);
-    auto Align = LI.getAlignment();
-    if (!Align)
-      Align = DL.getABITypeAlignment(T);
+    const auto Align = DL.getValueOrABITypeAlignment(LI.getAlign(), T);
 
     auto *Addr = LI.getPointerOperand();
     auto *IdxType = Type::getInt64Ty(T->getContext());
@@ -731,8 +733,9 @@ static Instruction *unpackLoadToAggregate(InstCombiner &IC, LoadInst &LI) {
       };
       auto *Ptr = IC.Builder.CreateInBoundsGEP(AT, Addr, makeArrayRef(Indices),
                                                Name + ".elt");
-      auto *L = IC.Builder.CreateAlignedLoad(
-          AT->getElementType(), Ptr, MinAlign(Align, Offset), Name + ".unpack");
+      auto *L = IC.Builder.CreateAlignedLoad(AT->getElementType(), Ptr,
+                                             commonAlignment(Align, Offset),
+                                             Name + ".unpack");
       AAMDNodes AAMD;
       LI.getAAMetadata(AAMD);
       L->setAAMetadata(AAMD);
@@ -960,13 +963,13 @@ Instruction *InstCombiner::visitLoadInst(LoadInst &LI) {
       LoadAlign != 0 ? LoadAlign : DL.getABITypeAlignment(LI.getType());
 
   if (KnownAlign > EffectiveLoadAlign)
-    LI.setAlignment(KnownAlign);
+    LI.setAlignment(MaybeAlign(KnownAlign));
   else if (LoadAlign == 0)
-    LI.setAlignment(EffectiveLoadAlign);
+    LI.setAlignment(MaybeAlign(EffectiveLoadAlign));
 
   // Replace GEP indices if possible.
   if (Instruction *NewGEPI = replaceGEPIdxWithZero(*this, Op, LI)) {
-      Worklist.Add(NewGEPI);
+      Worklist.push(NewGEPI);
       return &LI;
   }
 
@@ -1019,11 +1022,11 @@ Instruction *InstCombiner::visitLoadInst(LoadInst &LI) {
     //
     if (SelectInst *SI = dyn_cast<SelectInst>(Op)) {
       // load (select (Cond, &V1, &V2))  --> select(Cond, load &V1, load &V2).
-      unsigned Align = LI.getAlignment();
-      if (isSafeToLoadUnconditionally(SI->getOperand(1), LI.getType(), Align,
-                                      DL, SI) &&
-          isSafeToLoadUnconditionally(SI->getOperand(2), LI.getType(), Align,
-                                      DL, SI)) {
+      const MaybeAlign Alignment(LI.getAlignment());
+      if (isSafeToLoadUnconditionally(SI->getOperand(1), LI.getType(),
+                                      Alignment, DL, SI) &&
+          isSafeToLoadUnconditionally(SI->getOperand(2), LI.getType(),
+                                      Alignment, DL, SI)) {
         LoadInst *V1 =
             Builder.CreateLoad(LI.getType(), SI->getOperand(1),
                                SI->getOperand(1)->getName() + ".val");
@@ -1031,9 +1034,9 @@ Instruction *InstCombiner::visitLoadInst(LoadInst &LI) {
             Builder.CreateLoad(LI.getType(), SI->getOperand(2),
                                SI->getOperand(2)->getName() + ".val");
         assert(LI.isUnordered() && "implied by above");
-        V1->setAlignment(Align);
+        V1->setAlignment(Alignment);
         V1->setAtomic(LI.getOrdering(), LI.getSyncScopeID());
-        V2->setAlignment(Align);
+        V2->setAlignment(Alignment);
         V2->setAtomic(LI.getOrdering(), LI.getSyncScopeID());
         return SelectInst::Create(SI->getCondition(), V1, V2);
       }
@@ -1041,18 +1044,14 @@ Instruction *InstCombiner::visitLoadInst(LoadInst &LI) {
       // load (select (cond, null, P)) -> load P
       if (isa<ConstantPointerNull>(SI->getOperand(1)) &&
           !NullPointerIsDefined(SI->getFunction(),
-                                LI.getPointerAddressSpace())) {
-        LI.setOperand(0, SI->getOperand(2));
-        return &LI;
-      }
+                                LI.getPointerAddressSpace()))
+        return replaceOperand(LI, 0, SI->getOperand(2));
 
       // load (select (cond, P, null)) -> load P
       if (isa<ConstantPointerNull>(SI->getOperand(2)) &&
           !NullPointerIsDefined(SI->getFunction(),
-                                LI.getPointerAddressSpace())) {
-        LI.setOperand(0, SI->getOperand(1));
-        return &LI;
-      }
+                                LI.getPointerAddressSpace()))
+        return replaceOperand(LI, 0, SI->getOperand(1));
     }
   }
   return nullptr;
@@ -1193,9 +1192,7 @@ static bool unpackStoreToAggregate(InstCombiner &IC, StoreInst &SI) {
     if (SL->hasPadding())
       return false;
 
-    auto Align = SI.getAlignment();
-    if (!Align)
-      Align = DL.getABITypeAlignment(ST);
+    const auto Align = DL.getValueOrABITypeAlignment(SI.getAlign(), ST);
 
     SmallString<16> EltName = V->getName();
     EltName += ".elt";
@@ -1213,7 +1210,7 @@ static bool unpackStoreToAggregate(InstCombiner &IC, StoreInst &SI) {
       auto *Ptr = IC.Builder.CreateInBoundsGEP(ST, Addr, makeArrayRef(Indices),
                                                AddrName);
       auto *Val = IC.Builder.CreateExtractValue(V, i, EltName);
-      auto EltAlign = MinAlign(Align, SL->getElementOffset(i));
+      auto EltAlign = commonAlignment(Align, SL->getElementOffset(i));
       llvm::Instruction *NS = IC.Builder.CreateAlignedStore(Val, Ptr, EltAlign);
       AAMDNodes AAMD;
       SI.getAAMetadata(AAMD);
@@ -1241,9 +1238,7 @@ static bool unpackStoreToAggregate(InstCombiner &IC, StoreInst &SI) {
 
     const DataLayout &DL = IC.getDataLayout();
     auto EltSize = DL.getTypeAllocSize(AT->getElementType());
-    auto Align = SI.getAlignment();
-    if (!Align)
-      Align = DL.getABITypeAlignment(T);
+    const auto Align = DL.getValueOrABITypeAlignment(SI.getAlign(), T);
 
     SmallString<16> EltName = V->getName();
     EltName += ".elt";
@@ -1263,7 +1258,7 @@ static bool unpackStoreToAggregate(InstCombiner &IC, StoreInst &SI) {
       auto *Ptr = IC.Builder.CreateInBoundsGEP(AT, Addr, makeArrayRef(Indices),
                                                AddrName);
       auto *Val = IC.Builder.CreateExtractValue(V, i, EltName);
-      auto EltAlign = MinAlign(Align, Offset);
+      auto EltAlign = commonAlignment(Align, Offset);
       Instruction *NS = IC.Builder.CreateAlignedStore(Val, Ptr, EltAlign);
       AAMDNodes AAMD;
       SI.getAAMetadata(AAMD);
@@ -1321,7 +1316,19 @@ static bool removeBitcastsFromLoadStoreOnMinMax(InstCombiner &IC,
   auto *LI = cast<LoadInst>(SI.getValueOperand());
   if (!LI->getType()->isIntegerTy())
     return false;
-  if (!isMinMaxWithLoads(LoadAddr))
+  Type *CmpLoadTy;
+  if (!isMinMaxWithLoads(LoadAddr, CmpLoadTy))
+    return false;
+
+  // Make sure the type would actually change.
+  // This condition can be hit with chains of bitcasts.
+  if (LI->getType() == CmpLoadTy)
+    return false;
+
+  // Make sure we're not changing the size of the load/store.
+  const auto &DL = IC.getDataLayout();
+  if (DL.getTypeStoreSizeInBits(LI->getType()) !=
+      DL.getTypeStoreSizeInBits(CmpLoadTy))
     return false;
 
   if (!all_of(LI->users(), [LI, LoadAddr](User *U) {
@@ -1333,8 +1340,7 @@ static bool removeBitcastsFromLoadStoreOnMinMax(InstCombiner &IC,
     return false;
 
   IC.Builder.SetInsertPoint(LI);
-  LoadInst *NewLI = combineLoadToNewType(
-      IC, *LI, LoadAddr->getType()->getPointerElementType());
+  LoadInst *NewLI = IC.combineLoadToNewType(*LI, CmpLoadTy);
   // Replace all the stores with stores of the newly loaded value.
   for (auto *UI : LI->users()) {
     auto *USI = cast<StoreInst>(UI);
@@ -1355,15 +1361,15 @@ Instruction *InstCombiner::visitStoreInst(StoreInst &SI) {
     return eraseInstFromFunction(SI);
 
   // Attempt to improve the alignment.
-  unsigned KnownAlign = getOrEnforceKnownAlignment(
-      Ptr, DL.getPrefTypeAlignment(Val->getType()), DL, &SI, &AC, &DT);
-  unsigned StoreAlign = SI.getAlignment();
-  unsigned EffectiveStoreAlign =
-      StoreAlign != 0 ? StoreAlign : DL.getABITypeAlignment(Val->getType());
+  const Align KnownAlign = Align(getOrEnforceKnownAlignment(
+      Ptr, DL.getPrefTypeAlignment(Val->getType()), DL, &SI, &AC, &DT));
+  const MaybeAlign StoreAlign = MaybeAlign(SI.getAlignment());
+  const Align EffectiveStoreAlign =
+      StoreAlign ? *StoreAlign : Align(DL.getABITypeAlignment(Val->getType()));
 
   if (KnownAlign > EffectiveStoreAlign)
     SI.setAlignment(KnownAlign);
-  else if (StoreAlign == 0)
+  else if (!StoreAlign)
     SI.setAlignment(EffectiveStoreAlign);
 
   // Try to canonicalize the stored type.
@@ -1375,7 +1381,7 @@ Instruction *InstCombiner::visitStoreInst(StoreInst &SI) {
 
   // Replace GEP indices if possible.
   if (Instruction *NewGEPI = replaceGEPIdxWithZero(*this, Ptr, SI)) {
-      Worklist.Add(NewGEPI);
+      Worklist.push(NewGEPI);
       return &SI;
   }
 
@@ -1422,9 +1428,12 @@ Instruction *InstCombiner::visitStoreInst(StoreInst &SI) {
       if (PrevSI->isUnordered() && equivalentAddressValues(PrevSI->getOperand(1),
                                                         SI.getOperand(1))) {
         ++NumDeadStore;
-        ++BBI;
+        // Manually add back the original store to the worklist now, so it will
+        // be processed after the operands of the removed store, as this may
+        // expose additional DSE opportunities.
+        Worklist.push(&SI);
         eraseInstFromFunction(*PrevSI);
-        continue;
+        return nullptr;
       }
       break;
     }
@@ -1451,11 +1460,8 @@ Instruction *InstCombiner::visitStoreInst(StoreInst &SI) {
   // store X, null    -> turns into 'unreachable' in SimplifyCFG
   // store X, GEP(null, Y) -> turns into 'unreachable' in SimplifyCFG
   if (canSimplifyNullStoreOrGEP(SI)) {
-    if (!isa<UndefValue>(Val)) {
-      SI.setOperand(0, UndefValue::get(Val->getType()));
-      if (Instruction *U = dyn_cast<Instruction>(Val))
-        Worklist.Add(U);  // Dropped a use.
-    }
+    if (!isa<UndefValue>(Val))
+      return replaceOperand(SI, 0, UndefValue::get(Val->getType()));
     return nullptr;  // Do not modify these!
   }
 
@@ -1578,8 +1584,8 @@ bool InstCombiner::mergeStoreIntoSuccessor(StoreInst &SI) {
 
   // Advance to a place where it is safe to insert the new store and insert it.
   BBI = DestBB->getFirstInsertionPt();
-  StoreInst *NewSI = new StoreInst(MergedVal, SI.getOperand(1),
-                                   SI.isVolatile(), SI.getAlignment(),
+  StoreInst *NewSI = new StoreInst(MergedVal, SI.getOperand(1), SI.isVolatile(),
+                                   MaybeAlign(SI.getAlignment()),
                                    SI.getOrdering(), SI.getSyncScopeID());
   InsertNewInstBefore(NewSI, *BBI);
   NewSI->setDebugLoc(MergedLoc);

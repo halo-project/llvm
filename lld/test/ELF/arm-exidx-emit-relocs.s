@@ -1,7 +1,7 @@
 // REQUIRES: arm
 // RUN: llvm-mc -filetype=obj --arm-add-build-attributes -triple=armv7a-none-linux-gnueabi %s -o %t
 // RUN: ld.lld --emit-relocs %t -o %t2
-// RUN: llvm-objdump -s -triple=armv7a-none-linux-gnueabi %t2 | FileCheck %s
+// RUN: llvm-objdump -s --triple=armv7a-none-linux-gnueabi %t2 | FileCheck %s
 // RUN: llvm-readelf --relocs %t2 | FileCheck -check-prefix=CHECK-RELOCS %s
 
 // LLD does not support --emit-relocs for .ARM.exidx sections as the relocations
@@ -64,8 +64,8 @@ __aeabi_unwind_cpp_pr0:
  bx lr
 
 // CHECK: Contents of section .ARM.exidx:
-// CHECK-NEXT:  100d4 2c0f0000 08849780 2c0f0000 01000000
-// CHECK-NEXT:  100e4 2c0f0000 08849780 280f0000 01000000
-// CHECK-NEXT:  100f4 240f0000 01000000
+// CHECK-NEXT:  100d4 28100000 08849780 28100000 01000000
+// CHECK-NEXT:  100e4 28100000 08849780 24100000 01000000
+// CHECK-NEXT:  100f4 20100000 01000000
 
 // CHECK-RELOCS-NOT: Relocation section '.rel.ARM.exidx'

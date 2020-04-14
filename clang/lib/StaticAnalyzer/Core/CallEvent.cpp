@@ -14,6 +14,7 @@
 
 #include "clang/StaticAnalyzer/Core/PathSensitive/CallEvent.h"
 #include "clang/AST/ASTContext.h"
+#include "clang/AST/Attr.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclBase.h"
 #include "clang/AST/DeclCXX.h"
@@ -27,22 +28,22 @@
 #include "clang/Analysis/AnalysisDeclContext.h"
 #include "clang/Analysis/CFG.h"
 #include "clang/Analysis/CFGStmtMap.h"
+#include "clang/Analysis/PathDiagnostic.h"
 #include "clang/Analysis/ProgramPoint.h"
-#include "clang/CrossTU/CrossTranslationUnit.h"
 #include "clang/Basic/IdentifierTable.h"
 #include "clang/Basic/LLVM.h"
 #include "clang/Basic/SourceLocation.h"
 #include "clang/Basic/SourceManager.h"
 #include "clang/Basic/Specifiers.h"
-#include "clang/StaticAnalyzer/Core/BugReporter/PathDiagnostic.h"
+#include "clang/CrossTU/CrossTranslationUnit.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/CheckerContext.h"
+#include "clang/StaticAnalyzer/Core/PathSensitive/DynamicType.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/DynamicTypeInfo.h"
-#include "clang/StaticAnalyzer/Core/PathSensitive/DynamicTypeMap.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/MemRegion.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/ProgramState.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/ProgramState_Fwd.h"
-#include "clang/StaticAnalyzer/Core/PathSensitive/SVals.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/SValBuilder.h"
+#include "clang/StaticAnalyzer/Core/PathSensitive/SVals.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/Store.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
@@ -368,7 +369,8 @@ bool CallEvent::isCalled(const CallDescription &CD) const {
 
   if (CD.Flags & CDF_MaybeBuiltin) {
     return CheckerContext::isCLibraryFunction(FD, CD.getFunctionName()) &&
-           (!CD.RequiredArgs || CD.RequiredArgs <= getNumArgs());
+           (!CD.RequiredArgs || CD.RequiredArgs <= getNumArgs()) &&
+           (!CD.RequiredParams || CD.RequiredParams <= parameters().size());
   }
 
   if (!CD.IsLookupDone) {
@@ -407,7 +409,8 @@ bool CallEvent::isCalled(const CallDescription &CD) const {
       return false;
   }
 
-  return (!CD.RequiredArgs || CD.RequiredArgs == getNumArgs());
+  return (!CD.RequiredArgs || CD.RequiredArgs == getNumArgs()) &&
+         (!CD.RequiredParams || CD.RequiredParams == parameters().size());
 }
 
 SVal CallEvent::getArgSVal(unsigned Index) const {
@@ -447,8 +450,7 @@ void CallEvent::dump(raw_ostream &Out) const {
     return;
   }
 
-  // FIXME: a string representation of the kind would be nice.
-  Out << "Unknown call (type " << getKind() << ")";
+  Out << "Unknown call (type " << getKindAsString() << ")";
 }
 
 bool CallEvent::isCallStmt(const Stmt *S) {
@@ -517,7 +519,7 @@ static void addParameterValuesToBindings(const StackFrameContext *CalleeCtx,
 
     // TODO: Support allocator calls.
     if (Call.getKind() != CE_CXXAllocator)
-      if (Call.isArgumentConstructedDirectly(Idx))
+      if (Call.isArgumentConstructedDirectly(Call.getASTArgumentIndex(Idx)))
         continue;
 
     // TODO: Allocators should receive the correct size and possibly alignment,
@@ -886,24 +888,22 @@ void BlockCall::getInitialStackFrameContents(const StackFrameContext *CalleeCtx,
                                Params);
 }
 
-SVal CXXConstructorCall::getCXXThisVal() const {
+SVal AnyCXXConstructorCall::getCXXThisVal() const {
   if (Data)
     return loc::MemRegionVal(static_cast<const MemRegion *>(Data));
   return UnknownVal();
 }
 
-void CXXConstructorCall::getExtraInvalidatedValues(ValueList &Values,
+void AnyCXXConstructorCall::getExtraInvalidatedValues(ValueList &Values,
                            RegionAndSymbolInvalidationTraits *ETraits) const {
-  if (Data) {
-    loc::MemRegionVal MV(static_cast<const MemRegion *>(Data));
-    if (SymbolRef Sym = MV.getAsSymbol(true))
-      ETraits->setTrait(Sym,
-                        RegionAndSymbolInvalidationTraits::TK_SuppressEscape);
-    Values.push_back(MV);
-  }
+  SVal V = getCXXThisVal();
+  if (SymbolRef Sym = V.getAsSymbol(true))
+    ETraits->setTrait(Sym,
+                      RegionAndSymbolInvalidationTraits::TK_SuppressEscape);
+  Values.push_back(V);
 }
 
-void CXXConstructorCall::getInitialStackFrameContents(
+void AnyCXXConstructorCall::getInitialStackFrameContents(
                                              const StackFrameContext *CalleeCtx,
                                              BindingsTy &Bindings) const {
   AnyFunctionCall::getInitialStackFrameContents(CalleeCtx, Bindings);
@@ -915,6 +915,14 @@ void CXXConstructorCall::getInitialStackFrameContents(
     Loc ThisLoc = SVB.getCXXThis(MD, CalleeCtx);
     Bindings.push_back(std::make_pair(ThisLoc, ThisVal));
   }
+}
+
+const StackFrameContext *
+CXXInheritedConstructorCall::getInheritingStackFrame() const {
+  const StackFrameContext *SFC = getLocationContext()->getStackFrame();
+  while (isa<CXXInheritedCtorInitExpr>(SFC->getCallSite()))
+    SFC = SFC->getParent()->getStackFrame();
+  return SFC;
 }
 
 SVal CXXDestructorCall::getCXXThisVal() const {
@@ -1078,7 +1086,7 @@ ObjCMessageKind ObjCMethodCall::getMessageKind() const {
 
 const ObjCPropertyDecl *ObjCMethodCall::getAccessedProperty() const {
   // Look for properties accessed with property syntax (foo.bar = ...)
-  if ( getMessageKind() == OCM_PropertyAccess) {
+  if (getMessageKind() == OCM_PropertyAccess) {
     const PseudoObjectExpr *POE = getContainingPseudoObjectExpr();
     assert(POE && "Property access without PseudoObjectExpr?");
 
@@ -1307,6 +1315,8 @@ RuntimeDefinition ObjCMethodCall::getRuntimeDefinition() const {
         }
 
         const ObjCMethodDecl *MD = Val.getValue();
+        if (MD && !MD->hasBody())
+          MD = MD->getCanonicalDecl();
         if (CanBeSubClassed)
           return RuntimeDefinition(MD, Receiver);
         else
@@ -1387,17 +1397,20 @@ CallEventManager::getCaller(const StackFrameContext *CalleeCtx,
     if (CallEventRef<> Out = getCall(CallSite, State, CallerCtx))
       return Out;
 
-    // All other cases are handled by getCall.
-    assert(isa<CXXConstructExpr>(CallSite) &&
-           "This is not an inlineable statement");
-
     SValBuilder &SVB = State->getStateManager().getSValBuilder();
     const auto *Ctor = cast<CXXMethodDecl>(CalleeCtx->getDecl());
     Loc ThisPtr = SVB.getCXXThis(Ctor, CalleeCtx);
     SVal ThisVal = State->getSVal(ThisPtr);
 
-    return getCXXConstructorCall(cast<CXXConstructExpr>(CallSite),
-                                 ThisVal.getAsRegion(), State, CallerCtx);
+    if (const auto *CE = dyn_cast<CXXConstructExpr>(CallSite))
+      return getCXXConstructorCall(CE, ThisVal.getAsRegion(), State, CallerCtx);
+    else if (const auto *CIE = dyn_cast<CXXInheritedCtorInitExpr>(CallSite))
+      return getCXXInheritedConstructorCall(CIE, ThisVal.getAsRegion(), State,
+                                            CallerCtx);
+    else {
+      // All other cases are handled by getCall.
+      llvm_unreachable("This is not an inlineable statement");
+    }
   }
 
   // Fall back to the CFG. The only thing we haven't handled yet is

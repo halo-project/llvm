@@ -31,10 +31,10 @@ struct Configuration {
   bool exportAll;
   bool exportDynamic;
   bool exportTable;
+  bool growableTable;
   bool gcSections;
   bool importMemory;
   bool sharedMemory;
-  bool passiveSegments;
   bool importTable;
   bool mergeDataSegments;
   bool pie;
@@ -46,14 +46,14 @@ struct Configuration {
   bool stripDebug;
   bool stackFirst;
   bool trace;
-  uint32_t globalBase;
-  uint32_t initialMemory;
-  uint32_t maxMemory;
-  uint32_t zStackSize;
+  uint64_t globalBase;
+  uint64_t initialMemory;
+  uint64_t maxMemory;
+  uint64_t zStackSize;
   unsigned ltoPartitions;
   unsigned ltoo;
   unsigned optimize;
-  unsigned thinLTOJobs;
+  llvm::StringRef thinLTOJobs;
 
   llvm::StringRef entry;
   llvm::StringRef outputFile;
@@ -70,6 +70,12 @@ struct Configuration {
 
   // True if we are creating position-independent code.
   bool isPic;
+
+  // The table offset at which to place function addresses.  We reserve zero
+  // for the null function pointer.  This gets set to 1 for executables and 0
+  // for shared libraries (since they always added to a dynamic offset at
+  // runtime).
+  uint32_t tableBase = 0;
 };
 
 // The only instance of Configuration struct.

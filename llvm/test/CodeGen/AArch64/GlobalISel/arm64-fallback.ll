@@ -1,9 +1,9 @@
-; RUN: not llc -O0 -global-isel -global-isel-abort=1 -verify-machineinstrs %s -o - 2>&1 | FileCheck %s --check-prefix=ERROR
+; RUN: not --crash llc -O0 -global-isel -global-isel-abort=1 -verify-machineinstrs %s -o - 2>&1 | FileCheck %s --check-prefix=ERROR
 ; RUN: llc -O0 -global-isel -global-isel-abort=0 -verify-machineinstrs %s -o - 2>&1 | FileCheck %s --check-prefix=FALLBACK
 ; RUN: llc -O0 -global-isel -global-isel-abort=2 -pass-remarks-missed='gisel*' -verify-machineinstrs %s -o %t.out 2> %t.err
 ; RUN: FileCheck %s --check-prefix=FALLBACK-WITH-REPORT-OUT < %t.out
 ; RUN: FileCheck %s --check-prefix=FALLBACK-WITH-REPORT-ERR < %t.err
-; RUN: not llc -global-isel -mtriple aarch64_be %s -o - 2>&1 | FileCheck %s --check-prefix=BIG-ENDIAN
+; RUN: not --crash llc -global-isel -mtriple aarch64_be %s -o - 2>&1 | FileCheck %s --check-prefix=BIG-ENDIAN
 ; This file checks that the fallback path to selection dag works.
 ; The test is fragile in the sense that it must be updated to expose
 ; something that fails with global-isel.
@@ -17,11 +17,11 @@ target triple = "aarch64--"
 
 ; We use __fixunstfti as the common denominator for __fixunstfti on Linux and
 ; ___fixunstfti on iOS
-; ERROR: unable to lower arguments: i128 (i128)* (in function: ABIi128)
+; ERROR: unable to translate instruction: ret
 ; FALLBACK: ldr q0,
 ; FALLBACK-NEXT: bl __fixunstfti
 ;
-; FALLBACK-WITH-REPORT-ERR: remark: <unknown>:0:0: unable to lower arguments: i128 (i128)* (in function: ABIi128)
+; FALLBACK-WITH-REPORT-ERR: unable to translate instruction: ret
 ; FALLBACK-WITH-REPORT-ERR: warning: Instruction selection used fallback path for ABIi128
 ; FALLBACK-WITH-REPORT-OUT-LABEL: ABIi128:
 ; FALLBACK-WITH-REPORT-OUT: ldr q0,
@@ -73,7 +73,7 @@ define i128 @sequence_sizes([8 x i8] %in) {
 }
 
 ; Just to make sure we don't accidentally emit a normal load/store.
-; FALLBACK-WITH-REPORT-ERR: remark: <unknown>:0:0: cannot select: %2:gpr(s64) = G_LOAD %0:gpr(p0) :: (load seq_cst 8 from %ir.addr)  (in function: atomic_ops)
+; FALLBACK-WITH-REPORT-ERR: cannot select: G_STORE %1:gpr(s64), %0:gpr64sp(p0) :: (store unordered 8 into %ir.addr) (in function: atomic_ops)
 ; FALLBACK-WITH-REPORT-ERR: warning: Instruction selection used fallback path for atomic_ops
 ; FALLBACK-WITH-REPORT-LABEL: atomic_ops:
 define i64 @atomic_ops(i64* %addr) {
@@ -85,7 +85,7 @@ define i64 @atomic_ops(i64* %addr) {
 ; Make sure we don't mess up metadata arguments.
 declare void @llvm.write_register.i64(metadata, i64)
 
-; FALLBACK-WITH-REPORT-ERR: remark: <unknown>:0:0: unable to translate instruction: call: ' call void @llvm.write_register.i64(metadata !0, i64 0)' (in function: test_write_register_intrin)
+; FALLBACK-WITH-REPORT-ERR: remark: <unknown>:0:0: unable to legalize instruction: G_WRITE_REGISTER !0, %0:_(s64) (in function: test_write_register_intrin)
 ; FALLBACK-WITH-REPORT-ERR: warning: Instruction selection used fallback path for test_write_register_intrin
 ; FALLBACK-WITH-REPORT-LABEL: test_write_register_intrin:
 define void @test_write_register_intrin() {
@@ -96,24 +96,6 @@ define void @test_write_register_intrin() {
 @_ZTIi = external global i8*
 declare i32 @__gxx_personality_v0(...)
 
-; Check that we fallback on invoke translation failures.
-; FALLBACK-WITH-REPORT-ERR: remark: <unknown>:0:0: unable to translate instruction: invoke: '  invoke void %callee(i128 0)
-; FALLBACK-WITH-REPORT-NEXT:   to label %continue unwind label %broken' (in function: invoke_weird_type)
-; FALLBACK-WITH-REPORT-ERR: warning: Instruction selection used fallback path for invoke_weird_type
-; FALLBACK-WITH-REPORT-OUT-LABEL: invoke_weird_type:
-define void @invoke_weird_type(void(i128)* %callee) personality i8* bitcast (i32 (...)* @__gxx_personality_v0 to i8*) {
-  invoke void %callee(i128 0)
-    to label %continue unwind label %broken
-
-broken:
-  landingpad { i8*, i32 } catch i8* bitcast(i8** @_ZTIi to i8*)
-  ret void
-
-continue:
-  ret void
-}
-
-; Check that we fallback on invoke translation failures.
 ; FALLBACK-WITH-REPORT-ERR: remark: <unknown>:0:0: unable to legalize instruction: %0:_(s128) = G_FCONSTANT fp128 0xL00000000000000004000000000000000
 ; FALLBACK-WITH-REPORT-ERR: warning: Instruction selection used fallback path for test_quad_dump
 ; FALLBACK-WITH-REPORT-OUT-LABEL: test_quad_dump:
@@ -138,7 +120,7 @@ end:
   br label %block
 }
 
-; FALLBACK-WITH-REPORT-ERR: remark: <unknown>:0:0: unable to legalize instruction: %2:_(<2 x p0>) = G_INSERT_VECTOR_ELT %0:_, %3:_(p0), %5:_(s32) (in function: vector_of_pointers_insertelement)
+; FALLBACK-WITH-REPORT-ERR: remark: <unknown>:0:0: unable to legalize instruction: %2:_(<2 x p0>) = G_INSERT_VECTOR_ELT %0:_, %{{[0-9]+}}:_(p0), %{{[0-9]+}}:_(s32) (in function: vector_of_pointers_insertelement)
 ; FALLBACK-WITH-REPORT-ERR: warning: Instruction selection used fallback path for vector_of_pointers_insertelement
 ; FALLBACK-WITH-REPORT-OUT-LABEL: vector_of_pointers_insertelement:
 define void @vector_of_pointers_insertelement() {
@@ -154,7 +136,7 @@ end:
   br label %block
 }
 
-; FALLBACK-WITH-REPORT-ERR remark: <unknown>:0:0: unable to legalize instruction: G_STORE %3, %4 :: (store 12 into `i96* undef`, align 16) (in function: nonpow2_add_narrowing)
+; FALLBACK-WITH-REPORT-ERR: remark: <unknown>:0:0: unable to legalize instruction: %3:_(s96) = G_ADD %2:_, %2:_ (in function: nonpow2_add_narrowing)
 ; FALLBACK-WITH-REPORT-ERR: warning: Instruction selection used fallback path for nonpow2_add_narrowing
 ; FALLBACK-WITH-REPORT-OUT-LABEL: nonpow2_add_narrowing:
 define void @nonpow2_add_narrowing() {
@@ -165,33 +147,25 @@ define void @nonpow2_add_narrowing() {
   ret void
 }
 
-; FALLBACK-WITH-REPORT-ERR remark: <unknown>:0:0: unable to legalize instruction: G_STORE %3, %4 :: (store 12 into `i96* undef`, align 16) (in function: nonpow2_add_narrowing)
+; FALLBACK-WITH-REPORT-ERR: remark: <unknown>:0:0: unable to legalize instruction: %5:_(s96) = G_INSERT %18:_, %16:_(s32), 64 (in function: nonpow2_or_narrowing)
 ; FALLBACK-WITH-REPORT-ERR: warning: Instruction selection used fallback path for nonpow2_or_narrowing
 ; FALLBACK-WITH-REPORT-OUT-LABEL: nonpow2_or_narrowing:
 define void @nonpow2_or_narrowing() {
   %a = add i128 undef, undef
   %b = trunc i128 %a to i96
-  %dummy = or i96 %b, %b
+  %a2 = add i128 undef, undef
+  %b2 = trunc i128 %a2 to i96
+  %dummy = or i96 %b, %b2
   store i96 %dummy, i96* undef
   ret void
 }
 
-; FALLBACK-WITH-REPORT-ERR remark: <unknown>:0:0: unable to legalize instruction: G_STORE %0, %1 :: (store 12 into `i96* undef`, align 16) (in function: nonpow2_load_narrowing)
+; FALLBACK-WITH-REPORT-ERR: remark: <unknown>:0:0: unable to legalize instruction: %0:_(s96) = G_INSERT %10:_, %8:_(s32), 64 (in function: nonpow2_load_narrowing)
 ; FALLBACK-WITH-REPORT-ERR: warning: Instruction selection used fallback path for nonpow2_load_narrowing
 ; FALLBACK-WITH-REPORT-OUT-LABEL: nonpow2_load_narrowing:
 define void @nonpow2_load_narrowing() {
   %dummy = load i96, i96* undef
   store i96 %dummy, i96* undef
-  ret void
-}
-
-; FALLBACK-WITH-REPORT-ERR: remark: <unknown>:0:0: cannot select: %5:fpr32(s32) = G_EXTRACT %21:fpr(s128), 64 (in function: nonpow2_store_narrowing)
-; FALLBACK-WITH-REPORT-ERR: warning: Instruction selection used fallback path for nonpow2_store_narrowing
-; FALLBACK-WITH-REPORT-OUT-LABEL: nonpow2_store_narrowing:
-define void @nonpow2_store_narrowing(i96* %c) {
-  %a = add i128 undef, undef
-  %b = trunc i128 %a to i96
-  store i96 %b, i96* %c
   ret void
 }
 
@@ -207,3 +181,32 @@ define void @nonpow2_vector_add_fewerelements() {
   store i64 %ex, i64* undef
   ret void
 }
+
+; Currently can't handle dealing with a split type (s128 -> 2 x s64) on the stack yet.
+declare void @use_s128(i128 %a, i128 %b)
+; FALLBACK-WITH-REPORT-ERR: remark: <unknown>:0:0: unable to lower arguments: i32 (i32, i128, i32, i32, i32, i128, i32)* (in function: fn1)
+; FALLBACK-WITH-REPORT-ERR: warning: Instruction selection used fallback path for fn1
+; FALLBACK-WITH-REPORT-OUT-LABEL: fn1:
+define i32 @fn1(i32 %p1, i128 %p2, i32 %p3, i32 %p4, i32 %p5, i128 %p6, i32 %p7) {
+entry:
+  call void @use_s128(i128 %p2, i128 %p6)
+  ret i32 0
+}
+
+; FALLBACK-WITH-REPORT-ERR: remark: <unknown>:0:0: cannot select: %2:fpr(<4 x s16>) = G_ZEXT %0:fpr(<4 x s8>) (in function: zext_v4s8)
+; FALLBACK-WITH-REPORT-ERR: warning: Instruction selection used fallback path for zext_v4s8
+; FALLBACK-WITH-REPORT-OUT-LABEL: zext_v4s8
+define <4 x i16> @zext_v4s8(<4 x i8> %in) {
+  %ext = zext <4 x i8> %in to <4 x i16>
+  ret <4 x i16> %ext
+}
+
+; FALLBACK-WITH-REPORT-ERR: remark: <unknown>:0:0: cannot select: RET_ReallyLR implicit $x0 (in function: strict_align_feature)
+; FALLBACK-WITH-REPORT-ERR: warning: Instruction selection used fallback path for strict_align_feature
+; FALLBACK-WITH-REPORT-OUT-LABEL: strict_align_feature
+define i64 @strict_align_feature(i64* %p) #0 {
+  %x = load i64, i64* %p, align 1
+  ret i64 %x
+}
+
+attributes #0 = { "target-features"="+strict-align" }

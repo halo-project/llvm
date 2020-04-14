@@ -36,21 +36,6 @@ using namespace __sanitizer;
 
 namespace __hwasan {
 
-void EnterSymbolizer() {
-  Thread *t = GetCurrentThread();
-  CHECK(t);
-  t->EnterSymbolizer();
-}
-void ExitSymbolizer() {
-  Thread *t = GetCurrentThread();
-  CHECK(t);
-  t->LeaveSymbolizer();
-}
-bool IsInSymbolizer() {
-  Thread *t = GetCurrentThread();
-  return t && t->InSymbolizer();
-}
-
 static Flags hwasan_flags;
 
 Flags *flags() {
@@ -205,15 +190,8 @@ void __sanitizer::BufferedStackTrace::UnwindImpl(
     size = 0;
     return;
   }
-  if (!StackTrace::WillUseFastUnwind(request_fast)) {
-    // Block reports from our interceptors during _Unwind_Backtrace.
-    SymbolizerScope sym_scope;
-    return Unwind(max_depth, pc, bp, context, 0, 0, request_fast);
-  }
-  if (StackTrace::WillUseFastUnwind(request_fast))
-    Unwind(max_depth, pc, bp, nullptr, t->stack_top(), t->stack_bottom(), true);
-  else
-    Unwind(max_depth, pc, 0, context, 0, 0, false);
+  Unwind(max_depth, pc, bp, context, t->stack_top(), t->stack_bottom(),
+         request_fast);
 }
 
 struct hwasan_global {
@@ -276,10 +254,10 @@ static void InitGlobalsFromPhdrs(ElfW(Addr) base, const ElfW(Phdr) * phdr,
     while (note < nend) {
       auto *nhdr = reinterpret_cast<const ElfW(Nhdr) *>(note);
       const char *name = note + sizeof(ElfW(Nhdr));
-      const char *desc = name + nhdr->n_namesz;
+      const char *desc = name + RoundUpTo(nhdr->n_namesz, 4);
       if (nhdr->n_type != NT_LLVM_HWASAN_GLOBALS ||
           internal_strcmp(name, "LLVM") != 0) {
-        note = desc + nhdr->n_descsz;
+        note = desc + RoundUpTo(nhdr->n_descsz, 4);
         continue;
       }
 
@@ -311,6 +289,8 @@ static void InitLoadedGlobals() {
 // Prepare to run instrumented code on the main thread.
 static void InitInstrumentation() {
   if (hwasan_instrumentation_inited) return;
+
+  InitPrctl();
 
   if (!InitShadow()) {
     Printf("FATAL: HWAddressSanitizer cannot mmap the shadow memory.\n");
@@ -384,8 +364,6 @@ void __hwasan_init() {
   InitializeInterceptors();
   InstallDeadlySignalHandlers(HwasanOnDeadlySignal);
   InstallAtExitHandler(); // Needs __cxa_atexit interceptor.
-
-  Symbolizer::GetOrInit()->AddHooks(EnterSymbolizer, ExitSymbolizer);
 
   InitializeCoverage(common_flags()->coverage, common_flags()->coverage_dir);
 

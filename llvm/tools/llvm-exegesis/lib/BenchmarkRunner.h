@@ -20,6 +20,7 @@
 #include "BenchmarkResult.h"
 #include "LlvmState.h"
 #include "MCInstrDescView.h"
+#include "SnippetRepetitor.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/Support/Error.h"
 #include <cstdlib>
@@ -29,13 +30,6 @@
 namespace llvm {
 namespace exegesis {
 
-// A class representing failures that happened during Benchmark, they are used
-// to report informations to the user.
-class BenchmarkFailure : public llvm::StringError {
-public:
-  BenchmarkFailure(const llvm::Twine &S);
-};
-
 // Common code for all benchmark modes.
 class BenchmarkRunner {
 public:
@@ -44,9 +38,10 @@ public:
 
   virtual ~BenchmarkRunner();
 
-  InstructionBenchmark runConfiguration(const BenchmarkCode &Configuration,
-                                        unsigned NumRepetitions,
-                                        bool DumpObjectToDisk) const;
+  Expected<InstructionBenchmark>
+  runConfiguration(const BenchmarkCode &Configuration, unsigned NumRepetitions,
+                   ArrayRef<std::unique_ptr<const SnippetRepetitor>> Repetitors,
+                   bool DumpObjectToDisk) const;
 
   // Scratch space to run instructions that touch memory.
   struct ScratchSpace {
@@ -70,8 +65,7 @@ public:
   class FunctionExecutor {
   public:
     virtual ~FunctionExecutor();
-    virtual llvm::Expected<int64_t>
-    runAndMeasure(const char *Counters) const = 0;
+    virtual Expected<int64_t> runAndMeasure(const char *Counters) const = 0;
   };
 
 protected:
@@ -79,12 +73,11 @@ protected:
   const InstructionBenchmark::ModeE Mode;
 
 private:
-  virtual llvm::Expected<std::vector<BenchmarkMeasure>>
+  virtual Expected<std::vector<BenchmarkMeasure>>
   runMeasurements(const FunctionExecutor &Executor) const = 0;
 
-  llvm::Expected<std::string>
-  writeObjectFile(const BenchmarkCode &Configuration,
-                  llvm::ArrayRef<llvm::MCInst> Code) const;
+  Expected<std::string> writeObjectFile(const BenchmarkCode &Configuration,
+                                        const FillFunction &Fill) const;
 
   const std::unique_ptr<ScratchSpace> Scratch;
 };

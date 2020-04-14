@@ -123,6 +123,9 @@ public:
   /// contains data (e.g. PROGBITS), but is not text.
   bool isBerkeleyData() const;
 
+  /// Whether this section is a debug section.
+  bool isDebugSection(StringRef SectionName) const;
+
   bool containsSymbol(SymbolRef S) const;
 
   relocation_iterator relocation_begin() const;
@@ -130,18 +133,13 @@ public:
   iterator_range<relocation_iterator> relocations() const {
     return make_range(relocation_begin(), relocation_end());
   }
-  section_iterator getRelocatedSection() const;
+  Expected<section_iterator> getRelocatedSection() const;
 
   DataRefImpl getRawDataRefImpl() const;
   const ObjectFile *getObject() const;
 };
 
 struct SectionedAddress {
-  // TODO: constructors could be removed when C++14 would be adopted.
-  SectionedAddress() {}
-  SectionedAddress(uint64_t Addr, uint64_t SectIdx)
-      : Address(Addr), SectionIndex(SectIdx) {}
-
   const static uint64_t UndefSection = UINT64_MAX;
 
   uint64_t Address = 0;
@@ -159,6 +157,8 @@ inline bool operator==(const SectionedAddress &LHS,
   return std::tie(LHS.SectionIndex, LHS.Address) ==
          std::tie(RHS.SectionIndex, RHS.Address);
 }
+
+raw_ostream &operator<<(raw_ostream &OS, const SectionedAddress &Addr);
 
 /// This is a value type class that represents a single symbol in the list of
 /// symbols in the object file.
@@ -275,9 +275,10 @@ protected:
   virtual bool isSectionStripped(DataRefImpl Sec) const;
   virtual bool isBerkeleyText(DataRefImpl Sec) const;
   virtual bool isBerkeleyData(DataRefImpl Sec) const;
+  virtual bool isDebugSection(StringRef SectionName) const;
   virtual relocation_iterator section_rel_begin(DataRefImpl Sec) const = 0;
   virtual relocation_iterator section_rel_end(DataRefImpl Sec) const = 0;
-  virtual section_iterator getRelocatedSection(DataRefImpl Sec) const;
+  virtual Expected<section_iterator> getRelocatedSection(DataRefImpl Sec) const;
 
   // Same as above for RelocationRef.
   friend class RelocationRef;
@@ -498,6 +499,10 @@ inline bool SectionRef::isBerkeleyData() const {
   return OwningObject->isBerkeleyData(SectionPimpl);
 }
 
+inline bool SectionRef::isDebugSection(StringRef SectionName) const {
+  return OwningObject->isDebugSection(SectionName);
+}
+
 inline relocation_iterator SectionRef::relocation_begin() const {
   return OwningObject->section_rel_begin(SectionPimpl);
 }
@@ -506,7 +511,7 @@ inline relocation_iterator SectionRef::relocation_end() const {
   return OwningObject->section_rel_end(SectionPimpl);
 }
 
-inline section_iterator SectionRef::getRelocatedSection() const {
+inline Expected<section_iterator> SectionRef::getRelocatedSection() const {
   return OwningObject->getRelocatedSection(SectionPimpl);
 }
 

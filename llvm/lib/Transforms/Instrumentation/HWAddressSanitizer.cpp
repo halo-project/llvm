@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/Instrumentation/HWAddressSanitizer.h"
+#include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
@@ -37,6 +38,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Value.h"
+#include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLine.h"
@@ -55,6 +57,8 @@ using namespace llvm;
 static const char *const kHwasanModuleCtorName = "hwasan.module_ctor";
 static const char *const kHwasanNoteName = "hwasan.note";
 static const char *const kHwasanInitName = "__hwasan_init";
+static const char *const kHwasanPersonalityThunkName =
+    "__hwasan_personality_thunk";
 
 static const char *const kHwasanShadowMemoryDynamicAddress =
     "__hwasan_shadow_memory_dynamic_address";
@@ -160,8 +164,18 @@ static cl::opt<bool>
 
 static cl::opt<bool>
     ClInstrumentLandingPads("hwasan-instrument-landing-pads",
-                              cl::desc("instrument landing pads"), cl::Hidden,
-                              cl::init(true));
+                            cl::desc("instrument landing pads"), cl::Hidden,
+                            cl::init(false), cl::ZeroOrMore);
+
+static cl::opt<bool> ClUseShortGranules(
+    "hwasan-use-short-granules",
+    cl::desc("use short granules in allocas and outlined checks"), cl::Hidden,
+    cl::init(false), cl::ZeroOrMore);
+
+static cl::opt<bool> ClInstrumentPersonalityFunctions(
+    "hwasan-instrument-personality-functions",
+    cl::desc("instrument personality functions"), cl::Hidden, cl::init(false),
+    cl::ZeroOrMore);
 
 static cl::opt<bool> ClInlineAllChecks("hwasan-inline-all-checks",
                                        cl::desc("inline all checks"),
@@ -208,7 +222,7 @@ public:
   Value *untagPointer(IRBuilder<> &IRB, Value *PtrLong);
   bool instrumentStack(
       SmallVectorImpl<AllocaInst *> &Allocas,
-      DenseMap<AllocaInst *, std::vector<DbgDeclareInst *>> &AllocaDeclareMap,
+      DenseMap<AllocaInst *, std::vector<DbgVariableIntrinsic *>> &AllocaDbgMap,
       SmallVectorImpl<Instruction *> &RetVec, Value *StackTag);
   Value *readRegister(IRBuilder<> &IRB, StringRef Name);
   bool instrumentLandingPads(SmallVectorImpl<Instruction *> &RetVec);
@@ -223,6 +237,8 @@ public:
 
   void instrumentGlobal(GlobalVariable *GV, uint8_t Tag);
   void instrumentGlobals();
+
+  void instrumentPersonalityFunctions();
 
 private:
   LLVMContext *C;
@@ -250,6 +266,7 @@ private:
   };
   ShadowMapping Mapping;
 
+  Type *VoidTy = Type::getVoidTy(M.getContext());
   Type *IntptrTy;
   Type *Int8PtrTy;
   Type *Int8Ty;
@@ -258,6 +275,8 @@ private:
 
   bool CompileKernel;
   bool Recover;
+  bool UseShortGranules;
+  bool InstrumentLandingPads;
 
   Function *HwasanCtorFunction;
 
@@ -266,7 +285,6 @@ private:
 
   FunctionCallee HwasanTagMemoryFunc;
   FunctionCallee HwasanGenerateTagFunc;
-  FunctionCallee HwasanThreadEnterFunc;
 
   Constant *ShadowGlobal;
 
@@ -358,6 +376,21 @@ void HWAddressSanitizer::initializeModule() {
   Int32Ty = IRB.getInt32Ty();
 
   HwasanCtorFunction = nullptr;
+
+  // Older versions of Android do not have the required runtime support for
+  // short granules, global or personality function instrumentation. On other
+  // platforms we currently require using the latest version of the runtime.
+  bool NewRuntime =
+      !TargetTriple.isAndroid() || !TargetTriple.isAndroidVersionLT(30);
+
+  UseShortGranules =
+      ClUseShortGranules.getNumOccurrences() ? ClUseShortGranules : NewRuntime;
+
+  // If we don't have personality function support, fall back to landing pads.
+  InstrumentLandingPads = ClInstrumentLandingPads.getNumOccurrences()
+                              ? ClInstrumentLandingPads
+                              : !NewRuntime;
+
   if (!CompileKernel) {
     std::tie(HwasanCtorFunction, std::ignore) =
         getOrCreateSanitizerCtorAndInitFunctions(
@@ -372,15 +405,17 @@ void HWAddressSanitizer::initializeModule() {
               appendToGlobalCtors(M, Ctor, 0, Ctor);
             });
 
-    // Older versions of Android do not have the required runtime support for
-    // global instrumentation. On other platforms we currently require using the
-    // latest version of the runtime.
     bool InstrumentGlobals =
-        !TargetTriple.isAndroid() || !TargetTriple.isAndroidVersionLT(30);
-    if (ClGlobals.getNumOccurrences())
-      InstrumentGlobals = ClGlobals;
+        ClGlobals.getNumOccurrences() ? ClGlobals : NewRuntime;
     if (InstrumentGlobals)
       instrumentGlobals();
+
+    bool InstrumentPersonalityFunctions =
+        ClInstrumentPersonalityFunctions.getNumOccurrences()
+            ? ClInstrumentPersonalityFunctions
+            : NewRuntime;
+    if (InstrumentPersonalityFunctions)
+      instrumentPersonalityFunctions();
   }
 
   if (!TargetTriple.isAndroid()) {
@@ -438,9 +473,6 @@ void HWAddressSanitizer::initializeCallbacks(Module &M) {
 
   HWAsanHandleVfork =
       M.getOrInsertFunction("__hwasan_handle_vfork", IRB.getVoidTy(), IntptrTy);
-
-  HwasanThreadEnterFunc =
-      M.getOrInsertFunction("__hwasan_thread_enter", IRB.getVoidTy());
 }
 
 Value *HWAddressSanitizer::getDynamicShadowIfunc(IRBuilder<> &IRB) {
@@ -474,7 +506,7 @@ Value *HWAddressSanitizer::isInterestingMemoryAccess(Instruction *I,
                                                      unsigned *Alignment,
                                                      Value **MaybeMask) {
   // Skip memory accesses inserted by another instrumentation.
-  if (I->getMetadata("nosanitize")) return nullptr;
+  if (I->hasMetadata("nosanitize")) return nullptr;
 
   // Do not instrument the load fetching the dynamic shadow address.
   if (LocalDynamicShadow == I)
@@ -582,9 +614,11 @@ void HWAddressSanitizer::instrumentMemAccessInline(Value *Ptr, bool IsWrite,
       TargetTriple.isOSBinFormatELF() && !Recover) {
     Module *M = IRB.GetInsertBlock()->getParent()->getParent();
     Ptr = IRB.CreateBitCast(Ptr, Int8PtrTy);
-    IRB.CreateCall(
-        Intrinsic::getDeclaration(M, Intrinsic::hwasan_check_memaccess),
-        {shadowBase(), Ptr, ConstantInt::get(Int32Ty, AccessInfo)});
+    IRB.CreateCall(Intrinsic::getDeclaration(
+                       M, UseShortGranules
+                              ? Intrinsic::hwasan_check_memaccess_shortgranules
+                              : Intrinsic::hwasan_check_memaccess),
+                   {shadowBase(), Ptr, ConstantInt::get(Int32Ty, AccessInfo)});
     return;
   }
 
@@ -737,6 +771,8 @@ static uint64_t getAllocaSizeInBytes(const AllocaInst &AI) {
 bool HWAddressSanitizer::tagAlloca(IRBuilder<> &IRB, AllocaInst *AI,
                                    Value *Tag, size_t Size) {
   size_t AlignedSize = alignTo(Size, Mapping.getObjectAlignment());
+  if (!UseShortGranules)
+    Size = AlignedSize;
 
   Value *JustTag = IRB.CreateTrunc(Tag, IRB.getInt8Ty());
   if (ClInstrumentWithCalls) {
@@ -753,7 +789,7 @@ bool HWAddressSanitizer::tagAlloca(IRBuilder<> &IRB, AllocaInst *AI,
     // llvm.memset right here into either a sequence of stores, or a call to
     // hwasan_tag_memory.
     if (ShadowSize)
-      IRB.CreateMemSet(ShadowPtr, JustTag, ShadowSize, /*Align=*/1);
+      IRB.CreateMemSet(ShadowPtr, JustTag, ShadowSize, Align(1));
     if (Size != AlignedSize) {
       IRB.CreateStore(
           ConstantInt::get(Int8Ty, Size % Mapping.getObjectAlignment()),
@@ -895,34 +931,13 @@ void HWAddressSanitizer::emitPrologue(IRBuilder<> &IRB, bool WithFrameRecord) {
   Value *SlotPtr = getHwasanThreadSlotPtr(IRB, IntptrTy);
   assert(SlotPtr);
 
-  Instruction *ThreadLong = IRB.CreateLoad(IntptrTy, SlotPtr);
-
-  Function *F = IRB.GetInsertBlock()->getParent();
-  if (F->getFnAttribute("hwasan-abi").getValueAsString() == "interceptor") {
-    Value *ThreadLongEqZero =
-        IRB.CreateICmpEQ(ThreadLong, ConstantInt::get(IntptrTy, 0));
-    auto *Br = cast<BranchInst>(SplitBlockAndInsertIfThen(
-        ThreadLongEqZero, cast<Instruction>(ThreadLongEqZero)->getNextNode(),
-        false, MDBuilder(*C).createBranchWeights(1, 100000)));
-
-    IRB.SetInsertPoint(Br);
-    // FIXME: This should call a new runtime function with a custom calling
-    // convention to avoid needing to spill all arguments here.
-    IRB.CreateCall(HwasanThreadEnterFunc);
-    LoadInst *ReloadThreadLong = IRB.CreateLoad(IntptrTy, SlotPtr);
-
-    IRB.SetInsertPoint(&*Br->getSuccessor(0)->begin());
-    PHINode *ThreadLongPhi = IRB.CreatePHI(IntptrTy, 2);
-    ThreadLongPhi->addIncoming(ThreadLong, ThreadLong->getParent());
-    ThreadLongPhi->addIncoming(ReloadThreadLong, ReloadThreadLong->getParent());
-    ThreadLong = ThreadLongPhi;
-  }
-
+  Value *ThreadLong = IRB.CreateLoad(IntptrTy, SlotPtr);
   // Extract the address field from ThreadLong. Unnecessary on AArch64 with TBI.
   Value *ThreadLongMaybeUntagged =
       TargetTriple.isAArch64() ? ThreadLong : untagPointer(IRB, ThreadLong);
 
   if (WithFrameRecord) {
+    Function *F = IRB.GetInsertBlock()->getParent();
     StackBaseTag = IRB.CreateAShr(ThreadLong, 3);
 
     // Prepare ring buffer data.
@@ -1001,7 +1016,7 @@ bool HWAddressSanitizer::instrumentLandingPads(
 
 bool HWAddressSanitizer::instrumentStack(
     SmallVectorImpl<AllocaInst *> &Allocas,
-    DenseMap<AllocaInst *, std::vector<DbgDeclareInst *>> &AllocaDeclareMap,
+    DenseMap<AllocaInst *, std::vector<DbgVariableIntrinsic *>> &AllocaDbgMap,
     SmallVectorImpl<Instruction *> &RetVec, Value *StackTag) {
   // Ideally, we want to calculate tagged stack base pointer, and rewrite all
   // alloca addresses using that. Unfortunately, offsets are not known yet
@@ -1023,11 +1038,15 @@ bool HWAddressSanitizer::instrumentStack(
     AI->replaceUsesWithIf(Replacement,
                           [AILong](Use &U) { return U.getUser() != AILong; });
 
-    for (auto *DDI : AllocaDeclareMap.lookup(AI)) {
-      DIExpression *OldExpr = DDI->getExpression();
-      DIExpression *NewExpr = DIExpression::append(
-          OldExpr, {dwarf::DW_OP_LLVM_tag_offset, RetagMask(N)});
-      DDI->setArgOperand(2, MetadataAsValue::get(*C, NewExpr));
+    for (auto *DDI : AllocaDbgMap.lookup(AI)) {
+      // Prepend "tag_offset, N" to the dwarf expression.
+      // Tag offset logically applies to the alloca pointer, and it makes sense
+      // to put it at the beginning of the expression.
+      SmallVector<uint64_t, 8> NewOps = {dwarf::DW_OP_LLVM_tag_offset,
+                                         RetagMask(N)};
+      DDI->setArgOperand(
+          2, MetadataAsValue::get(*C, DIExpression::prependOpcodes(
+                                          DDI->getExpression(), NewOps)));
     }
 
     size_t Size = getAllocaSizeInBytes(*AI);
@@ -1074,7 +1093,7 @@ bool HWAddressSanitizer::sanitizeFunction(Function &F) {
   SmallVector<AllocaInst*, 8> AllocasToInstrument;
   SmallVector<Instruction*, 8> RetVec;
   SmallVector<Instruction*, 8> LandingPadVec;
-  DenseMap<AllocaInst *, std::vector<DbgDeclareInst *>> AllocaDeclareMap;
+  DenseMap<AllocaInst *, std::vector<DbgVariableIntrinsic *>> AllocaDbgMap;
   for (auto &BB : F) {
     for (auto &Inst : BB) {
       if (ClInstrumentStack)
@@ -1088,11 +1107,12 @@ bool HWAddressSanitizer::sanitizeFunction(Function &F) {
           isa<CleanupReturnInst>(Inst))
         RetVec.push_back(&Inst);
 
-      if (auto *DDI = dyn_cast<DbgDeclareInst>(&Inst))
-        if (auto *Alloca = dyn_cast_or_null<AllocaInst>(DDI->getAddress()))
-          AllocaDeclareMap[Alloca].push_back(DDI);
+      if (auto *DDI = dyn_cast<DbgVariableIntrinsic>(&Inst))
+        if (auto *Alloca =
+                dyn_cast_or_null<AllocaInst>(DDI->getVariableLocation()))
+          AllocaDbgMap[Alloca].push_back(DDI);
 
-      if (ClInstrumentLandingPads && isa<LandingPadInst>(Inst))
+      if (InstrumentLandingPads && isa<LandingPadInst>(Inst))
         LandingPadVec.push_back(&Inst);
 
       Value *MaybeMask = nullptr;
@@ -1111,6 +1131,13 @@ bool HWAddressSanitizer::sanitizeFunction(Function &F) {
   if (!LandingPadVec.empty())
     instrumentLandingPads(LandingPadVec);
 
+  if (AllocasToInstrument.empty() && F.hasPersonalityFn() &&
+      F.getPersonalityFn()->getName() == kHwasanPersonalityThunkName) {
+    // __hwasan_personality_thunk is a no-op for functions without an
+    // instrumented stack, so we can drop it.
+    F.setPersonalityFn(nullptr);
+  }
+
   if (AllocasToInstrument.empty() && ToInstrument.empty())
     return false;
 
@@ -1126,7 +1153,7 @@ bool HWAddressSanitizer::sanitizeFunction(Function &F) {
   if (!AllocasToInstrument.empty()) {
     Value *StackTag =
         ClGenerateTagsWithCalls ? nullptr : getStackBaseTag(EntryIRB);
-    Changed |= instrumentStack(AllocasToInstrument, AllocaDeclareMap, RetVec,
+    Changed |= instrumentStack(AllocasToInstrument, AllocaDbgMap, RetVec,
                                StackTag);
   }
 
@@ -1138,7 +1165,7 @@ bool HWAddressSanitizer::sanitizeFunction(Function &F) {
     uint64_t Size = getAllocaSizeInBytes(*AI);
     uint64_t AlignedSize = alignTo(Size, Mapping.getObjectAlignment());
     AI->setAlignment(
-        std::max(AI->getAlignment(), Mapping.getObjectAlignment()));
+        MaybeAlign(std::max(AI->getAlignment(), Mapping.getObjectAlignment())));
     if (Size != AlignedSize) {
       Type *AllocatedType = AI->getAllocatedType();
       if (AI->isArrayAllocation()) {
@@ -1151,7 +1178,7 @@ bool HWAddressSanitizer::sanitizeFunction(Function &F) {
       auto *NewAI = new AllocaInst(
           TypeWithPadding, AI->getType()->getAddressSpace(), nullptr, "", AI);
       NewAI->takeName(AI);
-      NewAI->setAlignment(AI->getAlignment());
+      NewAI->setAlignment(MaybeAlign(AI->getAlignment()));
       NewAI->setUsedWithInAlloca(AI->isUsedWithInAlloca());
       NewAI->setSwiftError(AI->isSwiftError());
       NewAI->copyMetadata(*AI);
@@ -1219,7 +1246,7 @@ void HWAddressSanitizer::instrumentGlobal(GlobalVariable *GV, uint8_t Tag) {
   NewGV->setLinkage(GlobalValue::PrivateLinkage);
   NewGV->copyMetadata(GV, 0);
   NewGV->setAlignment(
-      std::max(GV->getAlignment(), Mapping.getObjectAlignment()));
+      MaybeAlign(std::max(GV->getAlignment(), Mapping.getObjectAlignment())));
 
   // It is invalid to ICF two globals that have different tags. In the case
   // where the size of the global is a multiple of the tag granularity the
@@ -1298,8 +1325,9 @@ void HWAddressSanitizer::instrumentGlobals() {
   // cases where two libraries mutually depend on each other.
   //
   // We only need one note per binary, so put everything for the note in a
-  // comdat.
-  Comdat *NoteComdat = M.getOrInsertComdat(kHwasanNoteName);
+  // comdat. This need to be a comdat with an .init_array section to prevent
+  // newer versions of lld from discarding the note.
+  Comdat *NoteComdat = M.getOrInsertComdat(kHwasanModuleCtorName);
 
   Type *Int8Arr0Ty = ArrayType::get(Int8Ty, 0);
   auto Start =
@@ -1324,7 +1352,7 @@ void HWAddressSanitizer::instrumentGlobals() {
                          GlobalValue::PrivateLinkage, nullptr, kHwasanNoteName);
   Note->setSection(".note.hwasan.globals");
   Note->setComdat(NoteComdat);
-  Note->setAlignment(4);
+  Note->setAlignment(Align(4));
   Note->setDSOLocal(true);
 
   // The pointers in the note need to be relative so that the note ends up being
@@ -1383,6 +1411,69 @@ void HWAddressSanitizer::instrumentGlobals() {
     if (Tag == 0)
       Tag = 1;
     instrumentGlobal(GV, Tag++);
+  }
+}
+
+void HWAddressSanitizer::instrumentPersonalityFunctions() {
+  // We need to untag stack frames as we unwind past them. That is the job of
+  // the personality function wrapper, which either wraps an existing
+  // personality function or acts as a personality function on its own. Each
+  // function that has a personality function or that can be unwound past has
+  // its personality function changed to a thunk that calls the personality
+  // function wrapper in the runtime.
+  MapVector<Constant *, std::vector<Function *>> PersonalityFns;
+  for (Function &F : M) {
+    if (F.isDeclaration() || !F.hasFnAttribute(Attribute::SanitizeHWAddress))
+      continue;
+
+    if (F.hasPersonalityFn()) {
+      PersonalityFns[F.getPersonalityFn()->stripPointerCasts()].push_back(&F);
+    } else if (!F.hasFnAttribute(Attribute::NoUnwind)) {
+      PersonalityFns[nullptr].push_back(&F);
+    }
+  }
+
+  if (PersonalityFns.empty())
+    return;
+
+  FunctionCallee HwasanPersonalityWrapper = M.getOrInsertFunction(
+      "__hwasan_personality_wrapper", Int32Ty, Int32Ty, Int32Ty, Int64Ty,
+      Int8PtrTy, Int8PtrTy, Int8PtrTy, Int8PtrTy, Int8PtrTy);
+  FunctionCallee UnwindGetGR = M.getOrInsertFunction("_Unwind_GetGR", VoidTy);
+  FunctionCallee UnwindGetCFA = M.getOrInsertFunction("_Unwind_GetCFA", VoidTy);
+
+  for (auto &P : PersonalityFns) {
+    std::string ThunkName = kHwasanPersonalityThunkName;
+    if (P.first)
+      ThunkName += ("." + P.first->getName()).str();
+    FunctionType *ThunkFnTy = FunctionType::get(
+        Int32Ty, {Int32Ty, Int32Ty, Int64Ty, Int8PtrTy, Int8PtrTy}, false);
+    bool IsLocal = P.first && (!isa<GlobalValue>(P.first) ||
+                               cast<GlobalValue>(P.first)->hasLocalLinkage());
+    auto *ThunkFn = Function::Create(ThunkFnTy,
+                                     IsLocal ? GlobalValue::InternalLinkage
+                                             : GlobalValue::LinkOnceODRLinkage,
+                                     ThunkName, &M);
+    if (!IsLocal) {
+      ThunkFn->setVisibility(GlobalValue::HiddenVisibility);
+      ThunkFn->setComdat(M.getOrInsertComdat(ThunkName));
+    }
+
+    auto *BB = BasicBlock::Create(*C, "entry", ThunkFn);
+    IRBuilder<> IRB(BB);
+    CallInst *WrapperCall = IRB.CreateCall(
+        HwasanPersonalityWrapper,
+        {ThunkFn->getArg(0), ThunkFn->getArg(1), ThunkFn->getArg(2),
+         ThunkFn->getArg(3), ThunkFn->getArg(4),
+         P.first ? IRB.CreateBitCast(P.first, Int8PtrTy)
+                 : Constant::getNullValue(Int8PtrTy),
+         IRB.CreateBitCast(UnwindGetGR.getCallee(), Int8PtrTy),
+         IRB.CreateBitCast(UnwindGetCFA.getCallee(), Int8PtrTy)});
+    WrapperCall->setTailCall();
+    IRB.CreateRet(WrapperCall);
+
+    for (Function *F : P.second)
+      F->setPersonalityFn(ThunkFn);
   }
 }
 

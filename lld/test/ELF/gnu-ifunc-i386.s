@@ -22,8 +22,8 @@
 // CHECK-NEXT: }
 // CHECK:     Relocations [
 // CHECK-NEXT:   Section ({{.*}}) .rel.dyn {
-// CHECK-NEXT:     0x402000 R_386_IRELATIVE
-// CHECK-NEXT:     0x402004 R_386_IRELATIVE
+// CHECK-NEXT:     0x402120 R_386_IRELATIVE
+// CHECK-NEXT:     0x402124 R_386_IRELATIVE
 // CHECK-NEXT:   }
 // CHECK-NEXT: ]
 
@@ -61,7 +61,7 @@
 // CHECK-NEXT: }
 // CHECK-NEXT: Symbol {
 // CHECK-NEXT:   Name: _start
-// CHECK-NEXT:   Value: 0x401002
+// CHECK-NEXT:   Value: 0x4010E6
 // CHECK-NEXT:   Size: 0
 // CHECK-NEXT:   Binding: Global
 // CHECK-NEXT:   Type: None
@@ -70,16 +70,16 @@
 // CHECK-NEXT: }
 // CHECK-NEXT: Symbol {
 // CHECK-NEXT:   Name: bar
-// CHECK-NEXT:   Value: 0x401030
+// CHECK-NEXT:   Value: 0x401110
 // CHECK-NEXT:   Size: 0
 // CHECK-NEXT:   Binding: Global
 // CHECK-NEXT:   Type: Function
 // CHECK-NEXT:   Other: 0
-// CHECK-NEXT:   Section: .plt
+// CHECK-NEXT:   Section: .iplt
 // CHECK-NEXT: }
 // CHECK-NEXT: Symbol {
 // CHECK-NEXT:   Name: bar_resolver
-// CHECK-NEXT:   Value: 0x401001
+// CHECK-NEXT:   Value: 0x4010E5
 // CHECK-NEXT:   Size: 0
 // CHECK-NEXT:   Binding: Global
 // CHECK-NEXT:   Type: Function
@@ -88,16 +88,16 @@
 // CHECK-NEXT: }
 // CHECK-NEXT: Symbol {
 // CHECK-NEXT:   Name: foo
-// CHECK-NEXT:   Value: 0x401020
+// CHECK-NEXT:   Value: 0x401100
 // CHECK-NEXT:   Size: 0
 // CHECK-NEXT:   Binding: Global
 // CHECK-NEXT:   Type: Function
 // CHECK-NEXT:   Other: 0
-// CHECK-NEXT:   Section: .plt
+// CHECK-NEXT:   Section: .iplt
 // CHECK-NEXT: }
 // CHECK-NEXT: Symbol {
 // CHECK-NEXT:   Name: foo_resolver
-// CHECK-NEXT:   Value: 0x401000
+// CHECK-NEXT:   Value: 0x4010E4
 // CHECK-NEXT:   Size: 0
 // CHECK-NEXT:   Binding: Global
 // CHECK-NEXT:   Type: Function
@@ -108,26 +108,26 @@
 
 // DISASM: Disassembly of section .text:
 // DISASM-EMPTY:
-// DISASM-NEXT: foo_resolver:
-// DISASM-NEXT:   401000:       retl
-// DISASM: bar_resolver:
-// DISASM-NEXT:   401001:       retl
-// DISASM:      _start:
-// DISASM-NEXT:   401002:       calll 25
-// DISASM-NEXT:                 calll 36
+// DISASM-NEXT: <foo_resolver>:
+// DISASM-NEXT:   4010e4:       retl
+// DISASM: <bar_resolver>:
+// DISASM-NEXT:   4010e5:       retl
+// DISASM:      <_start>:
+// DISASM-NEXT:   4010e6:       calll 0x401100 <foo>
+// DISASM-NEXT:                 calll 0x401110 <bar>
 // DISASM-NEXT:                 movl $4194516, %edx
 // DISASM-NEXT:                 movl $4194532, %edx
 // DISASM-EMPTY:
-// DISASM-NEXT: Disassembly of section .plt:
+// DISASM-NEXT: Disassembly of section .iplt:
 // DISASM-EMPTY:
-// DISASM-NEXT: foo:
-// DISASM-NEXT:   401020:       jmpl *4202496
-// DISASM-NEXT:                 pushl $16
-// DISASM-NEXT:                 jmp -32 <_start+0xe>
-// DISASM:      bar:
-// DISASM-NEXT:   401030:       jmpl *4202500
-// DISASM-NEXT:                 pushl $24
-// DISASM-NEXT:                 jmp -48 <_start+0xe>
+// DISASM-NEXT: <foo>:
+// DISASM-NEXT:   401100:       jmpl *4202784
+// DISASM-NEXT:                 pushl $0
+// DISASM-NEXT:                 jmp 0x0
+// DISASM:      <bar>:
+// DISASM-NEXT:   401110:       jmpl *4202788
+// DISASM-NEXT:                 pushl $8
+// DISASM-NEXT:                 jmp 0x0
 
 .text
 .type foo STT_GNU_IFUNC

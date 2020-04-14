@@ -6,8 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLDB_SBDebugger_h_
-#define LLDB_SBDebugger_h_
+#ifndef LLDB_API_SBDEBUGGER_H
+#define LLDB_API_SBDEBUGGER_H
 
 #include <stdio.h>
 
@@ -88,6 +88,24 @@ public:
 
   FILE *GetErrorFileHandle();
 
+  SBError SetInputFile(SBFile file);
+
+  SBError SetOutputFile(SBFile file);
+
+  SBError SetErrorFile(SBFile file);
+
+  SBError SetInputFile(FileSP file);
+
+  SBError SetOutputFile(FileSP file);
+
+  SBError SetErrorFile(FileSP file);
+
+  SBFile GetInputFile();
+
+  SBFile GetOutputFile();
+
+  SBFile GetErrorFile();
+
   void SaveInputTerminalState();
 
   void RestoreInputTerminalState();
@@ -99,7 +117,14 @@ public:
   lldb::SBListener GetListener();
 
   void HandleProcessEvent(const lldb::SBProcess &process,
-                          const lldb::SBEvent &event, FILE *out, FILE *err);
+                          const lldb::SBEvent &event, FILE *out,
+                          FILE *err); // DEPRECATED
+
+  void HandleProcessEvent(const lldb::SBProcess &process,
+                          const lldb::SBEvent &event, SBFile out, SBFile err);
+
+  void HandleProcessEvent(const lldb::SBProcess &process,
+                          const lldb::SBEvent &event, FileSP out, FileSP err);
 
   lldb::SBTarget CreateTarget(const char *filename, const char *target_triple,
                               const char *platform_name,
@@ -294,4 +319,4 @@ private:
 
 } // namespace lldb
 
-#endif // LLDB_SBDebugger_h_
+#endif // LLDB_API_SBDEBUGGER_H

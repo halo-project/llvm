@@ -53,6 +53,10 @@ static cl::opt<bool> DeleteFn("delete",
                               cl::desc("Delete specified Globals from Module"),
                               cl::cat(ExtractCat));
 
+static cl::opt<bool> KeepConstInit("keep-const-init",
+                              cl::desc("Keep initializers of constants"),
+                              cl::cat(ExtractCat));
+
 static cl::opt<bool>
     Recursive("recursive", cl::desc("Recursively extract all called functions"),
               cl::cat(ExtractCat));
@@ -74,8 +78,18 @@ static cl::list<std::string>
 
 // ExtractBlocks - The blocks to extract from the module.
 static cl::list<std::string> ExtractBlocks(
-    "bb", cl::desc("Specify <function, basic block> pairs to extract"),
-    cl::ZeroOrMore, cl::value_desc("function:bb"), cl::cat(ExtractCat));
+    "bb",
+    cl::desc(
+        "Specify <function, basic block1[;basic block2...]> pairs to extract.\n"
+        "Each pair will create a function.\n"
+        "If multiple basic blocks are specified in one pair,\n"
+        "the first block in the sequence should dominate the rest.\n"
+        "eg:\n"
+        "  --bb=f:bb1;bb2 will extract one function with both bb1 and bb2;\n"
+        "  --bb=f:bb1 --bb=f:bb2 will extract two functions, one with bb1, one "
+        "with bb2."),
+    cl::ZeroOrMore, cl::value_desc("function:bb1[;bb2...]"),
+    cl::cat(ExtractCat));
 
 // ExtractAlias - The alias to extract from the module.
 static cl::list<std::string>
@@ -323,7 +337,7 @@ int main(int argc, char **argv) {
   {
     std::vector<GlobalValue *> Gvs(GVs.begin(), GVs.end());
     legacy::PassManager Extract;
-    Extract.add(createGVExtractionPass(Gvs, DeleteFn));
+    Extract.add(createGVExtractionPass(Gvs, DeleteFn, KeepConstInit));
     Extract.run(*M);
 
     // Now that we have all the GVs we want, mark the module as fully

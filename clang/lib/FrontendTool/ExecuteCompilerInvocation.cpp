@@ -23,6 +23,7 @@
 #include "clang/Frontend/Utils.h"
 #include "clang/FrontendTool/Utils.h"
 #include "clang/Rewrite/Frontend/FrontendActions.h"
+#include "clang/StaticAnalyzer/Frontend/AnalyzerHelpFlags.h"
 #include "clang/StaticAnalyzer/Frontend/FrontendActions.h"
 #include "llvm/Option/OptTable.h"
 #include "llvm/Option/Option.h"
@@ -64,10 +65,8 @@ CreateFrontendBaseAction(CompilerInstance &CI) {
   case GenerateHeaderModule:
     return std::make_unique<GenerateHeaderModuleAction>();
   case GeneratePCH:            return std::make_unique<GeneratePCHAction>();
-  case GenerateInterfaceYAMLExpV1:
-    return std::make_unique<GenerateInterfaceYAMLExpV1Action>();
-  case GenerateInterfaceTBEExpV1:
-    return std::make_unique<GenerateInterfaceTBEExpV1Action>();
+  case GenerateInterfaceStubs:
+    return std::make_unique<GenerateInterfaceStubsAction>();
   case InitOnly:               return std::make_unique<InitOnlyAction>();
   case ParseSyntaxOnly:        return std::make_unique<SyntaxOnlyAction>();
   case ModuleFileInfo:         return std::make_unique<DumpModuleInfoAction>();
@@ -82,7 +81,9 @@ CreateFrontendBaseAction(CompilerInstance &CI) {
         std::unique_ptr<PluginASTAction> P(it->instantiate());
         if ((P->getActionType() != PluginASTAction::ReplaceAction &&
              P->getActionType() != PluginASTAction::Cmdline) ||
-            !P->ParseArgs(CI, CI.getFrontendOpts().PluginArgs[it->getName()]))
+            !P->ParseArgs(
+                CI,
+                CI.getFrontendOpts().PluginArgs[std::string(it->getName())]))
           return nullptr;
         return std::move(P);
       }
@@ -187,11 +188,11 @@ CreateFrontendAction(CompilerInstance &CI) {
 bool ExecuteCompilerInvocation(CompilerInstance *Clang) {
   // Honor -help.
   if (Clang->getFrontendOpts().ShowHelp) {
-    std::unique_ptr<OptTable> Opts = driver::createDriverOptTable();
-    Opts->PrintHelp(llvm::outs(), "clang -cc1 [options] file...",
-                    "LLVM 'Clang' Compiler: http://clang.llvm.org",
-                    /*Include=*/driver::options::CC1Option,
-                    /*Exclude=*/0, /*ShowAllAliases=*/false);
+    driver::getDriverOptTable().PrintHelp(
+        llvm::outs(), "clang -cc1 [options] file...",
+        "LLVM 'Clang' Compiler: http://clang.llvm.org",
+        /*Include=*/driver::options::CC1Option,
+        /*Exclude=*/0, /*ShowAllAliases=*/false);
     return true;
   }
 
@@ -220,7 +221,7 @@ bool ExecuteCompilerInvocation(CompilerInstance *Clang) {
     std::unique_ptr<PluginASTAction> P(it->instantiate());
     if (P->getActionType() == PluginASTAction::ReplaceAction) {
       Clang->getFrontendOpts().ProgramAction = clang::frontend::PluginAction;
-      Clang->getFrontendOpts().ActionName = it->getName();
+      Clang->getFrontendOpts().ActionName = std::string(it->getName());
       break;
     }
   }
@@ -243,35 +244,25 @@ bool ExecuteCompilerInvocation(CompilerInstance *Clang) {
   // These should happen AFTER plugins have been loaded!
 
   AnalyzerOptions &AnOpts = *Clang->getAnalyzerOpts();
+
   // Honor -analyzer-checker-help and -analyzer-checker-help-hidden.
   if (AnOpts.ShowCheckerHelp || AnOpts.ShowCheckerHelpAlpha ||
       AnOpts.ShowCheckerHelpDeveloper) {
-    ento::printCheckerHelp(llvm::outs(),
-                           Clang->getFrontendOpts().Plugins,
-                           AnOpts,
-                           Clang->getDiagnostics(),
-                           Clang->getLangOpts());
+    ento::printCheckerHelp(llvm::outs(), *Clang);
     return true;
   }
 
   // Honor -analyzer-checker-option-help.
   if (AnOpts.ShowCheckerOptionList || AnOpts.ShowCheckerOptionAlphaList ||
       AnOpts.ShowCheckerOptionDeveloperList) {
-    ento::printCheckerConfigList(llvm::outs(),
-                                 Clang->getFrontendOpts().Plugins,
-                                 *Clang->getAnalyzerOpts(),
-                                 Clang->getDiagnostics(),
-                                 Clang->getLangOpts());
+    ento::printCheckerConfigList(llvm::outs(), *Clang);
     return true;
   }
 
   // Honor -analyzer-list-enabled-checkers.
   if (AnOpts.ShowEnabledCheckerList) {
-    ento::printEnabledCheckerList(llvm::outs(),
-                                  Clang->getFrontendOpts().Plugins,
-                                  AnOpts,
-                                  Clang->getDiagnostics(),
-                                  Clang->getLangOpts());
+    ento::printEnabledCheckerList(llvm::outs(), *Clang);
+    return true;
   }
 
   // Honor -analyzer-config-help.

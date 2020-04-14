@@ -69,7 +69,8 @@ def run_test_once(args, extra_args):
     clang_tidy_extra_args.append('-format-style=none')
 
   if extension in ['.m', '.mm']:
-    clang_extra_args = ['-fobjc-abi-version=2', '-fobjc-arc'] + clang_extra_args
+    clang_extra_args = ['-fobjc-abi-version=2', '-fobjc-arc', '-fblocks'] + \
+        clang_extra_args
 
   if extension in ['.cpp', '.hpp', '.mm']:
     clang_extra_args.append('-std=' + std)
@@ -158,7 +159,7 @@ def run_test_once(args, extra_args):
     diff_output = e.output
 
   print('------------------------------ Fixes -----------------------------\n' +
-        diff_output.decode() +
+        diff_output.decode(errors='ignore') +
         '\n------------------------------------------------------------------')
 
   if has_check_fixes:

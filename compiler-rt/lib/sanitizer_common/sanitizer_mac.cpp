@@ -13,6 +13,7 @@
 #include "sanitizer_platform.h"
 #if SANITIZER_MAC
 #include "sanitizer_mac.h"
+#include "interception/interception.h"
 
 // Use 64-bit inodes in file operations. ASan does not support OS X 10.5, so
 // the clients will most certainly use 64-bit ones as well.
@@ -207,6 +208,10 @@ uptr internal_getpid() {
   return getpid();
 }
 
+int internal_dlinfo(void *handle, int request, void *p) {
+  UNIMPLEMENTED();
+}
+
 int internal_sigaction(int signum, const void *act, void *oldact) {
   return sigaction(signum,
                    (const struct sigaction *)act, (struct sigaction *)oldact);
@@ -241,7 +246,8 @@ int internal_sysctlbyname(const char *sname, void *oldp, uptr *oldlenp,
                       (size_t)newlen);
 }
 
-static fd_t internal_spawn_impl(const char *argv[], pid_t *pid) {
+static fd_t internal_spawn_impl(const char *argv[], const char *envp[],
+                                pid_t *pid) {
   fd_t master_fd = kInvalidFd;
   fd_t slave_fd = kInvalidFd;
 
@@ -267,20 +273,38 @@ static fd_t internal_spawn_impl(const char *argv[], pid_t *pid) {
   slave_fd = internal_open(slave_pty_name, O_RDWR);
   if (slave_fd == kInvalidFd) return kInvalidFd;
 
+  // File descriptor actions
   posix_spawn_file_actions_t acts;
   res = posix_spawn_file_actions_init(&acts);
   if (res != 0) return kInvalidFd;
 
-  auto fa_cleanup = at_scope_exit([&] {
+  auto acts_cleanup = at_scope_exit([&] {
     posix_spawn_file_actions_destroy(&acts);
   });
 
-  char **env = GetEnviron();
   res = posix_spawn_file_actions_adddup2(&acts, slave_fd, STDIN_FILENO) ||
         posix_spawn_file_actions_adddup2(&acts, slave_fd, STDOUT_FILENO) ||
-        posix_spawn_file_actions_addclose(&acts, slave_fd) ||
-        posix_spawn_file_actions_addclose(&acts, master_fd) ||
-        posix_spawn(pid, argv[0], &acts, NULL, const_cast<char **>(argv), env);
+        posix_spawn_file_actions_addclose(&acts, slave_fd);
+  if (res != 0) return kInvalidFd;
+
+  // Spawn attributes
+  posix_spawnattr_t attrs;
+  res = posix_spawnattr_init(&attrs);
+  if (res != 0) return kInvalidFd;
+
+  auto attrs_cleanup  = at_scope_exit([&] {
+    posix_spawnattr_destroy(&attrs);
+  });
+
+  // In the spawned process, close all file descriptors that are not explicitly
+  // described by the file actions object. This is Darwin-specific extension.
+  res = posix_spawnattr_setflags(&attrs, POSIX_SPAWN_CLOEXEC_DEFAULT);
+  if (res != 0) return kInvalidFd;
+
+  // posix_spawn
+  char **argv_casted = const_cast<char **>(argv);
+  char **envp_casted = const_cast<char **>(envp);
+  res = posix_spawn(pid, argv[0], &acts, &attrs, argv_casted, envp_casted);
   if (res != 0) return kInvalidFd;
 
   // Disable echo in the new terminal, disable CR.
@@ -297,7 +321,7 @@ static fd_t internal_spawn_impl(const char *argv[], pid_t *pid) {
   return fd;
 }
 
-fd_t internal_spawn(const char *argv[], pid_t *pid) {
+fd_t internal_spawn(const char *argv[], const char *envp[], pid_t *pid) {
   // The client program may close its stdin and/or stdout and/or stderr thus
   // allowing open/posix_openpt to reuse file descriptors 0, 1 or 2. In this
   // case the communication is broken if either the parent or the child tries to
@@ -312,7 +336,7 @@ fd_t internal_spawn(const char *argv[], pid_t *pid) {
       break;
   }
 
-  fd_t fd = internal_spawn_impl(argv, pid);
+  fd_t fd = internal_spawn_impl(argv, envp, pid);
 
   for (; count > 0; count--) {
     internal_close(low_fds[count]);
@@ -658,13 +682,13 @@ uptr GetRSS() {
   return info.resident_size;
 }
 
-void *internal_start_thread(void(*func)(void *arg), void *arg) {
+void *internal_start_thread(void *(*func)(void *arg), void *arg) {
   // Start the thread with signals blocked, otherwise it can steal user signals.
   __sanitizer_sigset_t set, old;
   internal_sigfillset(&set);
   internal_sigprocmask(SIG_SETMASK, &set, &old);
   pthread_t th;
-  pthread_create(&th, 0, (void*(*)(void *arg))func, arg);
+  pthread_create(&th, 0, func, arg);
   internal_sigprocmask(SIG_SETMASK, &old, 0);
   return th;
 }
@@ -733,6 +757,12 @@ SignalContext::WriteFlag SignalContext::GetWriteFlag() const {
 #else
   return UNKNOWN;
 #endif
+}
+
+bool SignalContext::IsTrueFaultingAddress() const {
+  auto si = static_cast<const siginfo_t *>(siginfo);
+  // "Real" SIGSEGV codes (e.g., SEGV_MAPERR, SEGV_MAPERR) are non-zero.
+  return si->si_signo == SIGSEGV && si->si_code != 0;
 }
 
 static void GetPcSpBp(void *context, uptr *pc, uptr *sp, uptr *bp) {
@@ -1181,7 +1211,7 @@ bool GetRandom(void *buffer, uptr length, bool blocking) {
   if (!buffer || !length || length > 256)
     return false;
   // arc4random never fails.
-  arc4random_buf(buffer, length);
+  REAL(arc4random_buf)(buffer, length);
   return true;
 }
 

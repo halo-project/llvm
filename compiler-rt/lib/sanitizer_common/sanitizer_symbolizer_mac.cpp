@@ -31,6 +31,9 @@ bool DlAddrSymbolizer::SymbolizePC(uptr addr, SymbolizedStack *stack) {
   Dl_info info;
   int result = dladdr((const void *)addr, &info);
   if (!result) return false;
+
+  CHECK(addr >= reinterpret_cast<uptr>(info.dli_saddr));
+  stack->info.function_offset = addr - reinterpret_cast<uptr>(info.dli_saddr);
   const char *demangled = DemangleSwiftAndCXX(info.dli_sname);
   if (!demangled) return false;
   stack->info.function = internal_strdup(demangled);
@@ -49,16 +52,19 @@ bool DlAddrSymbolizer::SymbolizeData(uptr addr, DataInfo *datainfo) {
 
 class AtosSymbolizerProcess : public SymbolizerProcess {
  public:
-  explicit AtosSymbolizerProcess(const char *path, pid_t parent_pid)
+  explicit AtosSymbolizerProcess(const char *path)
       : SymbolizerProcess(path, /*use_posix_spawn*/ true) {
-    // Put the string command line argument in the object so that it outlives
-    // the call to GetArgV.
-    internal_snprintf(pid_str_, sizeof(pid_str_), "%d", parent_pid);
+    pid_str_[0] = '\0';
   }
 
  private:
-  virtual bool StartSymbolizerSubprocess() override {
+  bool StartSymbolizerSubprocess() override {
     // Configure sandbox before starting atos process.
+
+    // Put the string command line argument in the object so that it outlives
+    // the call to GetArgV.
+    internal_snprintf(pid_str_, sizeof(pid_str_), "%d", internal_getpid());
+
     return SymbolizerProcess::StartSymbolizerSubprocess();
   }
 
@@ -135,7 +141,7 @@ static bool ParseCommandOutput(const char *str, uptr addr, char **out_name,
 }
 
 AtosSymbolizer::AtosSymbolizer(const char *path, LowLevelAllocator *allocator)
-    : process_(new(*allocator) AtosSymbolizerProcess(path, getpid())) {}
+    : process_(new (*allocator) AtosSymbolizerProcess(path)) {}
 
 bool AtosSymbolizer::SymbolizePC(uptr addr, SymbolizedStack *stack) {
   if (!process_) return false;
@@ -145,12 +151,29 @@ bool AtosSymbolizer::SymbolizePC(uptr addr, SymbolizedStack *stack) {
   const char *buf = process_->SendCommand(command);
   if (!buf) return false;
   uptr line;
+  uptr start_address = AddressInfo::kUnknown;
   if (!ParseCommandOutput(buf, addr, &stack->info.function, &stack->info.module,
-                          &stack->info.file, &line, nullptr)) {
+                          &stack->info.file, &line, &start_address)) {
     process_ = nullptr;
     return false;
   }
   stack->info.line = (int)line;
+
+  if (start_address == AddressInfo::kUnknown) {
+    // Fallback to dladdr() to get function start address if atos doesn't report
+    // it.
+    Dl_info info;
+    int result = dladdr((const void *)addr, &info);
+    if (result)
+      start_address = reinterpret_cast<uptr>(info.dli_saddr);
+  }
+
+  // Only assig to `function_offset` if we were able to get the function's
+  // start address.
+  if (start_address != AddressInfo::kUnknown) {
+    CHECK(addr >= start_address);
+    stack->info.function_offset = addr - start_address;
+  }
   return true;
 }
 

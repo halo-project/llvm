@@ -43,24 +43,24 @@ public:
     : DL(DataLayout),
       Mangle(ES, DL),
       ObjectLayer(ES, []() { return std::make_unique<llvm::SectionMemoryManager>(); }),
-      RawObjFile(std::move(ObjFile))
+      RawObjFile(std::move(ObjFile)),
+      MainJD(ES.createBareJITDylib("<main>"))
     {
-      auto &MainDylib = ES.getMainJITDylib();
 
       // TODO: look at Orc/ExecutionUtils.h for utilities to link in C++ stuff.
-      // MainDylib.addGenerator(
+      // MainJD.addGenerator(
       //     cantFail(orc::LocalCXXRuntimeOverrides)
       // );...
 
       // exposes symbols found via dlsym to this dylib.
-      MainDylib.addGenerator(
+      MainJD.addGenerator(
           cantFail(orc::DynamicLibrarySearchGenerator::GetForCurrentProcess(
               DL.getGlobalPrefix())));
 
 
 
       auto Buffer = llvm::MemoryBuffer::getMemBuffer(*RawObjFile);
-      cantFail(ObjectLayer.add(MainDylib, std::move(Buffer)));
+      cantFail(ObjectLayer.add(MainJD, std::move(Buffer)));
     }
 
     // Obtains the JITEvaluated symbol for this mangled symbol name.
@@ -73,7 +73,7 @@ public:
         return Info.Value;
       }
 
-      auto MaybeEvalSymb = ES.lookup({&ES.getMainJITDylib()}, MangledName);
+      auto MaybeEvalSymb = ES.lookup({&MainJD}, MangledName);
       if (!MaybeEvalSymb)
         return MaybeEvalSymb.takeError();
 
@@ -161,6 +161,7 @@ private:
   // since the memory for the linked code is kept inside the ExecutionSession,
   // i.e., the ES only has read-only access to the RawObjFile.
   llvm::StringMap<RefCountedSymbol> RequiredSymbols;
+  orc::JITDylib &MainJD;
 };
 
 class DynamicLinker {

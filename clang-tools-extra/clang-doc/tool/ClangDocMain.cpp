@@ -6,7 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This tool for generating C and C++ documenation from source code
+// This tool for generating C and C++ documentation from source code
 // and comments. Generally, it runs a LibTooling FrontendAction on source files,
 // mapping each declaration in those files to its USR and serializing relevant
 // information into LLVM bitcode. It then runs a pass over the collected
@@ -172,8 +172,8 @@ llvm::Expected<llvm::SmallString<128>> getInfoOutputFile(StringRef Root,
   llvm::sys::path::native(Root, Path);
   llvm::sys::path::append(Path, RelativePath);
   if (CreateDirectory(Path))
-    return llvm::make_error<llvm::StringError>("Unable to create directory.\n",
-                                               llvm::inconvertibleErrorCode());
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   "failed to create directory");
   llvm::sys::path::append(Path, Name + Ext);
   return Path;
 }
@@ -232,7 +232,7 @@ int main(int argc, const char **argv) {
     llvm::sys::path::native(AssetsPath, IndexJS);
     llvm::sys::path::append(IndexJS, "index.js");
     CDCtx.UserStylesheets.insert(CDCtx.UserStylesheets.begin(),
-                                 DefaultStylesheet.str());
+                                 std::string(DefaultStylesheet.str()));
     CDCtx.FilesToCopy.emplace_back(IndexJS.str());
   }
 
@@ -268,8 +268,7 @@ int main(int argc, const char **argv) {
   Error = false;
   llvm::sys::Mutex IndexMutex;
   // ExecutorConcurrency is a flag exposed by AllTUsExecution.h
-  llvm::ThreadPool Pool(ExecutorConcurrency == 0 ? llvm::hardware_concurrency()
-                                                 : ExecutorConcurrency);
+  llvm::ThreadPool Pool(llvm::hardware_concurrency(ExecutorConcurrency));
   for (auto &Group : USRToBitcode) {
     Pool.async([&]() {
       std::vector<std::unique_ptr<doc::Info>> Infos;
@@ -294,8 +293,9 @@ int main(int argc, const char **argv) {
       }
 
       doc::Info *I = Reduced.get().get();
-      auto InfoPath = getInfoOutputFile(OutDirectory, I->Path, I->extractName(),
-                                        "." + Format);
+      auto InfoPath =
+          getInfoOutputFile(OutDirectory, I->getRelativeFilePath(""),
+                            I->getFileBaseName(), "." + Format);
       if (!InfoPath) {
         llvm::errs() << toString(InfoPath.takeError()) << "\n";
         Error = true;
@@ -303,10 +303,10 @@ int main(int argc, const char **argv) {
       }
       std::error_code FileErr;
       llvm::raw_fd_ostream InfoOS(InfoPath.get(), FileErr,
-                                  llvm::sys::fs::F_None);
-      if (FileErr != OK) {
-        llvm::errs() << "Error opening info file: " << FileErr.message()
-                     << "\n";
+                                  llvm::sys::fs::OF_None);
+      if (FileErr) {
+        llvm::errs() << "Error opening info file " << InfoPath.get() << ": "
+                     << FileErr.message() << "\n";
         return;
       }
 
@@ -326,8 +326,11 @@ int main(int argc, const char **argv) {
     return 1;
 
   llvm::outs() << "Generating assets for docs...\n";
-  if (!G->get()->createResources(CDCtx))
+  Err = G->get()->createResources(CDCtx);
+  if (Err) {
+    llvm::errs() << toString(std::move(Err)) << "\n";
     return 1;
+  }
 
   return 0;
 }

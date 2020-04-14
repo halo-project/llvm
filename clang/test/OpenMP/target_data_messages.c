@@ -4,6 +4,13 @@
 
 void foo() { }
 
+void xxx(int argc) {
+  int map; // expected-note {{initialize the variable 'map' to silence this warning}}
+#pragma omp target data map(map) // expected-warning {{variable 'map' is uninitialized when used here}}
+  for (int i = 0; i < 10; ++i)
+    ;
+}
+
 int main(int argc, char **argv) {
   int a;
   #pragma omp target data // expected-error {{expected at least one 'map' or 'use_device_ptr' clause for '#pragma omp target data'}}
@@ -25,6 +32,14 @@ int main(int argc, char **argv) {
     foo();
   }
   #pragma omp target unknown // expected-warning {{extra tokens at the end of '#pragma omp target' are ignored}}
+  {
+    foo();
+  }
+  #pragma omp target data map(delete: a) // expected-error {{map type 'delete' is not allowed for '#pragma omp target data'}}
+  {
+    foo();
+  }
+  #pragma omp target data map(release: a) // expected-error {{map type 'release' is not allowed for '#pragma omp target data'}}
   {
     foo();
   }

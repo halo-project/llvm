@@ -20,7 +20,7 @@
 #include "test_macros.h"
 #include "min_allocator.h"
 #include "test_allocator.h"
-#include "count_new.hpp"
+#include "count_new.h"
 #include "../function_types.h"
 
 class DummyClass {};
@@ -114,6 +114,7 @@ void test_for_alloc(Alloc& alloc)
 
 int main(int, char**)
 {
+  globalMemCounter.reset();
   {
     bare_allocator<DummyClass> alloc;
     test_for_alloc(alloc);

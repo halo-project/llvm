@@ -28,7 +28,7 @@ public:
   CompileCallbackMaterializationUnit(SymbolStringPtr Name,
                                      CompileFunction Compile, VModuleKey K)
       : MaterializationUnit(SymbolFlagsMap({{Name, JITSymbolFlags::Exported}}),
-                            std::move(K)),
+                            nullptr, std::move(K)),
         Name(std::move(Name)), Compile(std::move(Compile)) {}
 
   StringRef getName() const override { return "<Compile Callbacks>"; }
@@ -37,8 +37,9 @@ private:
   void materialize(MaterializationResponsibility R) override {
     SymbolMap Result;
     Result[Name] = JITEvaluatedSymbol(Compile(), JITSymbolFlags::Exported);
-    R.notifyResolved(Result);
-    R.notifyEmitted();
+    // No dependencies, so these calls cannot fail.
+    cantFail(R.notifyResolved(Result));
+    cantFail(R.notifyEmitted());
   }
 
   void discard(const JITDylib &JD, const SymbolStringPtr &Name) override {
@@ -100,7 +101,10 @@ JITTargetAddress JITCompileCallbackManager::executeCompileCallback(
       Name = I->second;
   }
 
-  if (auto Sym = ES.lookup(JITDylibSearchList({{&CallbacksJD, true}}), Name))
+  if (auto Sym =
+          ES.lookup(makeJITDylibSearchOrder(
+                        &CallbacksJD, JITDylibLookupFlags::MatchAllSymbols),
+                    Name))
     return Sym->getAddress();
   else {
     llvm::dbgs() << "Didn't find callback.\n";
@@ -119,7 +123,8 @@ createLocalCompileCallbackManager(const Triple &T, ExecutionSession &ES,
     return make_error<StringError>(
         std::string("No callback manager available for ") + T.str(),
         inconvertibleErrorCode());
-  case Triple::aarch64: {
+  case Triple::aarch64:
+  case Triple::aarch64_32: {
     typedef orc::LocalJITCompileCallbackManager<orc::OrcAArch64> CCMgrT;
     return CCMgrT::Create(ES, ErrorHandlerAddress);
     }
@@ -167,6 +172,7 @@ createLocalIndirectStubsManagerBuilder(const Triple &T) {
       };
 
     case Triple::aarch64:
+    case Triple::aarch64_32:
       return [](){
         return std::make_unique<
                        orc::LocalIndirectStubsManager<orc::OrcAArch64>>();
@@ -196,7 +202,7 @@ createLocalIndirectStubsManagerBuilder(const Triple &T) {
           return std::make_unique<
                       orc::LocalIndirectStubsManager<orc::OrcMips64>>();
       };
-      
+
     case Triple::x86_64:
       if (T.getOS() == Triple::OSType::Win32) {
         return [](){

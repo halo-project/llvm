@@ -41,7 +41,7 @@ namespace llvm {
 extern cl::opt<bool> UseSegmentSetForPhysRegs;
 
 class BitVector;
-class LiveRangeCalc;
+class LiveIntervalCalc;
 class MachineBlockFrequencyInfo;
 class MachineDominatorTree;
 class MachineFunction;
@@ -59,7 +59,7 @@ class VirtRegMap;
     AliasAnalysis *AA;
     SlotIndexes* Indexes;
     MachineDominatorTree *DomTree = nullptr;
-    LiveRangeCalc *LRCalc = nullptr;
+    LiveIntervalCalc *LICalc = nullptr;
 
     /// Special pool allocator for VNInfo's (LiveInterval val#).
     VNInfo::Allocator VNInfoAllocator;
@@ -333,7 +333,7 @@ class VirtRegMap;
     void repairIntervalsInRange(MachineBasicBlock *MBB,
                                 MachineBasicBlock::iterator Begin,
                                 MachineBasicBlock::iterator End,
-                                ArrayRef<unsigned> OrigRegs);
+                                ArrayRef<Register> OrigRegs);
 
     // Register mask functions.
     //
@@ -469,7 +469,7 @@ class VirtRegMap;
 
     void computeLiveInRegUnits();
     void computeRegUnitRange(LiveRange&, unsigned Unit);
-    void computeVirtRegInterval(LiveInterval&);
+    bool computeVirtRegInterval(LiveInterval&);
 
     using ShrinkToUsesWorkList = SmallVector<std::pair<SlotIndex, VNInfo*>, 16>;
     void extendSegmentsToUses(LiveRange &Segments,

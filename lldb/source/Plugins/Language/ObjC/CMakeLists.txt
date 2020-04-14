@@ -22,7 +22,6 @@ add_lldb_library(lldbPluginObjCLanguage PLUGIN
   NSString.cpp
 
   LINK_LIBS
-    clangAST
     lldbCore
     lldbDataFormatters
     lldbExpression
@@ -32,6 +31,9 @@ add_lldb_library(lldbPluginObjCLanguage PLUGIN
     lldbUtility
     lldbPluginAppleObjCRuntime
     lldbPluginClangCommon
+    lldbPluginTypeSystemClang
+  CLANG_LIBS
+    clangAST
 
   EXTRA_CXXFLAGS ${EXTRA_CXXFLAGS}
 )

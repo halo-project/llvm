@@ -59,13 +59,15 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
-#include "llvm/Transforms/Utils/Local.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/PatternMatch.h"
+#include "llvm/InitializePasses.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
+#include "llvm/Transforms/Utils/Local.h"
 
 using namespace llvm;
 using namespace PatternMatch;
@@ -422,22 +424,20 @@ static bool isPredicatedOnPHI(CallSite CS) {
   if (Instr != Parent->getFirstNonPHIOrDbg())
     return false;
 
-  for (auto &BI : *Parent) {
-    if (PHINode *PN = dyn_cast<PHINode>(&BI)) {
-      for (auto &I : CS.args())
-        if (&*I == PN) {
-          assert(PN->getNumIncomingValues() == 2 &&
-                 "Unexpected number of incoming values");
-          if (PN->getIncomingBlock(0) == PN->getIncomingBlock(1))
-            return false;
-          if (PN->getIncomingValue(0) == PN->getIncomingValue(1))
-            continue;
-          if (isa<Constant>(PN->getIncomingValue(0)) &&
-              isa<Constant>(PN->getIncomingValue(1)))
-            return true;
-        }
+  for (auto &PN : Parent->phis()) {
+    for (auto &Arg : CS.args()) {
+      if (&*Arg != &PN)
+        continue;
+      assert(PN.getNumIncomingValues() == 2 &&
+             "Unexpected number of incoming values");
+      if (PN.getIncomingBlock(0) == PN.getIncomingBlock(1))
+        return false;
+      if (PN.getIncomingValue(0) == PN.getIncomingValue(1))
+        continue;
+      if (isa<Constant>(PN.getIncomingValue(0)) &&
+          isa<Constant>(PN.getIncomingValue(1)))
+        return true;
     }
-    break;
   }
   return false;
 }
@@ -562,7 +562,7 @@ struct CallSiteSplittingLegacyPass : public FunctionPass {
     if (skipFunction(F))
       return false;
 
-    auto &TLI = getAnalysis<TargetLibraryInfoWrapperPass>().getTLI();
+    auto &TLI = getAnalysis<TargetLibraryInfoWrapperPass>().getTLI(F);
     auto &TTI = getAnalysis<TargetTransformInfoWrapperPass>().getTTI(F);
     auto &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
     return doCallSiteSplitting(F, TLI, TTI, DT);

@@ -1,4 +1,4 @@
-//===-- TestObjectFileELF.cpp -----------------------------------*- C++ -*-===//
+//===-- TestObjectFileELF.cpp ---------------------------------------------===//
 //
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -9,6 +9,7 @@
 
 #include "Plugins/ObjectFile/ELF/ObjectFileELF.h"
 #include "Plugins/SymbolFile/Symtab/SymbolFileSymtab.h"
+#include "TestingSupport/SubsystemRAII.h"
 #include "TestingSupport/TestUtilities.h"
 #include "lldb/Core/Module.h"
 #include "lldb/Core/ModuleSpec.h"
@@ -29,35 +30,70 @@ using namespace lldb_private;
 using namespace lldb;
 
 class ObjectFileELFTest : public testing::Test {
-public:
-  void SetUp() override {
-    FileSystem::Initialize();
-    HostInfo::Initialize();
-    ObjectFileELF::Initialize();
-    SymbolFileSymtab::Initialize();
-  }
-
-  void TearDown() override {
-    SymbolFileSymtab::Terminate();
-    ObjectFileELF::Terminate();
-    HostInfo::Terminate();
-    FileSystem::Terminate();
-  }
-
-protected:
+  SubsystemRAII<FileSystem, HostInfo, ObjectFileELF, SymbolFileSymtab>
+      subsystems;
 };
 
 TEST_F(ObjectFileELFTest, SectionsResolveConsistently) {
-  llvm::SmallString<128> obj;
-  ASSERT_NO_ERROR(llvm::sys::fs::createTemporaryFile(
-      "sections-resolve-consistently-%%%%%%", "obj", obj));
-  llvm::FileRemover remover(obj);
-  ASSERT_THAT_ERROR(
-      ReadYAMLObjectFile("sections-resolve-consistently.yaml", obj),
-      llvm::Succeeded());
+  auto ExpectedFile = TestFile::fromYaml(R"(
+--- !ELF
+FileHeader:
+  Class:           ELFCLASS64
+  Data:            ELFDATA2LSB
+  Type:            ET_EXEC
+  Machine:         EM_X86_64
+  Entry:           0x0000000000400180
+Sections:
+  - Name:            .note.gnu.build-id
+    Type:            SHT_NOTE
+    Flags:           [ SHF_ALLOC ]
+    Address:         0x0000000000400158
+    AddressAlign:    0x0000000000000004
+    Content:         040000001400000003000000474E55003F3EC29E3FD83E49D18C4D49CD8A730CC13117B6
+  - Name:            .text
+    Type:            SHT_PROGBITS
+    Flags:           [ SHF_ALLOC, SHF_EXECINSTR ]
+    Address:         0x0000000000400180
+    AddressAlign:    0x0000000000000010
+    Content:         554889E58B042500106000890425041060005DC3
+  - Name:            .data
+    Type:            SHT_PROGBITS
+    Flags:           [ SHF_WRITE, SHF_ALLOC ]
+    Address:         0x0000000000601000
+    AddressAlign:    0x0000000000000004
+    Content:         2F000000
+  - Name:            .bss
+    Type:            SHT_NOBITS
+    Flags:           [ SHF_WRITE, SHF_ALLOC ]
+    Address:         0x0000000000601004
+    AddressAlign:    0x0000000000000004
+    Size:            0x0000000000000004
+Symbols:
+  - Name:            Y
+    Type:            STT_OBJECT
+    Section:         .data
+    Value:           0x0000000000601000
+    Size:            0x0000000000000004
+    Binding:         STB_GLOBAL
+  - Name:            _start
+    Type:            STT_FUNC
+    Section:         .text
+    Value:           0x0000000000400180
+    Size:            0x0000000000000014
+    Binding:         STB_GLOBAL
+  - Name:            X
+    Type:            STT_OBJECT
+    Section:         .bss
+    Value:           0x0000000000601004
+    Size:            0x0000000000000004
+    Binding:         STB_GLOBAL
+...
+)");
+  ASSERT_THAT_EXPECTED(ExpectedFile, llvm::Succeeded());
 
-  ModuleSpec spec{FileSpec(obj)};
-  spec.GetSymbolFileSpec().SetFile(obj, FileSpec::Style::native);
+  ModuleSpec spec{FileSpec(ExpectedFile->name())};
+  spec.GetSymbolFileSpec().SetFile(ExpectedFile->name(),
+                                   FileSpec::Style::native);
   auto module_sp = std::make_shared<Module>(spec);
   SectionList *list = module_sp->GetSectionList();
   ASSERT_NE(nullptr, list);
@@ -122,4 +158,130 @@ TEST_F(ObjectFileELFTest, GetModuleSpecifications_EarlySectionHeaders) {
   UUID Uuid;
   Uuid.SetFromStringRef("1b8a73ac238390e32a7ff4ac8ebe4d6a41ecf5c9", 20);
   EXPECT_EQ(Spec.GetUUID(), Uuid);
+}
+
+TEST_F(ObjectFileELFTest, GetSymtab_NoSymEntryPointArmThumbAddressClass) {
+  /*
+  // nosym-entrypoint-arm-thumb.s
+  .thumb_func
+  _start:
+      mov r0, #42
+      mov r7, #1
+      svc #0
+  // arm-linux-androideabi-as nosym-entrypoint-arm-thumb.s
+  //   -o nosym-entrypoint-arm-thumb.o
+  // arm-linux-androideabi-ld nosym-entrypoint-arm-thumb.o
+  //   -o nosym-entrypoint-arm-thumb -e 0x8075 -s
+  */
+  auto ExpectedFile = TestFile::fromYaml(R"(
+--- !ELF
+FileHeader:
+  Class:           ELFCLASS32
+  Data:            ELFDATA2LSB
+  Type:            ET_EXEC
+  Machine:         EM_ARM
+  Flags:           [ EF_ARM_SOFT_FLOAT, EF_ARM_EABI_VER5 ]
+  Entry:           0x0000000000008075
+Sections:
+  - Name:            .text
+    Type:            SHT_PROGBITS
+    Flags:           [ SHF_ALLOC, SHF_EXECINSTR ]
+    Address:         0x0000000000008074
+    AddressAlign:    0x0000000000000002
+    Content:         2A20012700DF
+  - Name:            .data
+    Type:            SHT_PROGBITS
+    Flags:           [ SHF_WRITE, SHF_ALLOC ]
+    Address:         0x0000000000009000
+    AddressAlign:    0x0000000000000001
+    Content:         ''
+  - Name:            .bss
+    Type:            SHT_NOBITS
+    Flags:           [ SHF_WRITE, SHF_ALLOC ]
+    Address:         0x0000000000009000
+    AddressAlign:    0x0000000000000001
+  - Name:            .note.gnu.gold-version
+    Type:            SHT_NOTE
+    AddressAlign:    0x0000000000000004
+    Content:         040000000900000004000000474E5500676F6C6420312E3131000000
+  - Name:            .ARM.attributes
+    Type:            SHT_ARM_ATTRIBUTES
+    AddressAlign:    0x0000000000000001
+    Content:         '4113000000616561626900010900000006020901'
+...
+)");
+  ASSERT_THAT_EXPECTED(ExpectedFile, llvm::Succeeded());
+
+  ModuleSpec spec{FileSpec(ExpectedFile->name())};
+  spec.GetSymbolFileSpec().SetFile(ExpectedFile->name(),
+                                   FileSpec::Style::native);
+  auto module_sp = std::make_shared<Module>(spec);
+
+  auto entry_point_addr = module_sp->GetObjectFile()->GetEntryPointAddress();
+  ASSERT_TRUE(entry_point_addr.GetOffset() & 1);
+  // Decrease the offsite by 1 to make it into a breakable address since this
+  // is Thumb.
+  entry_point_addr.SetOffset(entry_point_addr.GetOffset() - 1);
+  ASSERT_EQ(entry_point_addr.GetAddressClass(),
+            AddressClass::eCodeAlternateISA);
+}
+
+TEST_F(ObjectFileELFTest, GetSymtab_NoSymEntryPointArmAddressClass) {
+  /*
+  // nosym-entrypoint-arm.s
+  _start:
+      movs r0, #42
+      movs r7, #1
+      svc #0
+  // arm-linux-androideabi-as nosym-entrypoint-arm.s
+  //   -o nosym-entrypoint-arm.o
+  // arm-linux-androideabi-ld nosym-entrypoint-arm.o
+  //   -o nosym-entrypoint-arm -e 0x8074 -s
+  */
+  auto ExpectedFile = TestFile::fromYaml(R"(
+--- !ELF
+FileHeader:
+  Class:           ELFCLASS32
+  Data:            ELFDATA2LSB
+  Type:            ET_EXEC
+  Machine:         EM_ARM
+  Flags:           [ EF_ARM_SOFT_FLOAT, EF_ARM_EABI_VER5 ]
+  Entry:           0x0000000000008074
+Sections:
+  - Name:            .text
+    Type:            SHT_PROGBITS
+    Flags:           [ SHF_ALLOC, SHF_EXECINSTR ]
+    Address:         0x0000000000008074
+    AddressAlign:    0x0000000000000004
+    Content:         2A00A0E30170A0E3000000EF
+  - Name:            .data
+    Type:            SHT_PROGBITS
+    Flags:           [ SHF_WRITE, SHF_ALLOC ]
+    Address:         0x0000000000009000
+    AddressAlign:    0x0000000000000001
+    Content:         ''
+  - Name:            .bss
+    Type:            SHT_NOBITS
+    Flags:           [ SHF_WRITE, SHF_ALLOC ]
+    Address:         0x0000000000009000
+    AddressAlign:    0x0000000000000001
+  - Name:            .note.gnu.gold-version
+    Type:            SHT_NOTE
+    AddressAlign:    0x0000000000000004
+    Content:         040000000900000004000000474E5500676F6C6420312E3131000000
+  - Name:            .ARM.attributes
+    Type:            SHT_ARM_ATTRIBUTES
+    AddressAlign:    0x0000000000000001
+    Content:         '4113000000616561626900010900000006010801'
+...
+)");
+  ASSERT_THAT_EXPECTED(ExpectedFile, llvm::Succeeded());
+
+  ModuleSpec spec{FileSpec(ExpectedFile->name())};
+  spec.GetSymbolFileSpec().SetFile(ExpectedFile->name(),
+                                   FileSpec::Style::native);
+  auto module_sp = std::make_shared<Module>(spec);
+
+  auto entry_point_addr = module_sp->GetObjectFile()->GetEntryPointAddress();
+  ASSERT_EQ(entry_point_addr.GetAddressClass(), AddressClass::eCode);
 }

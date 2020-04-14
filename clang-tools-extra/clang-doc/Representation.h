@@ -61,7 +61,7 @@ struct CommentInfo {
       return false;
 
     return std::equal(Children.begin(), Children.end(), Other.Children.begin(),
-                      llvm::deref<llvm::equal>{});
+                      llvm::deref<std::equal_to<>>{});
   }
 
   // This operator is used to sort a vector of CommentInfos.
@@ -82,7 +82,7 @@ struct CommentInfo {
     if (FirstCI == SecondCI) {
       return std::lexicographical_compare(
           Children.begin(), Children.end(), Other.Children.begin(),
-          Other.Children.end(), llvm::deref<llvm::less>());
+          Other.Children.end(), llvm::deref<std::less<>>());
     }
 
     return false;
@@ -135,7 +135,13 @@ struct Reference {
   bool mergeable(const Reference &Other);
   void merge(Reference &&I);
 
-  SymbolID USR = SymbolID(); // Unique identifer for referenced decl
+  /// Returns the path for this Reference relative to CurrentPath.
+  llvm::SmallString<64> getRelativeFilePath(const StringRef &CurrentPath) const;
+
+  /// Returns the basename that should be used for this Reference.
+  llvm::SmallString<16> getFileBaseName() const;
+
+  SymbolID USR = SymbolID(); // Unique identifier for referenced decl
   SmallString<16> Name;      // Name of type (possibly unresolved).
   InfoType RefType = InfoType::IT_default; // Indicates the type of this
                                            // Reference (namespace, record,
@@ -261,6 +267,12 @@ struct Info {
   bool mergeable(const Info &Other);
 
   llvm::SmallString<16> extractName() const;
+
+  /// Returns the file path for this Info relative to CurrentPath.
+  llvm::SmallString<64> getRelativeFilePath(const StringRef &CurrentPath) const;
+
+  /// Returns the basename that should be used for this Info.
+  llvm::SmallString<16> getFileBaseName() const;
 
   // Returns a reference to the parent scope (that is, the immediate parent
   // namespace or class in which this decl resides).

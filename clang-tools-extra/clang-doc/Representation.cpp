@@ -34,8 +34,8 @@ template <typename T>
 llvm::Expected<std::unique_ptr<Info>>
 reduce(std::vector<std::unique_ptr<Info>> &Values) {
   if (Values.empty())
-    return llvm::make_error<llvm::StringError>(" No values to reduce.\n",
-                                               llvm::inconvertibleErrorCode());
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   "no value to reduce");
   std::unique_ptr<Info> Merged = std::make_unique<T>(Values[0]->USR);
   T *Tmp = static_cast<T *>(Merged.get());
   for (auto &I : Values)
@@ -96,8 +96,8 @@ void reduceChildren(std::vector<EnumInfo> &Children,
 llvm::Expected<std::unique_ptr<Info>>
 mergeInfos(std::vector<std::unique_ptr<Info>> &Values) {
   if (Values.empty())
-    return llvm::make_error<llvm::StringError>("No info values to merge.\n",
-                                               llvm::inconvertibleErrorCode());
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   "no info values to merge");
 
   switch (Values[0]->IT) {
   case InfoType::IT_namespace:
@@ -109,9 +109,55 @@ mergeInfos(std::vector<std::unique_ptr<Info>> &Values) {
   case InfoType::IT_function:
     return reduce<FunctionInfo>(Values);
   default:
-    return llvm::make_error<llvm::StringError>("Unexpected info type.\n",
-                                               llvm::inconvertibleErrorCode());
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   "unexpected info type");
   }
+}
+
+static llvm::SmallString<64>
+calculateRelativeFilePath(const InfoType &Type, const StringRef &Path,
+                          const StringRef &Name, const StringRef &CurrentPath) {
+  llvm::SmallString<64> FilePath;
+
+  if (CurrentPath != Path) {
+    // iterate back to the top
+    for (llvm::sys::path::const_iterator I =
+             llvm::sys::path::begin(CurrentPath);
+         I != llvm::sys::path::end(CurrentPath); ++I)
+      llvm::sys::path::append(FilePath, "..");
+    llvm::sys::path::append(FilePath, Path);
+  }
+
+  // Namespace references have a Path to the parent namespace, but
+  // the file is actually in the subdirectory for the namespace.
+  if (Type == doc::InfoType::IT_namespace)
+    llvm::sys::path::append(FilePath, Name);
+
+  return llvm::sys::path::relative_path(FilePath);
+}
+
+llvm::SmallString<64>
+Reference::getRelativeFilePath(const StringRef &CurrentPath) const {
+  return calculateRelativeFilePath(RefType, Path, Name, CurrentPath);
+}
+
+llvm::SmallString<16> Reference::getFileBaseName() const {
+  if (RefType == InfoType::IT_namespace)
+    return llvm::SmallString<16>("index");
+
+  return Name;
+}
+
+llvm::SmallString<64>
+Info::getRelativeFilePath(const StringRef &CurrentPath) const {
+  return calculateRelativeFilePath(IT, Path, extractName(), CurrentPath);
+}
+
+llvm::SmallString<16> Info::getFileBaseName() const {
+  if (IT == InfoType::IT_namespace)
+    return llvm::SmallString<16>("index");
+
+  return extractName();
 }
 
 bool Reference::mergeable(const Reference &Other) {
@@ -141,7 +187,7 @@ void Info::mergeBase(Info &&Other) {
   // Unconditionally extend the description, since each decl may have a comment.
   std::move(Other.Description.begin(), Other.Description.end(),
             std::back_inserter(Description));
-  std::sort(Description.begin(), Description.end());
+  llvm::sort(Description);
   auto Last = std::unique(Description.begin(), Description.end());
   Description.erase(Last, Description.end());
 }
@@ -156,7 +202,7 @@ void SymbolInfo::merge(SymbolInfo &&Other) {
     DefLoc = std::move(Other.DefLoc);
   // Unconditionally extend the list of locations, since we want all of them.
   std::move(Other.Loc.begin(), Other.Loc.end(), std::back_inserter(Loc));
-  std::sort(Loc.begin(), Loc.end());
+  llvm::sort(Loc);
   auto Last = std::unique(Loc.begin(), Loc.end());
   Loc.erase(Last, Loc.end());
   mergeBase(std::move(Other));
@@ -268,7 +314,7 @@ bool Index::operator<(const Index &Other) const {
 }
 
 void Index::sort() {
-  std::sort(Children.begin(), Children.end());
+  llvm::sort(Children);
   for (auto &C : Children)
     C.sort();
 }
@@ -286,9 +332,9 @@ ClangDocContext::ClangDocContext(tooling::ExecutionContext *ECtx,
   if (SourceRoot.empty())
     // If no SourceRoot was provided the current path is used as the default
     llvm::sys::fs::current_path(SourceRootDir);
-  this->SourceRoot = SourceRootDir.str();
+  this->SourceRoot = std::string(SourceRootDir.str());
   if (!RepositoryUrl.empty()) {
-    this->RepositoryUrl = RepositoryUrl;
+    this->RepositoryUrl = std::string(RepositoryUrl);
     if (!RepositoryUrl.empty() && RepositoryUrl.find("http://") != 0 &&
         RepositoryUrl.find("https://") != 0)
       this->RepositoryUrl->insert(0, "https://");

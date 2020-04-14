@@ -335,7 +335,8 @@ public:
 
     PathDiagnosticLocation CELoc =
         PathDiagnosticLocation::create(RD, BR->getSourceManager());
-    auto Report = std::make_unique<BugReport>(*PaddingBug, Os.str(), CELoc);
+    auto Report =
+        std::make_unique<BasicBugReport>(*PaddingBug, Os.str(), CELoc);
     Report->setDeclWithIssue(RD);
     Report->addRange(RD->getSourceRange());
     BR->emitReport(std::move(Report));
@@ -352,6 +353,6 @@ void ento::registerPaddingChecker(CheckerManager &Mgr) {
         Checker, "AllowedPad", "a non-negative value");
 }
 
-bool ento::shouldRegisterPaddingChecker(const LangOptions &LO) {
+bool ento::shouldRegisterPaddingChecker(const CheckerManager &mgr) {
   return true;
 }

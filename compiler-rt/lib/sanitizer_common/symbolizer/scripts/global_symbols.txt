@@ -47,6 +47,7 @@ catclose U
 catgets U
 catopen U
 ceil U
+ceilf U
 clock_gettime U
 cfgetospeed U
 dl_iterate_phdr U
@@ -75,9 +76,11 @@ getpid U
 getrlimit U
 gettimeofday U
 ioctl U
+isalnum U
 isalpha U
 isatty U
 islower U
+isspace U
 isprint U
 isupper U
 isxdigit U

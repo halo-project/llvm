@@ -66,6 +66,10 @@ uptr internal_getpid() {
   return pid;
 }
 
+int internal_dlinfo(void *handle, int request, void *p) {
+  UNIMPLEMENTED();
+}
+
 uptr GetThreadSelf() { return reinterpret_cast<uptr>(thrd_current()); }
 
 tid_t GetTid() { return GetThreadSelf(); }
@@ -502,7 +506,7 @@ uptr GetRSS() { UNIMPLEMENTED(); }
 
 }  // namespace __sanitizer
 
-using namespace __sanitizer;  // NOLINT
+using namespace __sanitizer;
 
 extern "C" {
 void __sanitizer_startup_hook(int argc, char **argv, char **envp,

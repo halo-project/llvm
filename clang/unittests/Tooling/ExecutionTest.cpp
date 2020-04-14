@@ -78,7 +78,9 @@ private:
 class ReportResultActionFactory : public FrontendActionFactory {
 public:
   ReportResultActionFactory(ExecutionContext *Context) : Context(Context) {}
-  FrontendAction *create() override { return new ReportResultAction(Context); }
+  std::unique_ptr<FrontendAction> create() override {
+    return std::make_unique<ReportResultAction>(Context);
+  }
 
 private:
   ExecutionContext *const Context;
@@ -110,7 +112,7 @@ public:
   }
 
   void mapVirtualFile(StringRef FilePath, StringRef Content) override {
-    VFS[FilePath] = Content;
+    VFS[std::string(FilePath)] = std::string(Content);
   }
 
 private:
@@ -287,7 +289,7 @@ TEST(AllTUsToolTest, ManyFiles) {
   ASSERT_TRUE(!Err);
   std::vector<std::string> Results;
   Executor.getToolResults()->forEachResult(
-      [&](StringRef Name, StringRef) { Results.push_back(Name); });
+      [&](StringRef Name, StringRef) { Results.push_back(std::string(Name)); });
   EXPECT_THAT(ExpectedSymbols, ::testing::UnorderedElementsAreArray(Results));
 }
 

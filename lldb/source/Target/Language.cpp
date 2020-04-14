@@ -1,5 +1,4 @@
-//===-- Language.cpp -------------------------------------------------*- C++
-//-*-===//
+//===-- Language.cpp ------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -131,11 +130,6 @@ HardcodedFormatters::HardcodedSummaryFinder Language::GetHardcodedSummaries() {
 
 HardcodedFormatters::HardcodedSyntheticFinder
 Language::GetHardcodedSynthetics() {
-  return {};
-}
-
-HardcodedFormatters::HardcodedValidatorFinder
-Language::GetHardcodedValidators() {
   return {};
 }
 
@@ -357,26 +351,16 @@ std::set<lldb::LanguageType> Language::GetSupportedLanguages() {
   return supported_languages;
 }
 
-void Language::GetLanguagesSupportingTypeSystems(
-    std::set<lldb::LanguageType> &languages,
-    std::set<lldb::LanguageType> &languages_for_expressions) {
-  uint32_t idx = 0;
-
-  while (TypeSystemEnumerateSupportedLanguages enumerate = PluginManager::
-             GetTypeSystemEnumerateSupportedLanguagesCallbackAtIndex(idx++)) {
-    (*enumerate)(languages, languages_for_expressions);
-  }
+LanguageSet Language::GetLanguagesSupportingTypeSystems() {
+  return PluginManager::GetAllTypeSystemSupportedLanguagesForTypes();
 }
 
-void Language::GetLanguagesSupportingREPLs(
-    std::set<lldb::LanguageType> &languages) {
-  uint32_t idx = 0;
+LanguageSet Language::GetLanguagesSupportingTypeSystemsForExpressions() {
+  return PluginManager::GetAllTypeSystemSupportedLanguagesForExpressions();
+}
 
-  while (REPLEnumerateSupportedLanguages enumerate =
-             PluginManager::GetREPLEnumerateSupportedLanguagesCallbackAtIndex(
-                 idx++)) {
-    (*enumerate)(languages);
-  }
+LanguageSet Language::GetLanguagesSupportingREPLs() {
+  return PluginManager::GetREPLAllTypeSystemSupportedLanguages();
 }
 
 std::unique_ptr<Language::TypeScavenger> Language::GetTypeScavenger() {

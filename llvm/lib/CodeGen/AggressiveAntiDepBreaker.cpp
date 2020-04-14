@@ -790,7 +790,7 @@ unsigned AggressiveAntiDepBreaker::BreakAntiDependencies(
         CriticalPathSU = SU;
       }
     }
-
+    assert(CriticalPathSU && "Failed to find SUnit critical path");
     CriticalPathMI = CriticalPathSU->getInstr();
   }
 
@@ -1010,4 +1010,10 @@ unsigned AggressiveAntiDepBreaker::BreakAntiDependencies(
   }
 
   return Broken;
+}
+
+AntiDepBreaker *llvm::createAggressiveAntiDepBreaker(
+    MachineFunction &MFi, const RegisterClassInfo &RCI,
+    TargetSubtargetInfo::RegClassVector &CriticalPathRCs) {
+  return new AggressiveAntiDepBreaker(MFi, RCI, CriticalPathRCs);
 }

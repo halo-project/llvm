@@ -28,7 +28,8 @@ static_library("Core") {
     "CommonBugCategories.cpp",
     "ConstraintManager.cpp",
     "CoreEngine.cpp",
-    "DynamicTypeMap.cpp",
+    "DynamicSize.cpp",
+    "DynamicType.cpp",
     "Environment.cpp",
     "ExplodedGraph.cpp",
     "ExprEngine.cpp",
@@ -42,7 +43,6 @@ static_library("Core") {
     "LoopUnrolling.cpp",
     "LoopWidening.cpp",
     "MemRegion.cpp",
-    "PathDiagnostic.cpp",
     "PlistDiagnostics.cpp",
     "ProgramState.cpp",
     "RangeConstraintManager.cpp",
@@ -57,6 +57,7 @@ static_library("Core") {
     "Store.cpp",
     "SubEngine.cpp",
     "SymbolManager.cpp",
+    "TextDiagnostics.cpp",
     "WorkList.cpp",
   ]
 }

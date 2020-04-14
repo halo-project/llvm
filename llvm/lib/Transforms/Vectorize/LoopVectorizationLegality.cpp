@@ -13,12 +13,16 @@
 // pass. It should be easy to create an analysis pass around it if there
 // is a need (but D45420 needs to happen first).
 //
-#include "llvm/Transforms/Vectorize/LoopVectorize.h"
 #include "llvm/Transforms/Vectorize/LoopVectorizationLegality.h"
+#include "llvm/Analysis/Loads.h"
+#include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Analysis/VectorUtils.h"
 #include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/PatternMatch.h"
+#include "llvm/Transforms/Vectorize/LoopVectorize.h"
 
 using namespace llvm;
+using namespace PatternMatch;
 
 #define LV_NAME "loop-vectorize"
 #define DEBUG_TYPE LV_NAME
@@ -70,7 +74,7 @@ LoopVectorizeHints::LoopVectorizeHints(const Loop *L,
       Interleave("interleave.count", InterleaveOnlyWhenForced, HK_UNROLL),
       Force("vectorize.enable", FK_Undefined, HK_FORCE),
       IsVectorized("isvectorized", 0, HK_ISVECTORIZED),
-      Predicate("vectorize.predicate.enable", 0, HK_PREDICATE), TheLoop(L),
+      Predicate("vectorize.predicate.enable", FK_Undefined, HK_PREDICATE), TheLoop(L),
       ORE(ORE) {
   // Populate values with existing loop metadata.
   getHintsFromMetadata();
@@ -407,7 +411,8 @@ int LoopVectorizationLegality::isConsecutivePtr(Value *Ptr) {
   const ValueToValueMap &Strides =
       getSymbolicStrides() ? *getSymbolicStrides() : ValueToValueMap();
 
-  int Stride = getPtrStride(PSE, Ptr, TheLoop, Strides, true, false);
+  bool CanAddPredicate = !TheLoop->getHeader()->getParent()->hasOptSize();
+  int Stride = getPtrStride(PSE, Ptr, TheLoop, Strides, CanAddPredicate, false);
   if (Stride == 1 || Stride == -1)
     return Stride;
   return 0;
@@ -563,6 +568,28 @@ bool LoopVectorizationLegality::setupOuterLoopInductions() {
     return false;
 }
 
+/// Checks if a function is scalarizable according to the TLI, in
+/// the sense that it should be vectorized and then expanded in
+/// multiple scalarcalls. This is represented in the
+/// TLI via mappings that do not specify a vector name, as in the
+/// following example:
+///
+///    const VecDesc VecIntrinsics[] = {
+///      {"llvm.phx.abs.i32", "", 4}
+///    };
+static bool isTLIScalarize(const TargetLibraryInfo &TLI, const CallInst &CI) {
+  const StringRef ScalarName = CI.getCalledFunction()->getName();
+  bool Scalarize = TLI.isFunctionVectorizable(ScalarName);
+  // Check that all known VFs are not associated to a vector
+  // function, i.e. the vector name is emty.
+  if (Scalarize)
+    for (unsigned VF = 2, WidestVF = TLI.getWidestVF(ScalarName);
+         VF <= WidestVF; VF *= 2) {
+      Scalarize &= !TLI.isFunctionVectorizable(ScalarName, VF);
+    }
+  return Scalarize;
+}
+
 bool LoopVectorizationLegality::canVectorizeInstrs() {
   BasicBlock *Header = TheLoop->getHeader();
 
@@ -595,6 +622,7 @@ bool LoopVectorizationLegality::canVectorizeInstrs() {
           // Unsafe cyclic dependencies with header phis are identified during
           // legalization for reduction, induction and first order
           // recurrences.
+          AllowedExit.insert(&I);
           continue;
         }
 
@@ -663,10 +691,12 @@ bool LoopVectorizationLegality::canVectorizeInstrs() {
       //   * Have a mapping to an IR intrinsic.
       //   * Have a vector version available.
       auto *CI = dyn_cast<CallInst>(&I);
+
       if (CI && !getVectorIntrinsicIDForCall(CI, TLI) &&
           !isa<DbgInfoIntrinsic>(CI) &&
           !(CI->getCalledFunction() && TLI &&
-            TLI->isFunctionVectorizable(CI->getCalledFunction()->getName()))) {
+            (!VFDatabase::getMappings(*CI).empty() ||
+             isTLIScalarize(*TLI, *CI)))) {
         // If the call is a recognized math libary call, it is likely that
         // we can vectorize it given loosened floating-point constraints.
         LibFunc Func;
@@ -681,7 +711,8 @@ bool LoopVectorizationLegality::canVectorizeInstrs() {
           // but it's hard to provide meaningful yet generic advice.
           // Also, should this be guarded by allowExtraAnalysis() and/or be part
           // of the returned info from isFunctionVectorizable()?
-          reportVectorizationFailure("Found a non-intrinsic callsite",
+          reportVectorizationFailure(
+              "Found a non-intrinsic callsite",
               "library call cannot be vectorized. "
               "Try compiling with -fno-math-errno, -ffast-math, "
               "or similar flags",
@@ -737,8 +768,9 @@ bool LoopVectorizationLegality::canVectorizeInstrs() {
           // Arbitrarily try a vector of 2 elements.
           Type *VecTy = VectorType::get(T, /*NumElements=*/2);
           assert(VecTy && "did not find vectorized version of stored type");
-          unsigned Alignment = getLoadStoreAlignment(ST);
-          if (!TTI->isLegalNTStore(VecTy, Alignment)) {
+          const MaybeAlign Alignment = getLoadStoreAlignment(ST);
+          assert(Alignment && "Alignment should be set");
+          if (!TTI->isLegalNTStore(VecTy, *Alignment)) {
             reportVectorizationFailure(
                 "nontemporal store instruction cannot be vectorized",
                 "nontemporal store instruction cannot be vectorized",
@@ -753,8 +785,9 @@ bool LoopVectorizationLegality::canVectorizeInstrs() {
           // supported on the target (arbitrarily try a vector of 2 elements).
           Type *VecTy = VectorType::get(I.getType(), /*NumElements=*/2);
           assert(VecTy && "did not find vectorized version of load type");
-          unsigned Alignment = getLoadStoreAlignment(LD);
-          if (!TTI->isLegalNTLoad(VecTy, Alignment)) {
+          const MaybeAlign Alignment = getLoadStoreAlignment(LD);
+          assert(Alignment && "Alignment should be set");
+          if (!TTI->isLegalNTLoad(VecTy, *Alignment)) {
             reportVectorizationFailure(
                 "nontemporal load instruction cannot be vectorized",
                 "nontemporal load instruction cannot be vectorized",
@@ -808,6 +841,18 @@ bool LoopVectorizationLegality::canVectorizeInstrs() {
       LLVM_DEBUG(dbgs() << "LV: Did not find one integer induction var.\n");
     }
   }
+
+  // For first order recurrences, we use the previous value (incoming value from
+  // the latch) to check if it dominates all users of the recurrence. Bail out
+  // if we have to sink such an instruction for another recurrence, as the
+  // dominance requirement may not hold after sinking.
+  BasicBlock *LoopLatch = TheLoop->getLoopLatch();
+  if (any_of(FirstOrderRecurrences, [LoopLatch, this](const PHINode *Phi) {
+        Instruction *V =
+            cast<Instruction>(Phi->getIncomingValueForBlock(LoopLatch));
+        return SinkAfter.find(V) != SinkAfter.end();
+      }))
+    return false;
 
   // Now we know the widest induction type, check if our found induction
   // is the same size. If it's not, unset it here and InnerLoopVectorizer
@@ -879,6 +924,14 @@ bool LoopVectorizationLegality::blockCanBePredicated(
         if (C->canTrap())
           return false;
     }
+
+    // We can predicate blocks with calls to assume, as long as we drop them in
+    // case we flatten the CFG via predication.
+    if (match(&I, m_Intrinsic<Intrinsic::assume>())) {
+      ConditionalAssumes.insert(&I);
+      continue;
+    }
+
     // We might be able to hoist the load.
     if (I.mayReadFromMemory()) {
       auto *LI = dyn_cast<LoadInst>(&I);
@@ -924,17 +977,34 @@ bool LoopVectorizationLegality::canVectorizeWithIfConvert() {
 
   assert(TheLoop->getNumBlocks() > 1 && "Single block loops are vectorizable");
 
-  // A list of pointers that we can safely read and write to.
+  // A list of pointers which are known to be dereferenceable within scope of
+  // the loop body for each iteration of the loop which executes.  That is,
+  // the memory pointed to can be dereferenced (with the access size implied by
+  // the value's type) unconditionally within the loop header without
+  // introducing a new fault.
   SmallPtrSet<Value *, 8> SafePointes;
 
   // Collect safe addresses.
   for (BasicBlock *BB : TheLoop->blocks()) {
-    if (blockNeedsPredication(BB))
+    if (!blockNeedsPredication(BB)) {
+      for (Instruction &I : *BB)
+        if (auto *Ptr = getLoadStorePointerOperand(&I))
+          SafePointes.insert(Ptr);
       continue;
+    }
 
-    for (Instruction &I : *BB)
-      if (auto *Ptr = getLoadStorePointerOperand(&I))
-        SafePointes.insert(Ptr);
+    // For a block which requires predication, a address may be safe to access
+    // in the loop w/o predication if we can prove dereferenceability facts
+    // sufficient to ensure it'll never fault within the loop. For the moment,
+    // we restrict this to loads; stores are more complicated due to
+    // concurrency restrictions.
+    ScalarEvolution &SE = *PSE.getSE();
+    for (Instruction &I : *BB) {
+      LoadInst *LI = dyn_cast<LoadInst>(&I);
+      if (LI && !mustSuppressSpeculation(*LI) &&
+          isDereferenceableAndAlignedInLoop(LI, TheLoop, SE, *DT))
+        SafePointes.insert(LI->getPointerOperand());
+    }
   }
 
   // Collect the blocks that need predication.
@@ -1163,27 +1233,17 @@ bool LoopVectorizationLegality::prepareToFoldTailByMasking() {
 
   LLVM_DEBUG(dbgs() << "LV: checking if tail can be folded by masking.\n");
 
-  if (!PrimaryInduction) {
-    reportVectorizationFailure(
-        "No primary induction, cannot fold tail by masking",
-        "Missing a primary induction variable in the loop, which is "
-        "needed in order to fold tail by masking as required.",
-        "NoPrimaryInduction", ORE, TheLoop);
-    return false;
-  }
+  SmallPtrSet<const Value *, 8> ReductionLiveOuts;
 
-  // TODO: handle reductions when tail is folded by masking.
-  if (!Reductions.empty()) {
-    reportVectorizationFailure(
-        "Loop has reductions, cannot fold tail by masking",
-        "Cannot fold tail by masking in the presence of reductions.",
-        "ReductionFoldingTailByMasking", ORE, TheLoop);
-    return false;
-  }
+  for (auto &Reduction : getReductionVars())
+    ReductionLiveOuts.insert(Reduction.second.getLoopExitInstr());
 
-  // TODO: handle outside users when tail is folded by masking.
+  // TODO: handle non-reduction outside users when tail is folded by masking.
   for (auto *AE : AllowedExit) {
-    // Check that all users of allowed exit values are inside the loop.
+    // Check that all users of allowed exit values are inside the loop or
+    // are the live-out of a reduction.
+    if (ReductionLiveOuts.count(AE))
+      continue;
     for (User *U : AE->users()) {
       Instruction *UI = cast<Instruction>(U);
       if (TheLoop->contains(UI))

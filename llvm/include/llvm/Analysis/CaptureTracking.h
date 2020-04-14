@@ -17,9 +17,9 @@ namespace llvm {
 
   class Value;
   class Use;
+  class DataLayout;
   class Instruction;
   class DominatorTree;
-  class OrderedBasicBlock;
 
   /// The default value for MaxUsesToExplore argument. It's relatively small to
   /// keep the cost of analysis reasonable for clients like BasicAliasAnalysis,
@@ -52,14 +52,12 @@ namespace llvm {
   /// it or not.  The boolean StoreCaptures specified whether storing the value
   /// (or part of it) into memory anywhere automatically counts as capturing it
   /// or not. Captures by the provided instruction are considered if the
-  /// final parameter is true. An ordered basic block in \p OBB could be used
-  /// to speed up capture-tracker queries.
+  /// final parameter is true.
   /// MaxUsesToExplore specifies how many uses should the analysis explore for
   /// one value before giving up due too "too many uses".
   bool PointerMayBeCapturedBefore(const Value *V, bool ReturnCaptures,
                                   bool StoreCaptures, const Instruction *I,
                                   const DominatorTree *DT, bool IncludeI = false,
-                                  OrderedBasicBlock *OBB = nullptr,
                                   unsigned MaxUsesToExplore = DefaultMaxUsesToExplore);
 
   /// This callback is used in conjunction with PointerMayBeCaptured. In
@@ -83,6 +81,11 @@ namespace llvm {
     /// use U. Return true to stop the traversal or false to continue looking
     /// for more capturing instructions.
     virtual bool captured(const Use *U) = 0;
+
+    /// isDereferenceableOrNull - Overload to allow clients with additional
+    /// knowledge about pointer dereferenceability to provide it and thereby
+    /// avoid conservative responses when a pointer is compared to null.
+    virtual bool isDereferenceableOrNull(Value *O, const DataLayout &DL);
   };
 
   /// PointerMayBeCaptured - Visit the value and the values derived from it and

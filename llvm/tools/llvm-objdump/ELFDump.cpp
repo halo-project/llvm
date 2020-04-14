@@ -19,6 +19,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm::object;
+using namespace llvm::objdump;
 
 namespace llvm {
 template <class ELFT>
@@ -98,16 +99,19 @@ static Error getRelocationValueString(const ELFObjectFile<ELFT> *Obj,
       if (!SymName)
         return SymName.takeError();
       if (Demangle)
-        Fmt << demangle(*SymName);
+        Fmt << demangle(std::string(*SymName));
       else
         Fmt << *SymName;
     }
   } else {
     Fmt << "*ABS*";
   }
-
-  if (Addend != 0)
-    Fmt << (Addend < 0 ? "" : "+") << Addend;
+  if (Addend != 0) {
+      Fmt << (Addend < 0
+          ? "-"
+          : "+") << format("0x%" PRIx64,
+                          (Addend < 0 ? -(uint64_t)Addend : (uint64_t)Addend));
+  }
   Fmt.flush();
   Result.append(FmtBuf.begin(), FmtBuf.end());
   return Error::success();
@@ -159,13 +163,20 @@ template <class ELFT>
 void printDynamicSection(const ELFFile<ELFT> *Elf, StringRef Filename) {
   ArrayRef<typename ELFT::Dyn> DynamicEntries =
       unwrapOrError(Elf->dynamicEntries(), Filename);
+
+  // Find the maximum tag name length to format the value column properly.
+  size_t MaxLen = 0;
+  for (const typename ELFT::Dyn &Dyn : DynamicEntries)
+    MaxLen = std::max(MaxLen, Elf->getDynamicTagAsString(Dyn.d_tag).size());
+  std::string TagFmt = "  %-" + std::to_string(MaxLen) + "s ";
+
   outs() << "Dynamic Section:\n";
   for (const typename ELFT::Dyn &Dyn : DynamicEntries) {
     if (Dyn.d_tag == ELF::DT_NULL)
       continue;
 
     std::string Str = Elf->getDynamicTagAsString(Dyn.d_tag);
-    outs() << format("  %-21s", Str.c_str());
+    outs() << format(TagFmt.c_str(), Str.c_str());
 
     const char *Fmt =
         ELFT::Is64Bits ? "0x%016" PRIx64 "\n" : "0x%08" PRIx64 "\n";
@@ -178,7 +189,7 @@ void printDynamicSection(const ELFFile<ELFT> *Elf, StringRef Filename) {
         outs() << (Data + Dyn.d_un.d_val) << "\n";
         continue;
       }
-      warn(toString(StrTabOrErr.takeError()));
+      reportWarning(toString(StrTabOrErr.takeError()), Filename);
       consumeError(StrTabOrErr.takeError());
     }
     outs() << format(Fmt, (uint64_t)Dyn.d_un.d_val);
@@ -200,6 +211,9 @@ template <class ELFT> void printProgramHeaders(const ELFFile<ELFT> *o) {
       break;
     case ELF::PT_GNU_RELRO:
       outs() << "   RELRO ";
+      break;
+    case ELF::PT_GNU_PROPERTY:
+      outs() << "   PROPERTY ";
       break;
     case ELF::PT_GNU_STACK:
       outs() << "   STACK ";

@@ -14,9 +14,12 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "ClangTidyMain.h"
 #include "../ClangTidy.h"
 #include "../ClangTidyForceLinker.h"
+#include "../GlobList.h"
 #include "clang/Tooling/CommonOptionsParser.h"
+#include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/TargetSelect.h"
@@ -325,8 +328,8 @@ getVfsFromFile(const std::string &OverlayFile,
   return FS;
 }
 
-static int clangTidyMain(int argc, const char **argv) {
-  llvm::sys::PrintStackTraceOnErrorSignal(argv[0]);
+int clangTidyMain(int argc, const char **argv) {
+  llvm::InitLLVM X(argc, argv);
   CommonOptionsParser OptionsParser(argc, argv, ClangTidyCategory,
                                     cl::ZeroOrMore);
   llvm::IntrusiveRefCntPtr<vfs::OverlayFileSystem> BaseFS(
@@ -364,7 +367,7 @@ static int clangTidyMain(int argc, const char **argv) {
     FileName = PathList.front();
   }
 
-  SmallString<256> FilePath = MakeAbsolute(FileName);
+  SmallString<256> FilePath = MakeAbsolute(std::string(FileName));
 
   ClangTidyOptions EffectiveOptions = OptionsProvider->getOptions(FilePath);
   std::vector<std::string> EnabledChecks =
@@ -486,7 +489,3 @@ static int clangTidyMain(int argc, const char **argv) {
 
 } // namespace tidy
 } // namespace clang
-
-int main(int argc, const char **argv) {
-  return clang::tidy::clangTidyMain(argc, argv);
-}

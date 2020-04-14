@@ -31,9 +31,6 @@ void NonConstReferences::storeOptions(ClangTidyOptions::OptionMap &Opts) {
 }
 
 void NonConstReferences::registerMatchers(MatchFinder *Finder) {
-  if (!getLangOpts().CPlusPlus)
-    return;
-
   Finder->addMatcher(
       parmVarDecl(
           unless(isInstantiated()),
@@ -50,6 +47,9 @@ void NonConstReferences::check(const MatchFinder::MatchResult &Result) {
       dyn_cast_or_null<FunctionDecl>(Parameter->getParentFunctionOrMethod());
 
   if (Function == nullptr || Function->isImplicit())
+    return;
+
+  if (Function->getLocation().isMacroID())
     return;
 
   if (!Function->isCanonicalDecl())

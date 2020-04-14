@@ -24,7 +24,7 @@
 #include "clang/StaticAnalyzer/Core/BugReporter/BugType.h"
 #include "clang/StaticAnalyzer/Core/Checker.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/CheckerContext.h"
-#include "clang/StaticAnalyzer/Core/PathSensitive/DynamicTypeMap.h"
+#include "clang/StaticAnalyzer/Core/PathSensitive/DynamicType.h"
 
 using namespace clang;
 using namespace clang::ento;
@@ -187,7 +187,7 @@ void UninitializedObjectChecker::checkEndFunction(
   if (Opts.ShouldConvertNotesToWarnings) {
     for (const auto &Pair : UninitFields) {
 
-      auto Report = std::make_unique<BugReport>(
+      auto Report = std::make_unique<PathSensitiveBugReport>(
           *BT_uninitField, Pair.second, Node, LocUsedForUniqueing,
           Node->getLocationContext()->getDecl());
       Context.emitReport(std::move(Report));
@@ -201,7 +201,7 @@ void UninitializedObjectChecker::checkEndFunction(
             << (UninitFields.size() == 1 ? "" : "s")
             << " at the end of the constructor call";
 
-  auto Report = std::make_unique<BugReport>(
+  auto Report = std::make_unique<PathSensitiveBugReport>(
       *BT_uninitField, WarningOS.str(), Node, LocUsedForUniqueing,
       Node->getLocationContext()->getDecl());
 
@@ -602,13 +602,13 @@ std::string clang::ento::getVariableName(const FieldDecl *Field) {
     llvm_unreachable("No other capture type is expected!");
   }
 
-  return Field->getName();
+  return std::string(Field->getName());
 }
 
 void ento::registerUninitializedObjectChecker(CheckerManager &Mgr) {
   auto Chk = Mgr.registerChecker<UninitializedObjectChecker>();
 
-  AnalyzerOptions &AnOpts = Mgr.getAnalyzerOptions();
+  const AnalyzerOptions &AnOpts = Mgr.getAnalyzerOptions();
   UninitObjCheckerOptions &ChOpts = Chk->Opts;
 
   ChOpts.IsPedantic = AnOpts.getCheckerBooleanOption(Chk, "Pedantic");
@@ -617,7 +617,7 @@ void ento::registerUninitializedObjectChecker(CheckerManager &Mgr) {
   ChOpts.CheckPointeeInitialization = AnOpts.getCheckerBooleanOption(
       Chk, "CheckPointeeInitialization");
   ChOpts.IgnoredRecordsWithFieldPattern =
-      AnOpts.getCheckerStringOption(Chk, "IgnoreRecordsWithField");
+      std::string(AnOpts.getCheckerStringOption(Chk, "IgnoreRecordsWithField"));
   ChOpts.IgnoreGuardedFields =
       AnOpts.getCheckerBooleanOption(Chk, "IgnoreGuardedFields");
 
@@ -628,6 +628,6 @@ void ento::registerUninitializedObjectChecker(CheckerManager &Mgr) {
         "\"" + ErrorMsg + "\"");
 }
 
-bool ento::shouldRegisterUninitializedObjectChecker(const LangOptions &LO) {
+bool ento::shouldRegisterUninitializedObjectChecker(const CheckerManager &mgr) {
   return true;
 }

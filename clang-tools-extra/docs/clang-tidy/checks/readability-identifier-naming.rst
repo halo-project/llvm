@@ -9,7 +9,7 @@ This check will try to enforce coding guidelines on the identifiers naming. It
 supports one of the following casing types and tries to convert from one to
 another if a mismatch is detected
 
-Casing types inclde:
+Casing types include:
 
  - ``lower_case``,
  - ``UPPER_CASE``,
@@ -25,6 +25,10 @@ to the identifiers, regardless of the casing.
 Many configuration options are available, in order to be able to create
 different rules for different kinds of identifiers. In general, the rules are
 falling back to a more generic rule if the specific case is not configured.
+
+The naming of virtual methods is reported where they occur in the base class,
+but not where they are overridden, as it can't be fixed locally there.
+This also applies for pseudo-override patterns like CRTP.
 
 Options
 -------
@@ -51,6 +55,7 @@ The following options are describe below:
  - :option:`GlobalFunctionCase`, :option:`GlobalFunctionPrefix`, :option:`GlobalFunctionSuffix`
  - :option:`GlobalPointerCase`, :option:`GlobalPointerPrefix`, :option:`GlobalPointerSuffix`
  - :option:`GlobalVariableCase`, :option:`GlobalVariablePrefix`, :option:`GlobalVariableSuffix`
+ - :option:`IgnoreMainLikeFunctions`
  - :option:`InlineNamespaceCase`, :option:`InlineNamespacePrefix`, :option:`InlineNamespaceSuffix`
  - :option:`LocalConstantCase`, :option:`LocalConstantPrefix`, :option:`LocalConstantSuffix`
  - :option:`LocalConstantPointerCase`, :option:`LocalConstantPointerPrefix`, :option:`LocalConstantPointerSuffix`
@@ -822,6 +827,12 @@ After:
 .. code-block:: c++
 
     int pre_global3_post;
+
+.. option:: IgnoreMainLikeFunctions
+
+    When set to `1` functions that have a similar signature to ``main`` or 
+    ``wmain`` won't enforce checks on the names of their parameters.
+    Default value is `0`.
 
 .. option:: InlineNamespaceCase
 

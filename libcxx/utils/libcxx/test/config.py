@@ -6,6 +6,7 @@
 #
 #===----------------------------------------------------------------------===##
 
+import copy
 import locale
 import os
 import platform
@@ -59,7 +60,6 @@ class Configuration(object):
     def __init__(self, lit_config, config):
         self.lit_config = lit_config
         self.config = config
-        self.is_windows = platform.system() == 'Windows'
         self.cxx = None
         self.cxx_is_clang_cl = None
         self.cxx_stdlib_under_test = None
@@ -71,7 +71,7 @@ class Configuration(object):
         self.abi_library_root = None
         self.link_shared = self.get_lit_bool('enable_shared', default=True)
         self.debug_build = self.get_lit_bool('debug_build',   default=False)
-        self.exec_env = dict(os.environ)
+        self.exec_env = dict()
         self.use_target = False
         self.use_system_cxx_lib = False
         self.use_clang_verify = False
@@ -112,23 +112,18 @@ class Configuration(object):
             return check_value(val, env_var)
         return check_value(conf_val, name)
 
-    def get_modules_enabled(self):
-        return self.get_lit_bool('enable_modules',
-                                default=False,
-                                env_var='LIBCXX_ENABLE_MODULES')
-
     def make_static_lib_name(self, name):
         """Return the full filename for the specified library name"""
-        if self.is_windows:
+        if self.target_info.is_windows():
             assert name == 'c++'  # Only allow libc++ to use this function for now.
             return 'lib' + name + '.lib'
         else:
             return 'lib' + name + '.a'
 
     def configure(self):
+        self.configure_target_info()
         self.configure_executor()
         self.configure_use_system_cxx_lib()
-        self.configure_target_info()
         self.configure_cxx()
         self.configure_triple()
         self.configure_deployment()
@@ -141,7 +136,6 @@ class Configuration(object):
         self.configure_execute_external()
         self.configure_ccache()
         self.configure_compile_flags()
-        self.configure_filesystem_compile_flags()
         self.configure_link_flags()
         self.configure_env()
         self.configure_color_diagnostics()
@@ -151,6 +145,8 @@ class Configuration(object):
         self.configure_coverage()
         self.configure_modules()
         self.configure_coroutines()
+        self.configure_blocks()
+        self.configure_objc_arc()
         self.configure_substitutions()
         self.configure_features()
 
@@ -191,16 +187,12 @@ class Configuration(object):
         if te:
             self.lit_config.note("Using executor: %r" % exec_str)
             if self.lit_config.useValgrind:
-                # We have no way of knowing where in the chain the
-                # ValgrindExecutor is supposed to go. It is likely
-                # that the user wants it at the end, but we have no
-                # way of getting at that easily.
-                selt.lit_config.fatal("Cannot infer how to create a Valgrind "
-                                      " executor.")
+                self.lit_config.fatal("The libc++ test suite can't run under Valgrind with a custom executor")
         else:
             te = LocalExecutor()
-            if self.lit_config.useValgrind:
-                te = ValgrindExecutor(self.lit_config.valgrindArgs, te)
+
+        te.target_info = self.target_info
+        self.target_info.executor = te
         self.executor = te
 
     def configure_target_info(self):
@@ -228,16 +220,18 @@ class Configuration(object):
         if not cxx:
             self.lit_config.fatal('must specify user parameter cxx_under_test '
                                   '(e.g., --param=cxx_under_test=clang++)')
-        self.cxx = CXXCompiler(cxx) if not self.cxx_is_clang_cl else \
+        self.cxx = CXXCompiler(self, cxx) if not self.cxx_is_clang_cl else \
                    self._configure_clang_cl(cxx)
         cxx_type = self.cxx.type
         if cxx_type is not None:
             assert self.cxx.version is not None
-            maj_v, min_v, _ = self.cxx.version
+            maj_v, min_v, patch_v = self.cxx.version
             self.config.available_features.add(cxx_type)
             self.config.available_features.add('%s-%s' % (cxx_type, maj_v))
             self.config.available_features.add('%s-%s.%s' % (
                 cxx_type, maj_v, min_v))
+            self.config.available_features.add('%s-%s.%s.%s' % (
+                cxx_type, maj_v, min_v, patch_v))
         self.cxx.compile_env = dict(os.environ)
         # 'CCACHE_CPP2' prevents ccache from stripping comments while
         # preprocessing. This is required to prevent stripping of '-verify'
@@ -258,7 +252,7 @@ class Configuration(object):
         link_flags = _prefixed_env_list('LIB', '-L')
         for path in _split_env_var('LIB'):
             self.add_path(self.exec_env, path)
-        return CXXCompiler(clang_path, flags=flags,
+        return CXXCompiler(self, clang_path, flags=flags,
                            compile_flags=compile_flags,
                            link_flags=link_flags)
 
@@ -326,7 +320,6 @@ class Configuration(object):
                 % self.cxx_stdlib_under_test)
         self.config.available_features.add(self.cxx_stdlib_under_test)
         if self.cxx_stdlib_under_test == 'libstdc++':
-            self.config.available_features.add('libstdc++')
             # Manually enable the experimental and filesystem tests for libstdc++
             # if the options aren't present.
             # FIXME this is a hack.
@@ -375,12 +368,6 @@ class Configuration(object):
             self.cxx.use_ccache = True
             self.lit_config.note('enabling ccache')
 
-    def add_deployment_feature(self, feature):
-        (arch, name, version) = self.config.deployment
-        self.config.available_features.add('%s=%s-%s' % (feature, arch, name))
-        self.config.available_features.add('%s=%s' % (feature, name))
-        self.config.available_features.add('%s=%s%s' % (feature, name, version))
-
     def configure_features(self):
         additional_features = self.get_lit_conf('additional_features')
         if additional_features:
@@ -395,30 +382,22 @@ class Configuration(object):
         # XFAIL markers for tests that are known to fail with versions of
         # libc++ as were shipped with a particular triple.
         if self.use_system_cxx_lib:
-            self.config.available_features.add('with_system_cxx_lib')
-            self.config.available_features.add(
-                'with_system_cxx_lib=%s' % self.config.target_triple)
-
-            # Add subcomponents individually.
-            target_components = self.config.target_triple.split('-')
-            for component in target_components:
-                self.config.available_features.add(
-                    'with_system_cxx_lib=%s' % component)
+            self.config.available_features.add('with_system_cxx_lib=%s' % self.config.target_triple)
 
             # Add available features for more generic versions of the target
             # triple attached to  with_system_cxx_lib.
             if self.use_deployment:
-                self.add_deployment_feature('with_system_cxx_lib')
+                (_, name, version) = self.config.deployment
+                self.config.available_features.add('with_system_cxx_lib=%s' % name)
+                self.config.available_features.add('with_system_cxx_lib=%s%s' % (name, version))
 
         # Configure the availability feature. Availability is only enabled
         # with libc++, because other standard libraries do not provide
         # availability markup.
         if self.use_deployment and self.cxx_stdlib_under_test == 'libc++':
-            self.config.available_features.add('availability')
-            self.add_deployment_feature('availability')
-
-        if platform.system() == 'Darwin':
-            self.config.available_features.add('apple-darwin')
+            (_, name, version) = self.config.deployment
+            self.config.available_features.add('availability=%s' % name)
+            self.config.available_features.add('availability=%s%s' % (name, version))
 
         # Insert the platform name into the available features as a lower case.
         self.config.available_features.add(target_platform)
@@ -437,7 +416,6 @@ class Configuration(object):
 
         if not self.get_lit_bool('enable_filesystem', default=True):
             self.config.available_features.add('c++filesystem-disabled')
-            self.config.available_features.add('dylib-has-no-filesystem')
 
 
         # Run a compile test for the -fsized-deallocation flag. This is needed
@@ -447,10 +425,6 @@ class Configuration(object):
 
         if self.cxx.hasCompileFlag('-faligned-allocation'):
             self.config.available_features.add('-faligned-allocation')
-        else:
-            # FIXME remove this once more than just clang-4.0 support
-            # C++17 aligned allocation.
-            self.config.available_features.add('no-aligned-allocation')
 
         if self.cxx.hasCompileFlag('-fdelayed-template-parsing'):
             self.config.available_features.add('fdelayed-template-parsing')
@@ -469,7 +443,11 @@ class Configuration(object):
                 intMacroValue(macros['__cpp_deduction_guides']) < 201611:
             self.config.available_features.add('libcpp-no-deduction-guides')
 
-        if self.is_windows:
+        if '__cpp_concepts' not in macros or \
+                intMacroValue(macros['__cpp_concepts']) < 201811:
+            self.config.available_features.add('libcpp-no-concepts')
+
+        if self.target_info.is_windows():
             self.config.available_features.add('windows')
             if self.cxx_stdlib_under_test == 'libc++':
                 # LIBCXX-WINDOWS-FIXME is the feature name used to XFAIL the
@@ -479,14 +457,10 @@ class Configuration(object):
                 # using this feature. (Also see llvm.org/PR32730)
                 self.config.available_features.add('LIBCXX-WINDOWS-FIXME')
 
-        # Attempt to detect the glibc version by querying for __GLIBC__
-        # in 'features.h'.
-        macros = self.cxx.dumpMacros(flags=['-include', 'features.h'])
-        if isinstance(macros, dict) and '__GLIBC__' in macros:
-            maj_v, min_v = (macros['__GLIBC__'], macros['__GLIBC_MINOR__'])
-            self.config.available_features.add('glibc')
-            self.config.available_features.add('glibc-%s' % maj_v)
-            self.config.available_features.add('glibc-%s.%s' % (maj_v, min_v))
+        libcxx_gdb = self.get_lit_conf('libcxx_gdb')
+        if libcxx_gdb and 'NOTFOUND' not in libcxx_gdb:
+            self.config.available_features.add('libcxx_gdb')
+            self.cxx.libcxx_gdb = libcxx_gdb
 
         # Support Objective-C++ only on MacOS and if the compiler supports it.
         if self.target_info.platform() == "darwin" and \
@@ -499,7 +473,7 @@ class Configuration(object):
         # Configure extra flags
         compile_flags_str = self.get_lit_conf('compile_flags', '')
         self.cxx.compile_flags += shlex.split(compile_flags_str)
-        if self.is_windows:
+        if self.target_info.is_windows():
             # FIXME: Can we remove this?
             self.cxx.compile_flags += ['-D_CRT_SECURE_NO_WARNINGS']
             # Required so that tests using min/max don't fail on Windows,
@@ -565,7 +539,7 @@ class Configuration(object):
         # the Windows build of libc++, the forced inclusion of a header requires
         # that _DEBUG is defined.  Incorrect ordering will result in -target
         # being elided.
-        if self.is_windows and self.debug_build:
+        if self.target_info.is_windows() and self.debug_build:
             self.cxx.compile_flags += ['-D_DEBUG']
         if self.use_target:
             if not self.cxx.addFlagIfSupported(
@@ -592,21 +566,21 @@ class Configuration(object):
 
         # FIXME(EricWF): variant_size.pass.cpp requires a slightly larger
         # template depth with older Clang versions.
-        self.cxx.addFlagIfSupported('-ftemplate-depth=270')
+        self.cxx.addCompileFlagIfSupported('-ftemplate-depth=270')
 
     def configure_compile_flags_header_includes(self):
         support_path = os.path.join(self.libcxx_src_root, 'test', 'support')
         self.configure_config_site_header()
         if self.cxx_stdlib_under_test != 'libstdc++' and \
-           not self.is_windows:
+           not self.target_info.is_windows():
             self.cxx.compile_flags += [
-                '-include', os.path.join(support_path, 'nasty_macros.hpp')]
+                '-include', os.path.join(support_path, 'nasty_macros.h')]
         if self.cxx_stdlib_under_test == 'msvc':
             self.cxx.compile_flags += [
                 '-include', os.path.join(support_path,
-                                         'msvc_stdlib_force_include.hpp')]
+                                         'msvc_stdlib_force_include.h')]
             pass
-        if self.is_windows and self.debug_build and \
+        if self.target_info.is_windows() and self.debug_build and \
                 self.cxx_stdlib_under_test != 'msvc':
             self.cxx.compile_flags += [
                 '-include', os.path.join(support_path,
@@ -715,31 +689,7 @@ class Configuration(object):
         if abi_version and abi_version != '1':
           self.cxx.compile_flags += ['-D_LIBCPP_ABI_VERSION=' + abi_version]
         if abi_unstable:
-          self.config.available_features.add('libcpp-abi-unstable')
           self.cxx.compile_flags += ['-D_LIBCPP_ABI_UNSTABLE']
-
-    def configure_filesystem_compile_flags(self):
-        static_env = os.path.join(self.libcxx_src_root, 'test', 'std',
-                                  'input.output', 'filesystems', 'Inputs', 'static_test_env')
-        static_env = os.path.realpath(static_env)
-        assert os.path.isdir(static_env)
-        self.cxx.compile_flags += ['-DLIBCXX_FILESYSTEM_STATIC_TEST_ROOT="%s"' % static_env]
-
-        dynamic_env = os.path.join(self.config.test_exec_root,
-                                   'filesystem', 'Output', 'dynamic_env')
-        dynamic_env = os.path.realpath(dynamic_env)
-        if not os.path.isdir(dynamic_env):
-            os.makedirs(dynamic_env)
-        self.cxx.compile_flags += ['-DLIBCXX_FILESYSTEM_DYNAMIC_TEST_ROOT="%s"' % dynamic_env]
-        self.exec_env['LIBCXX_FILESYSTEM_DYNAMIC_TEST_ROOT'] = ("%s" % dynamic_env)
-
-        dynamic_helper = os.path.join(self.libcxx_src_root, 'test', 'support',
-                                      'filesystem_dynamic_test_helper.py')
-        assert os.path.isfile(dynamic_helper)
-
-        self.cxx.compile_flags += ['-DLIBCXX_FILESYSTEM_DYNAMIC_TEST_HELPER="%s %s"'
-                                   % (sys.executable, dynamic_helper)]
-
 
     def configure_link_flags(self):
         # Configure library path
@@ -750,7 +700,7 @@ class Configuration(object):
         if self.cxx_stdlib_under_test == 'libc++':
             self.cxx.link_flags += ['-nodefaultlibs']
             # FIXME: Handle MSVCRT as part of the ABI library handling.
-            if self.is_windows:
+            if self.target_info.is_windows():
                 self.cxx.link_flags += ['-nostdlib']
             self.configure_link_flags_cxx_library()
             self.configure_link_flags_abi_library()
@@ -773,20 +723,20 @@ class Configuration(object):
         if not self.use_system_cxx_lib:
             if self.cxx_library_root:
                 self.cxx.link_flags += ['-L' + self.cxx_library_root]
-                if self.is_windows and self.link_shared:
+                if self.target_info.is_windows() and self.link_shared:
                     self.add_path(self.cxx.compile_env, self.cxx_library_root)
             if self.cxx_runtime_root:
-                if not self.is_windows:
+                if not self.target_info.is_windows():
                     self.cxx.link_flags += ['-Wl,-rpath,' +
                                             self.cxx_runtime_root]
-                elif self.is_windows and self.link_shared:
+                elif self.target_info.is_windows() and self.link_shared:
                     self.add_path(self.exec_env, self.cxx_runtime_root)
         elif os.path.isdir(str(self.use_system_cxx_lib)):
             self.cxx.link_flags += ['-L' + self.use_system_cxx_lib]
-            if not self.is_windows:
+            if not self.target_info.is_windows():
                 self.cxx.link_flags += ['-Wl,-rpath,' +
                                         self.use_system_cxx_lib]
-            if self.is_windows and self.link_shared:
+            if self.target_info.is_windows() and self.link_shared:
                 self.add_path(self.cxx.compile_env, self.use_system_cxx_lib)
         additional_flags = self.get_lit_conf('test_linker_flags')
         if additional_flags:
@@ -797,7 +747,7 @@ class Configuration(object):
         self.abi_library_root = self.get_lit_conf('abi_library_path')
         if self.abi_library_root:
             self.cxx.link_flags += ['-L' + self.abi_library_root]
-            if not self.is_windows:
+            if not self.target_info.is_windows():
                 self.cxx.link_flags += ['-Wl,-rpath,' + self.abi_library_root]
             else:
                 self.add_path(self.exec_env, self.abi_library_root)
@@ -840,6 +790,7 @@ class Configuration(object):
                     if cxxabi_library_root:
                         libname = self.make_static_lib_name('c++abi')
                         abs_path = os.path.join(cxxabi_library_root, libname)
+                        self.cxx.link_libcxxabi_flag = abs_path
                         self.cxx.link_flags += [abs_path]
                     else:
                         self.cxx.link_flags += ['-lc++abi']
@@ -850,7 +801,7 @@ class Configuration(object):
             self.cxx.link_flags += ['-l%s%s' % (lib, debug_suffix) for lib in
                                     ['vcruntime', 'ucrt', 'msvcrt']]
         elif cxx_abi == 'none' or cxx_abi == 'default':
-            if self.is_windows:
+            if self.target_info.is_windows():
                 debug_suffix = 'd' if self.debug_build else ''
                 self.cxx.link_flags += ['-lmsvcrt%s' % debug_suffix]
         else:
@@ -929,7 +880,6 @@ class Configuration(object):
     def configure_sanitizer(self):
         san = self.get_lit_conf('use_sanitizer', '').strip()
         if san:
-            self.target_info.add_sanitizer_features(san, self.config.available_features)
             # Search for llvm-symbolizer along the compiler path first
             # and then along the PATH env variable.
             symbolizer_search_paths = os.environ.get('PATH', '')
@@ -1004,12 +954,23 @@ class Configuration(object):
             if intMacroValue(macros['__cpp_coroutines']) >= 201703:
                 self.config.available_features.add('fcoroutines-ts')
 
+    def configure_blocks(self):
+        if self.cxx.hasCompileFlag('-fblocks'):
+            self.config.available_features.add('has-fblocks')
+
+    def configure_objc_arc(self):
+        cxx = copy.deepcopy(self.cxx)
+        cxx.source_lang = 'objective-c++'
+        if cxx.hasCompileFlag('-fobjc-arc'):
+            self.config.available_features.add('has-fobjc-arc')
+
     def configure_modules(self):
         modules_flags = ['-fmodules']
-        if platform.system() != 'Darwin':
+        if not self.target_info.is_darwin():
             modules_flags += ['-Xclang', '-fmodules-local-submodule-visibility']
         supports_modules = self.cxx.hasCompileFlag(modules_flags)
-        enable_modules = self.get_modules_enabled()
+        enable_modules = self.get_lit_bool('enable_modules', default=False,
+                                                             env_var='LIBCXX_ENABLE_MODULES')
         if enable_modules and not supports_modules:
             self.lit_config.fatal(
                 '-fmodules is enabled but not supported by the compiler')
@@ -1029,51 +990,57 @@ class Configuration(object):
             self.cxx.useModules()
 
     def configure_substitutions(self):
+        tool_env = ''
+        if self.target_info.is_darwin():
+            # Do not pass DYLD_LIBRARY_PATH to the compiler, linker, etc. as
+            # these tools are not meant to exercise the just-built libraries.
+            tool_env += 'env DYLD_LIBRARY_PATH=""'
+
         sub = self.config.substitutions
-        cxx_path = pipes.quote(self.cxx.path)
         # Configure compiler substitutions
-        sub.append(('%cxx', cxx_path))
-        sub.append(('%libcxx_src_root', self.libcxx_src_root))
+        sub.append(('%{cxx}', '{} {}'.format(tool_env, pipes.quote(self.cxx.path))))
+        sub.append(('%{libcxx_src_root}', self.libcxx_src_root))
         # Configure flags substitutions
-        flags_str = ' '.join([pipes.quote(f) for f in self.cxx.flags])
-        compile_flags_str = ' '.join([pipes.quote(f) for f in self.cxx.compile_flags])
-        link_flags_str = ' '.join([pipes.quote(f) for f in self.cxx.link_flags])
-        all_flags = '%s %s %s' % (flags_str, compile_flags_str, link_flags_str)
-        sub.append(('%flags', flags_str))
-        sub.append(('%compile_flags', compile_flags_str))
-        sub.append(('%link_flags', link_flags_str))
-        sub.append(('%all_flags', all_flags))
+        flags = self.cxx.flags + (self.cxx.modules_flags if self.cxx.use_modules else [])
+        sub.append(('%{flags}',         ' '.join(map(pipes.quote, flags))))
+        sub.append(('%{compile_flags}', ' '.join(map(pipes.quote, self.cxx.compile_flags))))
+        sub.append(('%{link_flags}',    ' '.join(map(pipes.quote, self.cxx.link_flags))))
+        sub.append(('%{link_libcxxabi}', pipes.quote(self.cxx.link_libcxxabi_flag)))
         if self.cxx.isVerifySupported():
-            verify_str = ' ' + ' '.join(self.cxx.verify_flags) + ' '
-            sub.append(('%verify', verify_str))
-        # Add compile and link shortcuts
-        compile_str = (cxx_path + ' -o %t.o %s -c ' + flags_str
-                       + ' ' + compile_flags_str)
-        link_str = (cxx_path + ' -o %t.exe %t.o ' + flags_str + ' '
-                    + link_flags_str)
-        assert type(link_str) is str
-        build_str = cxx_path + ' -o %t.exe %s ' + all_flags
+            sub.append(('%{verify}', ' '.join(self.cxx.verify_flags)))
+        # Add compile and build shortcuts
+        sub.append(('%{compile}', '%{cxx} -o %t.o %s -c %{flags} %{compile_flags}'))
+        sub.append(('%{build}',   '%{cxx} -o %t.exe %s %{flags} %{compile_flags} %{link_flags}'))
         if self.cxx.use_modules:
-            sub.append(('%compile_module', compile_str))
-            sub.append(('%build_module', build_str))
+            sub.append(('%{build_module}', '%{build}'))
         elif self.cxx.modules_flags is not None:
-            modules_str = ' '.join(self.cxx.modules_flags) + ' '
-            sub.append(('%compile_module', compile_str + ' ' + modules_str))
-            sub.append(('%build_module', build_str + ' ' + modules_str))
-        sub.append(('%compile', compile_str))
-        sub.append(('%link', link_str))
-        sub.append(('%build', build_str))
+            sub.append(('%{build_module}', '%{{build}} {}'.format(' '.join(self.cxx.modules_flags))))
+
         # Configure exec prefix substitutions.
         # Configure run env substitution.
-        sub.append(('%run', '%t.exe'))
-        # Configure not program substitutions
-        not_py = os.path.join(self.libcxx_src_root, 'utils', 'not.py')
-        not_str = '%s %s ' % (pipes.quote(sys.executable), pipes.quote(not_py))
-        sub.append(('not ', not_str))
+        codesign_ident = self.get_lit_conf('llvm_codesign_identity', '')
+        env_vars = ' '.join('%s=%s' % (k, pipes.quote(v)) for (k, v) in self.exec_env.items())
+        exec_args = [
+            '--codesign_identity "{}"'.format(codesign_ident),
+            '--dependencies %{file_dependencies}',
+            '--env {}'.format(env_vars)
+        ]
+        if isinstance(self.executor, SSHExecutor):
+            exec_args.append('--host {}'.format(self.executor.user_prefix + self.executor.host))
+            executor = os.path.join(self.libcxx_src_root, 'utils', 'ssh.py')
+        else:
+            exec_args.append('--execdir %t.execdir')
+            executor = os.path.join(self.libcxx_src_root, 'utils', 'run.py')
+        sub.append(('%{exec}', '{} {} {} -- '.format(pipes.quote(sys.executable),
+                                                     pipes.quote(executor),
+                                                     ' '.join(exec_args))))
+        sub.append(('%{run}', '%{exec} %t.exe'))
+        if self.get_lit_conf('libcxx_gdb'):
+            sub.append(('%{libcxx_gdb}', self.get_lit_conf('libcxx_gdb')))
 
     def can_use_deployment(self):
         # Check if the host is on an Apple platform using clang.
-        if not self.target_info.platform() == "darwin":
+        if not self.target_info.is_darwin():
             return False
         if not self.target_info.is_host_macosx():
             return False
@@ -1159,12 +1126,12 @@ class Configuration(object):
         # which is not relevant for non-shipped flavors of libc++.
         if self.use_system_cxx_lib:
             # Dylib support for shared_mutex was added in macosx10.12.
-            if name == 'macosx' and version in ('10.%s' % v for v in range(7, 12)):
+            if name == 'macosx' and version in ('10.%s' % v for v in range(9, 12)):
                 self.config.available_features.add('dylib-has-no-shared_mutex')
                 self.lit_config.note("shared_mutex is not supported by the deployment target")
             # Throwing bad_optional_access, bad_variant_access and bad_any_cast is
             # supported starting in macosx10.14.
-            if name == 'macosx' and version in ('10.%s' % v for v in range(7, 14)):
+            if name == 'macosx' and version in ('10.%s' % v for v in range(9, 14)):
                 self.config.available_features.add('dylib-has-no-bad_optional_access')
                 self.lit_config.note("throwing bad_optional_access is not supported by the deployment target")
 
@@ -1174,19 +1141,15 @@ class Configuration(object):
                 self.config.available_features.add('dylib-has-no-bad_any_cast')
                 self.lit_config.note("throwing bad_any_cast is not supported by the deployment target")
             # Filesystem is support on Apple platforms starting with macosx10.15.
-            if name == 'macosx' and version in ('10.%s' % v for v in range(7, 15)):
-                self.config.available_features.add('dylib-has-no-filesystem')
+            if name == 'macosx' and version in ('10.%s' % v for v in range(9, 15)):
+                self.config.available_features.add('c++filesystem-disabled')
                 self.lit_config.note("the deployment target does not support <filesystem>")
         else:
-            self.cxx.flags += ['-D_LIBCPP_DISABLE_AVAILABILITY']
+            self.cxx.compile_flags += ['-D_LIBCPP_DISABLE_AVAILABILITY']
 
     def configure_env(self):
         self.target_info.configure_env(self.exec_env)
+        self.config.environment = dict(os.environ)
 
     def add_path(self, dest_env, new_path):
-        if 'PATH' not in dest_env:
-            dest_env['PATH'] = new_path
-        else:
-            split_char = ';' if self.is_windows else ':'
-            dest_env['PATH'] = '%s%s%s' % (new_path, split_char,
-                                           dest_env['PATH'])
+        self.target_info.add_path(dest_env, new_path)

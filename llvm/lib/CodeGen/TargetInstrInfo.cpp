@@ -15,6 +15,7 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineMemOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/CodeGen/MachineScheduler.h"
 #include "llvm/CodeGen/PseudoSourceValue.h"
 #include "llvm/CodeGen/ScoreboardHazardRecognizer.h"
 #include "llvm/CodeGen/StackMaps.h"
@@ -142,8 +143,8 @@ TargetInstrInfo::ReplaceTailWithBranchTo(MachineBasicBlock::iterator Tail,
   // from the end of MBB.
   while (Tail != MBB->end()) {
     auto MI = Tail++;
-    if (MI->isCall())
-      MBB->getParent()->updateCallSiteInfo(&*MI);
+    if (MI->shouldUpdateCallSiteInfo())
+      MBB->getParent()->eraseCallSiteInfo(&*MI);
     MBB->erase(MI);
   }
 
@@ -282,7 +283,7 @@ bool TargetInstrInfo::fixCommutedOpIndices(unsigned &ResultIdx1,
   return true;
 }
 
-bool TargetInstrInfo::findCommutedOpIndices(MachineInstr &MI,
+bool TargetInstrInfo::findCommutedOpIndices(const MachineInstr &MI,
                                             unsigned &SrcOpIdx1,
                                             unsigned &SrcOpIdx2) const {
   assert(!MI.isBundle() &&
@@ -394,7 +395,7 @@ bool TargetInstrInfo::getStackSlotRange(const TargetRegisterClass *RC,
   if (BitOffset < 0 || BitOffset % 8)
     return false;
 
-  Size = BitSize /= 8;
+  Size = BitSize / 8;
   Offset = (unsigned)BitOffset / 8;
 
   assert(TRI->getSpillSize(*RC) >= (Offset + Size) && "bad subregister range");
@@ -407,7 +408,7 @@ bool TargetInstrInfo::getStackSlotRange(const TargetRegisterClass *RC,
 
 void TargetInstrInfo::reMaterialize(MachineBasicBlock &MBB,
                                     MachineBasicBlock::iterator I,
-                                    unsigned DestReg, unsigned SubIdx,
+                                    Register DestReg, unsigned SubIdx,
                                     const MachineInstr &Orig,
                                     const TargetRegisterInfo &TRI) const {
   MachineInstr *MI = MBB.getParent()->CloneMachineInstr(&Orig);
@@ -590,9 +591,9 @@ MachineInstr *TargetInstrInfo::foldMemoryOperand(MachineInstr &MI,
             NewMI->mayLoad()) &&
            "Folded a use to a non-load!");
     assert(MFI.getObjectOffset(FI) != -1);
-    MachineMemOperand *MMO = MF.getMachineMemOperand(
-        MachinePointerInfo::getFixedStack(MF, FI), Flags, MemSize,
-        MFI.getObjectAlignment(FI));
+    MachineMemOperand *MMO =
+        MF.getMachineMemOperand(MachinePointerInfo::getFixedStack(MF, FI),
+                                Flags, MemSize, MFI.getObjectAlign(FI));
     NewMI->addMemOperand(MF, MMO);
 
     return NewMI;
@@ -698,10 +699,13 @@ bool TargetInstrInfo::hasReassociableSibling(const MachineInstr &Inst,
     std::swap(MI1, MI2);
 
   // 1. The previous instruction must be the same type as Inst.
-  // 2. The previous instruction must have virtual register definitions for its
+  // 2. The previous instruction must also be associative/commutative (this can
+  //    be different even for instructions with the same opcode if traits like
+  //    fast-math-flags are included).
+  // 3. The previous instruction must have virtual register definitions for its
   //    operands in the same basic block as Inst.
-  // 3. The previous instruction's result must only be used by Inst.
-  return MI1->getOpcode() == AssocOpcode &&
+  // 4. The previous instruction's result must only be used by Inst.
+  return MI1->getOpcode() == AssocOpcode && isAssociativeAndCommutative(*MI1) &&
          hasReassociableOperands(*MI1, MBB) &&
          MRI.hasOneNonDBGUse(MI1->getOperand(0).getReg());
 }
@@ -880,7 +884,7 @@ void TargetInstrInfo::genAlternativeCodeSequence(
 }
 
 bool TargetInstrInfo::isReallyTriviallyReMaterializableGeneric(
-    const MachineInstr &MI, AliasAnalysis *AA) const {
+    const MachineInstr &MI, AAResults *AA) const {
   const MachineFunction &MF = *MI.getMF();
   const MachineRegisterInfo &MRI = MF.getRegInfo();
 
@@ -1015,19 +1019,28 @@ CreateTargetHazardRecognizer(const TargetSubtargetInfo *STI,
 }
 
 // Default implementation of CreateTargetMIHazardRecognizer.
-ScheduleHazardRecognizer *TargetInstrInfo::
-CreateTargetMIHazardRecognizer(const InstrItineraryData *II,
-                               const ScheduleDAG *DAG) const {
-  return (ScheduleHazardRecognizer *)
-    new ScoreboardHazardRecognizer(II, DAG, "machine-scheduler");
+ScheduleHazardRecognizer *TargetInstrInfo::CreateTargetMIHazardRecognizer(
+    const InstrItineraryData *II, const ScheduleDAGMI *DAG) const {
+  return new ScoreboardHazardRecognizer(II, DAG, "machine-scheduler");
 }
 
 // Default implementation of CreateTargetPostRAHazardRecognizer.
 ScheduleHazardRecognizer *TargetInstrInfo::
 CreateTargetPostRAHazardRecognizer(const InstrItineraryData *II,
                                    const ScheduleDAG *DAG) const {
-  return (ScheduleHazardRecognizer *)
-    new ScoreboardHazardRecognizer(II, DAG, "post-RA-sched");
+  return new ScoreboardHazardRecognizer(II, DAG, "post-RA-sched");
+}
+
+// Default implementation of getMemOperandWithOffset.
+bool TargetInstrInfo::getMemOperandWithOffset(
+    const MachineInstr &MI, const MachineOperand *&BaseOp, int64_t &Offset,
+    bool &OffsetIsScalable, const TargetRegisterInfo *TRI) const {
+  SmallVector<const MachineOperand *, 4> BaseOps;
+  if (!getMemOperandsWithOffset(MI, BaseOps, Offset, OffsetIsScalable, TRI) ||
+      BaseOps.size() != 1)
+    return false;
+  BaseOp = BaseOps.front();
+  return true;
 }
 
 //===----------------------------------------------------------------------===//
@@ -1121,30 +1134,81 @@ bool TargetInstrInfo::hasLowDefLatency(const TargetSchedModel &SchedModel,
 }
 
 Optional<ParamLoadedValue>
-TargetInstrInfo::describeLoadedValue(const MachineInstr &MI) const {
+TargetInstrInfo::describeLoadedValue(const MachineInstr &MI,
+                                     Register Reg) const {
   const MachineFunction *MF = MI.getMF();
-  const MachineOperand *Op = nullptr;
-  DIExpression *Expr = DIExpression::get(MF->getFunction().getContext(), {});;
-  const MachineOperand *SrcRegOp, *DestRegOp;
+  const TargetRegisterInfo *TRI = MF->getSubtarget().getRegisterInfo();
+  DIExpression *Expr = DIExpression::get(MF->getFunction().getContext(), {});
+  int64_t Offset;
+  bool OffsetIsScalable;
 
-  if (isCopyInstr(MI, SrcRegOp, DestRegOp)) {
-    Op = SrcRegOp;
-    return ParamLoadedValue(Op, Expr);
-  } else if (MI.isMoveImmediate()) {
-    Op = &MI.getOperand(1);
-    return ParamLoadedValue(Op, Expr);
+  // To simplify the sub-register handling, verify that we only need to
+  // consider physical registers.
+  assert(MF->getProperties().hasProperty(
+      MachineFunctionProperties::Property::NoVRegs));
+
+  if (auto DestSrc = isCopyInstr(MI)) {
+    Register DestReg = DestSrc->Destination->getReg();
+
+    // If the copy destination is the forwarding reg, describe the forwarding
+    // reg using the copy source as the backup location. Example:
+    //
+    //   x0 = MOV x7
+    //   call callee(x0)      ; x0 described as x7
+    if (Reg == DestReg)
+      return ParamLoadedValue(*DestSrc->Source, Expr);
+
+    // Cases where super- or sub-registers needs to be described should
+    // be handled by the target's hook implementation.
+    assert(!TRI->isSuperOrSubRegisterEq(Reg, DestReg) &&
+           "TargetInstrInfo::describeLoadedValue can't describe super- or "
+           "sub-regs for copy instructions");
+    return None;
+  } else if (auto RegImm = isAddImmediate(MI, Reg)) {
+    Register SrcReg = RegImm->Reg;
+    Offset = RegImm->Imm;
+    Expr = DIExpression::prepend(Expr, DIExpression::ApplyOffset, Offset);
+    return ParamLoadedValue(MachineOperand::CreateReg(SrcReg, false), Expr);
   } else if (MI.hasOneMemOperand()) {
-    int64_t Offset;
-    const auto &TRI = MF->getSubtarget().getRegisterInfo();
+    // Only describe memory which provably does not escape the function. As
+    // described in llvm.org/PR43343, escaped memory may be clobbered by the
+    // callee (or by another thread).
     const auto &TII = MF->getSubtarget().getInstrInfo();
-    const MachineOperand *BaseOp;
+    const MachineFrameInfo &MFI = MF->getFrameInfo();
+    const MachineMemOperand *MMO = MI.memoperands()[0];
+    const PseudoSourceValue *PSV = MMO->getPseudoValue();
 
-    if (!TII->getMemOperandWithOffset(MI, BaseOp, Offset, TRI))
+    // If the address points to "special" memory (e.g. a spill slot), it's
+    // sufficient to check that it isn't aliased by any high-level IR value.
+    if (!PSV || PSV->mayAlias(&MFI))
       return None;
 
-    Expr = DIExpression::prepend(Expr, DIExpression::DerefAfter, Offset);
-    Op = BaseOp;
-    return ParamLoadedValue(Op, Expr);
+    const MachineOperand *BaseOp;
+    if (!TII->getMemOperandWithOffset(MI, BaseOp, Offset, OffsetIsScalable,
+                                      TRI))
+      return None;
+
+    // FIXME: Scalable offsets are not yet handled in the offset code below.
+    if (OffsetIsScalable)
+      return None;
+
+    // TODO: Can currently only handle mem instructions with a single define.
+    // An example from the x86 target:
+    //    ...
+    //    DIV64m $rsp, 1, $noreg, 24, $noreg, implicit-def dead $rax, implicit-def $rdx
+    //    ...
+    //
+    if (MI.getNumExplicitDefs() != 1)
+      return None;
+
+    // TODO: In what way do we need to take Reg into consideration here?
+
+    SmallVector<uint64_t, 8> Ops;
+    DIExpression::appendOffset(Ops, Offset);
+    Ops.push_back(dwarf::DW_OP_deref_size);
+    Ops.push_back(MMO->getSize());
+    Expr = DIExpression::prependOpcodes(Expr, Ops);
+    return ParamLoadedValue(*BaseOp, Expr);
   }
 
   return None;
@@ -1257,3 +1321,5 @@ bool TargetInstrInfo::getInsertSubregInputs(
   InsertedReg.SubIdx = (unsigned)MOSubIdx.getImm();
   return true;
 }
+
+TargetInstrInfo::PipelinerLoopInfo::~PipelinerLoopInfo() {}

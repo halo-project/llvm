@@ -18,7 +18,7 @@
 #include <cassert>
 
 #include "test_macros.h"
-#include "count_new.hpp"
+#include "count_new.h"
 
 struct B
 {
@@ -48,6 +48,13 @@ void fn ( const std::shared_ptr<B> &) { assert (false); }
 
 template <typename T>
 void assert_deleter ( T * ) { assert(false); }
+
+namespace adl {
+struct D {
+    void operator()(int *) const {}
+};
+void ref(D);
+}
 
 int main(int, char**)
 {
@@ -97,6 +104,12 @@ int main(int, char**)
         std::shared_ptr<int> p2(std::move(p)); // should not call deleter when going out of scope
     }
 #endif
+
+    {
+    adl::D d;
+    std::unique_ptr<int, adl::D&> u(nullptr, d);
+    std::shared_ptr<int> s = std::move(u);
+    }
 
   return 0;
 }

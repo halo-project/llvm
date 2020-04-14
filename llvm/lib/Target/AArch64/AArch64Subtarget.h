@@ -38,6 +38,12 @@ class AArch64Subtarget final : public AArch64GenSubtargetInfo {
 public:
   enum ARMProcFamilyEnum : uint8_t {
     Others,
+    A64FX,
+    AppleA7,
+    AppleA10,
+    AppleA11,
+    AppleA12,
+    AppleA13,
     CortexA35,
     CortexA53,
     CortexA55,
@@ -47,8 +53,6 @@ public:
     CortexA73,
     CortexA75,
     CortexA76,
-    Cyclone,
-    ExynosM1,
     ExynosM3,
     Falkor,
     Kryo,
@@ -72,6 +76,7 @@ protected:
   bool HasV8_3aOps = false;
   bool HasV8_4aOps = false;
   bool HasV8_5aOps = false;
+  bool HasV8_6aOps = false;
 
   bool HasFPARMv8 = false;
   bool HasNEON = false;
@@ -116,6 +121,7 @@ protected:
   bool HasTRACEV8_4 = false;
   bool HasAM = false;
   bool HasSEL2 = false;
+  bool HasPMU = false;
   bool HasTLB_RMI = false;
   bool HasFMI = false;
   bool HasRCPC_IMMO = false;
@@ -138,6 +144,12 @@ protected:
   bool HasRandGen = false;
   bool HasMTE = false;
   bool HasTME = false;
+
+  // Armv8.6-A Extensions
+  bool HasBF16 = false;
+  bool HasAMVS = false;
+  bool HasFineGrainedTraps = false;
+  bool HasEnhancedCounterVirtualization = false;
 
   // Arm SVE2 extensions
   bool HasSVE2AES = false;
@@ -198,8 +210,8 @@ protected:
   uint16_t PrefetchDistance = 0;
   uint16_t MinPrefetchStride = 1;
   unsigned MaxPrefetchIterationsAhead = UINT_MAX;
-  unsigned PrefFunctionAlignment = 0;
-  unsigned PrefLoopAlignment = 0;
+  unsigned PrefFunctionLogAlignment = 0;
+  unsigned PrefLoopLogAlignment = 0;
   unsigned MaxJumpTableSize = 0;
   unsigned WideningBaseCost = 0;
 
@@ -353,14 +365,21 @@ public:
   unsigned getVectorInsertExtractBaseCost() const {
     return VectorInsertExtractBaseCost;
   }
-  unsigned getCacheLineSize() const { return CacheLineSize; }
-  unsigned getPrefetchDistance() const { return PrefetchDistance; }
-  unsigned getMinPrefetchStride() const { return MinPrefetchStride; }
-  unsigned getMaxPrefetchIterationsAhead() const {
+  unsigned getCacheLineSize() const override { return CacheLineSize; }
+  unsigned getPrefetchDistance() const override { return PrefetchDistance; }
+  unsigned getMinPrefetchStride(unsigned NumMemAccesses,
+                                unsigned NumStridedMemAccesses,
+                                unsigned NumPrefetches,
+                                bool HasCall) const override {
+    return MinPrefetchStride;
+  }
+  unsigned getMaxPrefetchIterationsAhead() const override {
     return MaxPrefetchIterationsAhead;
   }
-  unsigned getPrefFunctionAlignment() const { return PrefFunctionAlignment; }
-  unsigned getPrefLoopAlignment() const { return PrefLoopAlignment; }
+  unsigned getPrefFunctionLogAlignment() const {
+    return PrefFunctionLogAlignment;
+  }
+  unsigned getPrefLoopLogAlignment() const { return PrefLoopLogAlignment; }
 
   unsigned getMaximumJumpTableSize() const { return MaxJumpTableSize; }
 
@@ -396,6 +415,13 @@ public:
   bool hasSVE2SHA3() const { return HasSVE2SHA3; }
   bool hasSVE2BitPerm() const { return HasSVE2BitPerm; }
 
+  // Armv8.6-A Extensions
+  bool hasBF16() const { return HasBF16; }
+  bool hasFineGrainedTraps() const { return HasFineGrainedTraps; }
+  bool hasEnhancedCounterVirtualization() const {
+    return HasEnhancedCounterVirtualization;
+  }
+
   bool isLittleEndian() const { return IsLittle; }
 
   bool isTargetDarwin() const { return TargetTriple.isOSDarwin(); }
@@ -408,6 +434,8 @@ public:
   bool isTargetCOFF() const { return TargetTriple.isOSBinFormatCOFF(); }
   bool isTargetELF() const { return TargetTriple.isOSBinFormatELF(); }
   bool isTargetMachO() const { return TargetTriple.isOSBinFormatMachO(); }
+
+  bool isTargetILP32() const { return TargetTriple.isArch32Bit(); }
 
   bool useAA() const override { return UseAA; }
 
@@ -430,10 +458,18 @@ public:
   bool hasDIT() const { return HasDIT; }
   bool hasTRACEV8_4() const { return HasTRACEV8_4; }
   bool hasAM() const { return HasAM; }
+  bool hasAMVS() const { return HasAMVS; }
   bool hasSEL2() const { return HasSEL2; }
+  bool hasPMU() const { return HasPMU; }
   bool hasTLB_RMI() const { return HasTLB_RMI; }
   bool hasFMI() const { return HasFMI; }
   bool hasRCPC_IMMO() const { return HasRCPC_IMMO; }
+
+  bool addrSinkUsingGEPs() const override {
+    // Keeping GEPs inbounds is important for exploiting AArch64
+    // addressing-modes in ILP32 mode.
+    return useAA() || isTargetILP32();
+  }
 
   bool useSmallAddressing() const {
     switch (TLInfo.getTargetMachine().getCodeModel()) {
@@ -463,6 +499,8 @@ public:
                            unsigned NumRegionInstrs) const override;
 
   bool enableEarlyIfConversion() const override;
+
+  bool enableAdvancedRASplitCost() const override { return true; }
 
   std::unique_ptr<PBQPRAConstraint> getCustomPBQPConstraints() const override;
 

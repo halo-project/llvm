@@ -15,7 +15,9 @@
 // Unary ops.
 //------------------------------------------------------------------------------
 
-class GenericInstruction : StandardPseudoInstruction;
+class GenericInstruction : StandardPseudoInstruction {
+  let isPreISelOpcode = 1;
+}
 
 // Extend the underlying scalar type of an operation, leaving the high bits
 // unspecified.
@@ -171,6 +173,12 @@ def G_BSWAP : GenericInstruction {
   let hasSideEffects = 0;
 }
 
+def G_BITREVERSE : GenericInstruction {
+  let OutOperandList = (outs type0:$dst);
+  let InOperandList = (ins type0:$src);
+  let hasSideEffects = 0;
+}
+
 def G_ADDRSPACE_CAST : GenericInstruction {
   let OutOperandList = (outs type0:$dst);
   let InOperandList = (ins type1:$src);
@@ -187,6 +195,12 @@ def G_JUMP_TABLE : GenericInstruction {
   let OutOperandList = (outs type0:$dst);
   let InOperandList = (ins unknown:$jti);
   let hasSideEffects = 0;
+}
+
+def G_DYN_STACKALLOC : GenericInstruction {
+  let OutOperandList = (outs ptype0:$dst);
+  let InOperandList = (ins type1:$size, i32imm:$align);
+  let hasSideEffects = 1;
 }
 
 //------------------------------------------------------------------------------
@@ -294,6 +308,22 @@ def G_ASHR : GenericInstruction {
   let hasSideEffects = 0;
 }
 
+/// Funnel 'double' shifts take 3 operands, 2 inputs and the shift amount.
+/// fshl(X,Y,Z): (X << (Z % bitwidth)) | (Y >> (bitwidth - (Z % bitwidth)))
+def G_FSHL : GenericInstruction {
+  let OutOperandList = (outs type0:$dst);
+  let InOperandList = (ins type0:$src1, type0:$src2, type1:$src3);
+  let hasSideEffects = 0;
+}
+
+/// Funnel 'double' shifts take 3 operands, 2 inputs and the shift amount.
+/// fshr(X,Y,Z): (X << (bitwidth - (Z % bitwidth))) | (Y >> (Z % bitwidth))
+def G_FSHR : GenericInstruction {
+  let OutOperandList = (outs type0:$dst);
+  let InOperandList = (ins type0:$src1, type0:$src2, type1:$src3);
+  let hasSideEffects = 0;
+}
+
 // Generic integer comparison.
 def G_ICMP : GenericInstruction {
   let OutOperandList = (outs type0:$dst);
@@ -316,7 +346,7 @@ def G_SELECT : GenericInstruction {
 }
 
 // Generic pointer offset.
-def G_GEP : GenericInstruction {
+def G_PTR_ADD : GenericInstruction {
   let OutOperandList = (outs type0:$dst);
   let InOperandList = (ins type0:$src1, type1:$src2);
   let hasSideEffects = 0;
@@ -453,6 +483,42 @@ def G_SMULH : GenericInstruction {
   let InOperandList = (ins type0:$src1, type0:$src2);
   let hasSideEffects = 0;
   let isCommutable = 1;
+}
+
+//------------------------------------------------------------------------------
+// Saturating ops
+//------------------------------------------------------------------------------
+
+// Generic saturating unsigned addition.
+def G_UADDSAT : GenericInstruction {
+  let OutOperandList = (outs type0:$dst);
+  let InOperandList = (ins type0:$src1, type0:$src2);
+  let hasSideEffects = 0;
+  let isCommutable = 1;
+}
+
+// Generic saturating signed addition.
+def G_SADDSAT : GenericInstruction {
+  let OutOperandList = (outs type0:$dst);
+  let InOperandList = (ins type0:$src1, type0:$src2);
+  let hasSideEffects = 0;
+  let isCommutable = 1;
+}
+
+// Generic saturating unsigned subtraction.
+def G_USUBSAT : GenericInstruction {
+  let OutOperandList = (outs type0:$dst);
+  let InOperandList = (ins type0:$src1, type0:$src2);
+  let hasSideEffects = 0;
+  let isCommutable = 0;
+}
+
+// Generic saturating signed subtraction.
+def G_SSUBSAT : GenericInstruction {
+  let OutOperandList = (outs type0:$dst);
+  let InOperandList = (ins type0:$src1, type0:$src2);
+  let hasSideEffects = 0;
+  let isCommutable = 0;
 }
 
 //------------------------------------------------------------------------------
@@ -612,6 +678,15 @@ def G_FMA : GenericInstruction {
   let isCommutable = 0;
 }
 
+/// Generic FP multiply and add. Perform a * b + c, while getting the
+/// same result as the separately rounded operations, unlike G_FMA.
+def G_FMAD : GenericInstruction {
+  let OutOperandList = (outs type0:$dst);
+  let InOperandList = (ins type0:$src1, type0:$src2, type0:$src3);
+  let hasSideEffects = 0;
+  let isCommutable = 0;
+}
+
 // Generic FP division.
 def G_FDIV : GenericInstruction {
   let OutOperandList = (outs type0:$dst);
@@ -647,7 +722,7 @@ def G_FEXP2 : GenericInstruction {
   let hasSideEffects = 0;
 }
 
-// Floating point base-2 logarithm of a value.
+// Floating point base-e logarithm of a value.
 def G_FLOG : GenericInstruction {
   let OutOperandList = (outs type0:$dst);
   let InOperandList = (ins type0:$src1);
@@ -735,6 +810,12 @@ def G_INTRINSIC_ROUND : GenericInstruction {
   let hasSideEffects = 0;
 }
 
+def G_READCYCLECOUNTER : GenericInstruction {
+  let OutOperandList = (outs type0:$dst);
+  let InOperandList = (ins);
+  let hasSideEffects = 1;
+}
+
 //------------------------------------------------------------------------------
 // Memory ops
 //------------------------------------------------------------------------------
@@ -767,10 +848,45 @@ def G_ZEXTLOAD : GenericInstruction {
   let mayLoad = 1;
 }
 
+// Generic indexed load. Combines a GEP with a load. $newaddr is set to $base + $offset.
+// If $am is 0 (post-indexed), then the value is loaded from $base; if $am is 1 (pre-indexed)
+//  then the value is loaded from $newaddr.
+def G_INDEXED_LOAD : GenericInstruction {
+  let OutOperandList = (outs type0:$dst, ptype1:$newaddr);
+  let InOperandList = (ins ptype1:$base, type2:$offset, unknown:$am);
+  let hasSideEffects = 0;
+  let mayLoad = 1;
+}
+
+// Same as G_INDEXED_LOAD except that the load performed is sign-extending, as with G_SEXTLOAD.
+def G_INDEXED_SEXTLOAD : GenericInstruction {
+  let OutOperandList = (outs type0:$dst, ptype1:$newaddr);
+  let InOperandList = (ins ptype1:$base, type2:$offset, unknown:$am);
+  let hasSideEffects = 0;
+  let mayLoad = 1;
+}
+
+// Same as G_INDEXED_LOAD except that the load performed is zero-extending, as with G_ZEXTLOAD.
+def G_INDEXED_ZEXTLOAD : GenericInstruction {
+  let OutOperandList = (outs type0:$dst, ptype1:$newaddr);
+  let InOperandList = (ins ptype1:$base, type2:$offset, unknown:$am);
+  let hasSideEffects = 0;
+  let mayLoad = 1;
+}
+
 // Generic store. Expects a MachineMemOperand in addition to explicit operands.
 def G_STORE : GenericInstruction {
   let OutOperandList = (outs);
   let InOperandList = (ins type0:$src, ptype1:$addr);
+  let hasSideEffects = 0;
+  let mayStore = 1;
+}
+
+// Combines a store with a GEP. See description of G_INDEXED_LOAD for indexing behaviour.
+def G_INDEXED_STORE : GenericInstruction {
+  let OutOperandList = (outs ptype0:$newaddr);
+  let InOperandList = (ins type1:$src, ptype0:$base, ptype2:$offset,
+                           unknown:$am);
   let hasSideEffects = 0;
   let mayStore = 1;
 }
@@ -896,6 +1012,10 @@ def G_INTRINSIC : GenericInstruction {
   let OutOperandList = (outs);
   let InOperandList = (ins unknown:$intrin, variable_ops);
   let hasSideEffects = 0;
+
+  // Conservatively assume this is convergent. If there turnes out to
+  // be a need, there should be separate convergent intrinsic opcode.s
+  let isConvergent = 1;
 }
 
 // Intrinsic with side effects.
@@ -905,6 +1025,10 @@ def G_INTRINSIC_W_SIDE_EFFECTS : GenericInstruction {
   let hasSideEffects = 1;
   let mayLoad = 1;
   let mayStore = 1;
+
+  // Conservatively assume this is convergent. If there turnes out to
+  // be a need, there should be separate convergent intrinsic opcode.s
+  let isConvergent = 1;
 }
 
 //------------------------------------------------------------------------------
@@ -946,6 +1070,26 @@ def G_BRJT : GenericInstruction {
   let hasSideEffects = 0;
   let isBranch = 1;
   let isTerminator = 1;
+}
+
+def G_READ_REGISTER : GenericInstruction {
+  let OutOperandList = (outs type0:$dst);
+  let InOperandList = (ins unknown:$register);
+  let hasSideEffects = 1;
+
+  // Assume convergent. It's probably not worth the effort of somehow
+  // modeling convergent and nonconvergent register accesses.
+  let isConvergent = 1;
+}
+
+def G_WRITE_REGISTER : GenericInstruction {
+  let OutOperandList = (outs);
+  let InOperandList = (ins unknown:$register, type0:$value);
+  let hasSideEffects = 1;
+
+  // Assume convergent. It's probably not worth the effort of somehow
+  // modeling convergent and nonconvergent register accesses.
+  let isConvergent = 1;
 }
 
 //------------------------------------------------------------------------------

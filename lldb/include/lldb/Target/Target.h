@@ -6,8 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef liblldb_Target_h_
-#define liblldb_Target_h_
+#ifndef LLDB_TARGET_TARGET_H
+#define LLDB_TARGET_TARGET_H
 
 #include <list>
 #include <map>
@@ -35,6 +35,8 @@
 #include "lldb/lldb-public.h"
 
 namespace lldb_private {
+
+class ClangModulesDeclVendor;
 
 OptionEnumValues GetDynamicValueTypes();
 
@@ -133,11 +135,15 @@ public:
 
   bool GetEnableAutoApplyFixIts() const;
 
+  uint64_t GetNumberOfRetriesWithFixits() const;
+
   bool GetEnableNotifyAboutFixIts() const;
 
   bool GetEnableSaveObjects() const;
 
   bool GetEnableSyntheticValue() const;
+
+  uint32_t GetMaxZeroPaddingInFloatFormat() const;
 
   uint32_t GetMaximumNumberOfChildrenToDisplay() const;
 
@@ -200,39 +206,38 @@ public:
   bool GetInjectLocalVariables(ExecutionContext *exe_ctx) const;
 
   void SetInjectLocalVariables(ExecutionContext *exe_ctx, bool b);
+  
+  bool GetOSPluginReportsAllThreads() const;
 
-  bool GetUseModernTypeLookup() const;
+  void SetOSPluginReportsAllThreads(bool does_report);
 
   void SetRequireHardwareBreakpoints(bool b);
 
   bool GetRequireHardwareBreakpoints() const;
 
+  bool GetAutoInstallMainExecutable() const;
+
+  void UpdateLaunchInfoFromProperties();
+
+
 private:
   // Callbacks for m_launch_info.
-  static void Arg0ValueChangedCallback(void *target_property_ptr,
-                                       OptionValue *);
-  static void RunArgsValueChangedCallback(void *target_property_ptr,
-                                          OptionValue *);
-  static void EnvVarsValueChangedCallback(void *target_property_ptr,
-                                          OptionValue *);
-  static void InheritEnvValueChangedCallback(void *target_property_ptr,
-                                             OptionValue *);
-  static void InputPathValueChangedCallback(void *target_property_ptr,
-                                            OptionValue *);
-  static void OutputPathValueChangedCallback(void *target_property_ptr,
-                                             OptionValue *);
-  static void ErrorPathValueChangedCallback(void *target_property_ptr,
-                                            OptionValue *);
-  static void DetachOnErrorValueChangedCallback(void *target_property_ptr,
-                                                OptionValue *);
-  static void DisableASLRValueChangedCallback(void *target_property_ptr,
-                                              OptionValue *);
-  static void DisableSTDIOValueChangedCallback(void *target_property_ptr,
-                                               OptionValue *);
+  void Arg0ValueChangedCallback();
+  void RunArgsValueChangedCallback();
+  void EnvVarsValueChangedCallback();
+  void InputPathValueChangedCallback();
+  void OutputPathValueChangedCallback();
+  void ErrorPathValueChangedCallback();
+  void DetachOnErrorValueChangedCallback();
+  void DisableASLRValueChangedCallback();
+  void DisableSTDIOValueChangedCallback();
+
+  Environment ComputeEnvironment() const;
 
   // Member variables.
   ProcessLaunchInfo m_launch_info;
   std::unique_ptr<TargetExperimentalProperties> m_experimental_properties_up;
+  Target *m_target;
 };
 
 class EvaluateExpressionOptions {
@@ -382,6 +387,12 @@ public:
 
   bool GetAutoApplyFixIts() const { return m_auto_apply_fixits; }
 
+  void SetRetriesWithFixIts(uint64_t number_of_retries) {
+    m_retries_with_fixits = number_of_retries;
+  }
+
+  uint64_t GetRetriesWithFixIts() const { return m_retries_with_fixits; }
+
   bool IsForUtilityExpr() const { return m_running_utility_expression; }
 
   void SetIsForUtilityExpr(bool b) { m_running_utility_expression = b; }
@@ -403,6 +414,7 @@ private:
   bool m_ansi_color_errors = false;
   bool m_result_is_internal = false;
   bool m_auto_apply_fixits = true;
+  uint64_t m_retries_with_fixits = 1;
   /// True if the executed code should be treated as utility code that is only
   /// used by LLDB internally.
   bool m_running_utility_expression = false;
@@ -533,7 +545,7 @@ public:
 
   static const lldb::TargetPropertiesSP &GetGlobalProperties();
 
-  std::recursive_mutex &GetAPIMutex() { return m_mutex; }
+  std::recursive_mutex &GetAPIMutex();
 
   void DeleteCurrentProcess();
 
@@ -598,7 +610,7 @@ public:
       const FileSpecList *containingModules,
       const FileSpecList *source_file_list,
       const std::unordered_set<std::string> &function_names,
-      RegularExpression &source_regex, bool internal, bool request_hardware,
+      RegularExpression source_regex, bool internal, bool request_hardware,
       LazyBool move_to_nearest_code);
 
   // Use this to create a breakpoint from a load address
@@ -621,7 +633,7 @@ public:
   // target setting, else we use the values passed in
   lldb::BreakpointSP CreateFuncRegexBreakpoint(
       const FileSpecList *containingModules,
-      const FileSpecList *containingSourceFiles, RegularExpression &func_regexp,
+      const FileSpecList *containingSourceFiles, RegularExpression func_regexp,
       lldb::LanguageType requested_language, LazyBool skip_prologue,
       bool internal, bool request_hardware);
 
@@ -904,8 +916,8 @@ public:
   /// The target call at present just consults the Platform's call of the
   /// same name.
   ///
-  /// \param[in] module_sp
-  ///     A shared pointer reference to the module that checked.
+  /// \param[in] module_spec
+  ///     Path to the module.
   ///
   /// \return \b true if the module should be excluded, \b false otherwise.
   bool ModuleIsExcludedForUnconstrainedSearches(const FileSpec &module_spec);
@@ -951,7 +963,7 @@ public:
   ///
   /// \param[in] set_platform
   ///     If \b true, then the platform will be adjusted if the currently
-  ///     selected platform is not compatible with the archicture being set.
+  ///     selected platform is not compatible with the architecture being set.
   ///     If \b false, then just the architecture will be set even if the
   ///     currently selected platform isn't compatible (in case it might be
   ///     manually set following this function call).
@@ -1064,10 +1076,6 @@ public:
                                                  lldb::LanguageType language,
                                                  const char *name,
                                                  Status &error);
-
-  ClangASTContext *GetScratchClangASTContext(bool create_on_demand = true);
-
-  lldb::ClangASTImporterSP GetClangASTImporter();
 
   // Install any files through the platform that need be to installed prior to
   // launching or attaching.
@@ -1281,6 +1289,12 @@ protected:
   lldb::PlatformSP m_platform_sp; ///< The platform for this target.
   std::recursive_mutex m_mutex; ///< An API mutex that is used by the lldb::SB*
                                 /// classes make the SB interface thread safe
+  /// When the private state thread calls SB API's - usually because it is 
+  /// running OS plugin or Python ThreadPlan code - it should not block on the
+  /// API mutex that is held by the code that kicked off the sequence of events
+  /// that led us to run the code.  We hand out this mutex instead when we 
+  /// detect that code is running on the private state thread.
+  std::recursive_mutex m_private_mutex; 
   Arch m_arch;
   ModuleList m_images; ///< The list of images for this process (shared
                        /// libraries and anything dynamically loaded).
@@ -1304,8 +1318,7 @@ protected:
   typedef std::map<lldb::LanguageType, lldb::REPLSP> REPLMap;
   REPLMap m_repl_map;
 
-  lldb::ClangASTImporterSP m_ast_importer_sp;
-  lldb::ClangModulesDeclVendorUP m_clang_modules_decl_vendor_up;
+  std::unique_ptr<ClangModulesDeclVendor> m_clang_modules_decl_vendor_up;
 
   lldb::SourceManagerUP m_source_manager_up;
 
@@ -1315,6 +1328,7 @@ protected:
   bool m_valid;
   bool m_suppress_stop_hooks;
   bool m_is_dummy_target;
+  unsigned m_next_persistent_variable_index = 0;
 
   static void ImageSearchPathsChanged(const PathMappingList &path_list,
                                       void *baton);
@@ -1365,4 +1379,4 @@ private:
 
 } // namespace lldb_private
 
-#endif // liblldb_Target_h_
+#endif // LLDB_TARGET_TARGET_H

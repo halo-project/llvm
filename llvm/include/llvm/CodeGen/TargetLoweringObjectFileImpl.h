@@ -14,18 +14,18 @@
 #ifndef LLVM_CODEGEN_TARGETLOWERINGOBJECTFILEIMPL_H
 #define LLVM_CODEGEN_TARGETLOWERINGOBJECTFILEIMPL_H
 
-#include "llvm/IR/Module.h"
-#include "llvm/MC/MCExpr.h"
+#include "llvm/BinaryFormat/XCOFF.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
 
 namespace llvm {
 
 class GlobalValue;
 class MachineModuleInfo;
-class Mangler;
 class MCContext;
+class MCExpr;
 class MCSection;
 class MCSymbol;
+class Module;
 class TargetMachine;
 
 class TargetLoweringObjectFileELF : public TargetLoweringObjectFile {
@@ -63,6 +63,11 @@ public:
 
   MCSection *getSectionForJumpTable(const Function &F,
                                     const TargetMachine &TM) const override;
+
+  MCSection *
+  getSectionForMachineBasicBlock(const Function &F,
+                                 const MachineBasicBlock &MBB,
+                                 const TargetMachine &TM) const override;
 
   bool shouldPutJumpTableInFunctionSection(bool UsesLabelDifference,
                                            const Function &F) const override;
@@ -126,7 +131,8 @@ public:
                                     MachineModuleInfo *MMI) const override;
 
   /// Get MachO PC relative GOT entry relocation
-  const MCExpr *getIndirectSymViaGOTPCRel(const MCSymbol *Sym,
+  const MCExpr *getIndirectSymViaGOTPCRel(const GlobalValue *GV,
+                                          const MCSymbol *Sym,
                                           const MCValue &MV, int64_t Offset,
                                           MachineModuleInfo *MMI,
                                           MCStreamer &Streamer) const override;
@@ -230,6 +236,28 @@ public:
 
   MCSection *SelectSectionForGlobal(const GlobalObject *GO, SectionKind Kind,
                                     const TargetMachine &TM) const override;
+
+  MCSection *getSectionForJumpTable(const Function &F,
+                                    const TargetMachine &TM) const override;
+
+  /// Given a constant with the SectionKind, return a section that it should be
+  /// placed in.
+  MCSection *getSectionForConstant(const DataLayout &DL, SectionKind Kind,
+                                   const Constant *C,
+                                   unsigned &Align) const override;
+
+  static XCOFF::StorageClass getStorageClassForGlobal(const GlobalObject *GO);
+
+  MCSection *
+  getSectionForFunctionDescriptor(const Function *F,
+                                  const TargetMachine &TM) const override;
+  MCSection *getSectionForTOCEntry(const MCSymbol *Sym) const override;
+
+  /// For external functions, this will always return a function descriptor
+  /// csect.
+  MCSection *
+  getSectionForExternalReference(const GlobalObject *GO,
+                                 const TargetMachine &TM) const override;
 };
 
 } // end namespace llvm

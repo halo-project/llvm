@@ -1,4 +1,4 @@
-//===-- StringListTest.cpp ---------------------------------------*- C++ -*-===//
+//===-- StringListTest.cpp ------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -512,7 +512,7 @@ TEST(StringListTest, ForRangeEmpty) {
     FAIL() << "Shouldn't have hit an element in for range" << e;
 }
 
-TEST(StringListTest, ForRangeSingle) {
+TEST(StringListTest, ForRange) {
   StringList s;
   s.AppendString("a");
   s.AppendString("b");

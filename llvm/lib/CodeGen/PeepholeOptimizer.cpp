@@ -84,6 +84,7 @@
 #include "llvm/CodeGen/TargetOpcodes.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
+#include "llvm/InitializePasses.h"
 #include "llvm/MC/LaneBitmask.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/Pass.h"
@@ -456,12 +457,12 @@ INITIALIZE_PASS_END(PeepholeOptimizer, DEBUG_TYPE,
 bool PeepholeOptimizer::
 optimizeExtInstr(MachineInstr &MI, MachineBasicBlock &MBB,
                  SmallPtrSetImpl<MachineInstr*> &LocalMIs) {
-  unsigned SrcReg, DstReg, SubIdx;
+  Register SrcReg, DstReg;
+  unsigned SubIdx;
   if (!TII->isCoalescableExtInstr(MI, SrcReg, DstReg, SubIdx))
     return false;
 
-  if (Register::isPhysicalRegister(DstReg) ||
-      Register::isPhysicalRegister(SrcReg))
+  if (DstReg.isPhysical() || SrcReg.isPhysical())
     return false;
 
   if (MRI->hasOneNonDBGUse(SrcReg))
@@ -606,11 +607,10 @@ optimizeExtInstr(MachineInstr &MI, MachineBasicBlock &MBB,
 bool PeepholeOptimizer::optimizeCmpInstr(MachineInstr &MI) {
   // If this instruction is a comparison against zero and isn't comparing a
   // physical register, we can try to optimize it.
-  unsigned SrcReg, SrcReg2;
+  Register SrcReg, SrcReg2;
   int CmpMask, CmpValue;
   if (!TII->analyzeCompare(MI, SrcReg, SrcReg2, CmpMask, CmpValue) ||
-      Register::isPhysicalRegister(SrcReg) ||
-      (SrcReg2 != 0 && Register::isPhysicalRegister(SrcReg2)))
+      SrcReg.isPhysical() || SrcReg2.isPhysical())
     return false;
 
   // Attempt to optimize the comparison instruction.
@@ -662,8 +662,8 @@ bool PeepholeOptimizer::findNextSource(RegSubRegPair RegSubReg,
   // So far we do not have any motivating example for doing that.
   // Thus, instead of maintaining untested code, we will revisit that if
   // that changes at some point.
-  unsigned Reg = RegSubReg.Reg;
-  if (Register::isPhysicalRegister(Reg))
+  Register Reg = RegSubReg.Reg;
+  if (Reg.isPhysical())
     return false;
   const TargetRegisterClass *DefRC = MRI->getRegClass(Reg);
 
@@ -1775,8 +1775,9 @@ bool PeepholeOptimizer::runOnMachineFunction(MachineFunction &MF) {
               LocalMIs.erase(MI);
               LocalMIs.erase(DefMI);
               LocalMIs.insert(FoldMI);
-              if (MI->isCall())
-                MI->getMF()->updateCallSiteInfo(MI, FoldMI);
+              // Update the call site info.
+              if (MI->shouldUpdateCallSiteInfo())
+                MI->getMF()->moveCallSiteInfo(MI, FoldMI);
               MI->eraseFromParent();
               DefMI->eraseFromParent();
               MRI->markUsesInDebugValueAsUndef(FoldedReg);
@@ -1808,7 +1809,11 @@ ValueTrackerResult ValueTracker::getNextSourceFromCopy() {
   assert(Def->isCopy() && "Invalid definition");
   // Copy instruction are supposed to be: Def = Src.
   // If someone breaks this assumption, bad things will happen everywhere.
-  assert(Def->getNumOperands() == 2 && "Invalid number of operands");
+  // There may be implicit uses preventing the copy to be moved across
+  // some target specific register definitions
+  assert(Def->getNumOperands() - Def->getNumImplicitOperands() == 2 &&
+         "Invalid number of operands");
+  assert(!Def->hasImplicitDef() && "Only implicit uses are allowed");
 
   if (Def->getOperand(DefIdx).getSubReg() != DefSubReg)
     // If we look for a different subreg, it means we want a subreg of src.
@@ -1852,6 +1857,11 @@ ValueTrackerResult ValueTracker::getNextSourceFromBitcast() {
       return ValueTrackerResult();
     SrcIdx = OpIdx;
   }
+
+  // In some rare case, Def has no input, SrcIdx is out of bound,
+  // getOperand(SrcIdx) will fail below.
+  if (SrcIdx >= Def->getNumOperands())
+    return ValueTrackerResult();
 
   // Stop when any user of the bitcast is a SUBREG_TO_REG, replacing with a COPY
   // will break the assumed guarantees for the upper bits.

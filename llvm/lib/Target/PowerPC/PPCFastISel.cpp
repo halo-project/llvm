@@ -469,7 +469,7 @@ bool PPCFastISel::PPCEmitLoad(MVT VT, Register &ResultReg, Address &Addr,
     (ResultReg ? MRI.getRegClass(ResultReg) :
      (RC ? RC :
       (VT == MVT::f64 ? (HasSPE ? &PPC::SPERCRegClass : &PPC::F8RCRegClass) :
-       (VT == MVT::f32 ? (HasSPE ? &PPC::SPE4RCRegClass : &PPC::F4RCRegClass) :
+       (VT == MVT::f32 ? (HasSPE ? &PPC::GPRCRegClass : &PPC::F4RCRegClass) :
         (VT == MVT::i64 ? &PPC::G8RC_and_G8RC_NOX0RegClass :
          &PPC::GPRC_and_GPRC_NOR0RegClass)))));
 
@@ -536,7 +536,7 @@ bool PPCFastISel::PPCEmitLoad(MVT VT, Register &ResultReg, Address &Addr,
         MachinePointerInfo::getFixedStack(*FuncInfo.MF, Addr.Base.FI,
                                           Addr.Offset),
         MachineMemOperand::MOLoad, MFI.getObjectSize(Addr.Base.FI),
-        MFI.getObjectAlignment(Addr.Base.FI));
+        MFI.getObjectAlign(Addr.Base.FI));
 
     BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc, TII.get(Opc), ResultReg)
       .addImm(Addr.Offset).addFrameIndex(Addr.Base.FI).addMemOperand(MMO);
@@ -682,7 +682,7 @@ bool PPCFastISel::PPCEmitStore(MVT VT, unsigned SrcReg, Address &Addr) {
         MachinePointerInfo::getFixedStack(*FuncInfo.MF, Addr.Base.FI,
                                           Addr.Offset),
         MachineMemOperand::MOStore, MFI.getObjectSize(Addr.Base.FI),
-        MFI.getObjectAlignment(Addr.Base.FI));
+        MFI.getObjectAlign(Addr.Base.FI));
 
     BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc, TII.get(Opc))
         .addReg(SrcReg)
@@ -989,7 +989,7 @@ bool PPCFastISel::SelectFPTrunc(const Instruction *I) {
   unsigned DestReg;
   auto RC = MRI.getRegClass(SrcReg);
   if (PPCSubTarget->hasSPE()) {
-    DestReg = createResultReg(&PPC::SPE4RCRegClass);
+    DestReg = createResultReg(&PPC::GPRCRegClass);
     BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc,
       TII.get(PPC::EFSCFD), DestReg)
       .addReg(SrcReg);
@@ -1229,9 +1229,9 @@ bool PPCFastISel::SelectFPToI(const Instruction *I, bool IsSigned) {
   if (PPCSubTarget->hasSPE()) {
     DestReg = createResultReg(&PPC::GPRCRegClass);
     if (IsSigned)
-      Opc = InRC == &PPC::SPE4RCRegClass ? PPC::EFSCTSIZ : PPC::EFDCTSIZ;
+      Opc = InRC == &PPC::GPRCRegClass ? PPC::EFSCTSIZ : PPC::EFDCTSIZ;
     else
-      Opc = InRC == &PPC::SPE4RCRegClass ? PPC::EFSCTUIZ : PPC::EFDCTUIZ;
+      Opc = InRC == &PPC::GPRCRegClass ? PPC::EFSCTUIZ : PPC::EFDCTUIZ;
   } else if (isVSFRCRegClass(RC)) {
     DestReg = createResultReg(&PPC::VSFRCRegClass);
     if (DstVT == MVT::i32) 
@@ -1996,13 +1996,13 @@ unsigned PPCFastISel::PPCMaterializeFP(const ConstantFP *CFP, MVT VT) {
     return 0;
 
   // All FP constants are loaded from the constant pool.
-  unsigned Align = DL.getPrefTypeAlignment(CFP->getType());
-  assert(Align > 0 && "Unexpectedly missing alignment information!");
-  unsigned Idx = MCP.getConstantPoolIndex(cast<Constant>(CFP), Align);
+  Align Alignment = DL.getPrefTypeAlign(CFP->getType());
+  unsigned Idx =
+      MCP.getConstantPoolIndex(cast<Constant>(CFP), Alignment.value());
   const bool HasSPE = PPCSubTarget->hasSPE();
   const TargetRegisterClass *RC;
   if (HasSPE)
-    RC = ((VT == MVT::f32) ? &PPC::SPE4RCRegClass : &PPC::SPERCRegClass);
+    RC = ((VT == MVT::f32) ? &PPC::GPRCRegClass : &PPC::SPERCRegClass);
   else
     RC = ((VT == MVT::f32) ? &PPC::F4RCRegClass : &PPC::F8RCRegClass);
 
@@ -2011,7 +2011,7 @@ unsigned PPCFastISel::PPCMaterializeFP(const ConstantFP *CFP, MVT VT) {
 
   MachineMemOperand *MMO = FuncInfo.MF->getMachineMemOperand(
       MachinePointerInfo::getConstantPool(*FuncInfo.MF),
-      MachineMemOperand::MOLoad, (VT == MVT::f32) ? 4 : 8, Align);
+      MachineMemOperand::MOLoad, (VT == MVT::f32) ? 4 : 8, Alignment);
 
   unsigned Opc;
 
@@ -2093,8 +2093,7 @@ unsigned PPCFastISel::PPCMaterializeGV(const GlobalValue *GV, MVT VT) {
     BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc, TII.get(PPC::ADDIStocHA8),
             HighPartReg).addReg(PPC::X2).addGlobalAddress(GV);
 
-    unsigned char GVFlags = PPCSubTarget->classifyGlobalReference(GV);
-    if (GVFlags & PPCII::MO_NLP_FLAG) {
+    if (PPCSubTarget->isGVIndirectSymbol(GV)) {
       BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc, TII.get(PPC::LDtocL),
               DestReg).addGlobalAddress(GV).addReg(HighPartReg);
     } else {
@@ -2464,7 +2463,7 @@ namespace llvm {
                                 const TargetLibraryInfo *LibInfo) {
     // Only available on 64-bit ELF for now.
     const PPCSubtarget &Subtarget = FuncInfo.MF->getSubtarget<PPCSubtarget>();
-    if (Subtarget.isPPC64() && Subtarget.isSVR4ABI())
+    if (Subtarget.is64BitELFABI())
       return new PPCFastISel(FuncInfo, LibInfo);
     return nullptr;
   }

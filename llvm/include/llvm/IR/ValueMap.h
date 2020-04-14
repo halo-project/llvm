@@ -93,7 +93,6 @@ class ValueMap {
   MapT Map;
   Optional<MDMapT> MDMap;
   ExtraData Data;
-  bool MayMapMetadata = true;
 
 public:
   using key_type = KeyT;
@@ -119,10 +118,6 @@ public:
     return *MDMap;
   }
   Optional<MDMapT> &getMDMap() { return MDMap; }
-
-  bool mayMapMetadata() const { return MayMapMetadata; }
-  void enableMapMetadata() { MayMapMetadata = true; }
-  void disableMapMetadata() { MayMapMetadata = false; }
 
   /// Get the mapped metadata, if it's in the map.
   Optional<Metadata *> getMappedMD(const Metadata *MD) const {
@@ -248,7 +243,7 @@ class ValueMapCallbackVH final : public CallbackVH {
   friend struct DenseMapInfo<ValueMapCallbackVH>;
 
   using ValueMapT = ValueMap<KeyT, ValueT, Config>;
-  using KeySansPointerT = typename std::remove_pointer<KeyT>::type;
+  using KeySansPointerT = std::remove_pointer_t<KeyT>;
 
   ValueMapT *Map;
 

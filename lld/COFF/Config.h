@@ -103,10 +103,14 @@ struct Configuration {
   bool debugDwarf = false;
   bool debugGHashes = false;
   bool debugSymtab = false;
+  bool driver = false;
+  bool driverUponly = false;
+  bool driverWdm = false;
   bool showTiming = false;
   bool showSummary = false;
   unsigned debugTypes = static_cast<unsigned>(DebugType::None);
   std::vector<std::string> natvisFiles;
+  llvm::StringMap<std::string> namedStreams;
   llvm::SmallString<128> pdbAltPath;
   llvm::SmallString<128> pdbPath;
   llvm::SmallString<128> pdbSourcePath;
@@ -122,6 +126,7 @@ struct Configuration {
   bool dll = false;
   StringRef implib;
   std::vector<Export> exports;
+  bool hadExplicitExports;
   std::set<std::string> delayLoads;
   std::map<std::string, int> dllOrder;
   Symbol *delayLoadHelper = nullptr;
@@ -140,7 +145,7 @@ struct Configuration {
   unsigned ltoo = 2;
 
   // Used for /opt:lldltojobs=N
-  unsigned thinLTOJobs = 0;
+  std::string thinLTOJobs;
   // Used for /opt:lldltopartitions=N
   unsigned ltoPartitions = 1;
 
@@ -178,6 +183,9 @@ struct Configuration {
   llvm::StringMap<int> order;
 
   // Used for /lldmap.
+  std::string lldmapFile;
+
+  // Used for /map.
   std::string mapFile;
 
   // Used for /thinlto-index-only:
@@ -188,6 +196,9 @@ struct Configuration {
 
   // Used for /thinlto-object-suffix-replace:
   std::pair<llvm::StringRef, llvm::StringRef> thinLTOObjectSuffixReplace;
+
+  // Used for /lto-obj-path:
+  llvm::StringRef ltoObjPath;
 
   uint64_t align = 4096;
   uint64_t imageBase = -1;
@@ -204,6 +215,7 @@ struct Configuration {
   uint32_t functionPadMin = 0;
   bool dynamicBase = true;
   bool allowBind = true;
+  bool cetCompat = false;
   bool nxCompat = true;
   bool allowIsolation = true;
   bool terminalServerAware = true;
@@ -214,6 +226,7 @@ struct Configuration {
   bool warnMissingOrderSymbol = true;
   bool warnLocallyDefinedImported = true;
   bool warnDebugInfoUnusable = true;
+  bool warnLongSectionNames = true;
   bool incremental = true;
   bool integrityCheck = false;
   bool killAt = false;

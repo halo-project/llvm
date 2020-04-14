@@ -21,6 +21,8 @@
 #include "llvm/Analysis/ValueLatticeUtils.h"
 #include "llvm/IR/InstVisitor.h"
 #include "llvm/IR/MDBuilder.h"
+#include "llvm/InitializePasses.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Transforms/IPO.h"
 using namespace llvm;
 
@@ -70,8 +72,7 @@ public:
   CVPLatticeVal(CVPLatticeStateTy LatticeState) : LatticeState(LatticeState) {}
   CVPLatticeVal(std::vector<Function *> &&Functions)
       : LatticeState(FunctionSet), Functions(std::move(Functions)) {
-    assert(std::is_sorted(this->Functions.begin(), this->Functions.end(),
-                          Compare()));
+    assert(llvm::is_sorted(this->Functions, Compare()));
   }
 
   /// Get a reference to the functions held by this lattice value. The number

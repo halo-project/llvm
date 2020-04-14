@@ -49,6 +49,7 @@
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Value.h"
+#include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLine.h"
@@ -431,11 +432,12 @@ public:
     Value *Ptr = Cand.Load->getPointerOperand();
     auto *PtrSCEV = cast<SCEVAddRecExpr>(PSE.getSCEV(Ptr));
     auto *PH = L->getLoopPreheader();
+    assert(PH && "Preheader should exist!");
     Value *InitialPtr = SEE.expandCodeFor(PtrSCEV->getStart(), Ptr->getType(),
                                           PH->getTerminator());
     Value *Initial = new LoadInst(
         Cand.Load->getType(), InitialPtr, "load_initial",
-        /* isVolatile */ false, Cand.Load->getAlignment(), PH->getTerminator());
+        /* isVolatile */ false, Cand.Load->getAlign(), PH->getTerminator());
 
     PHINode *PHI = PHINode::Create(Initial->getType(), 2, "store_forwarded",
                                    &L->getHeader()->front());
@@ -487,7 +489,7 @@ public:
     // Filter the candidates further.
     SmallVector<StoreToLoadForwardingCandidate, 4> Candidates;
     unsigned NumForwarding = 0;
-    for (const StoreToLoadForwardingCandidate Cand : StoreToLoadDependences) {
+    for (const StoreToLoadForwardingCandidate &Cand : StoreToLoadDependences) {
       LLVM_DEBUG(dbgs() << "Candidate " << Cand);
 
       // Make sure that the stored values is available everywhere in the loop in
@@ -533,6 +535,11 @@ public:
       return false;
     }
 
+    if (!L->isLoopSimplifyForm()) {
+      LLVM_DEBUG(dbgs() << "Loop is not is loop-simplify form");
+      return false;
+    }
+
     if (!Checks.empty() || !LAI.getPSE().getUnionPredicate().isAlwaysTrue()) {
       if (LAI.hasConvergentOp()) {
         LLVM_DEBUG(dbgs() << "Versioning is needed but not allowed with "
@@ -543,16 +550,12 @@ public:
       auto *HeaderBB = L->getHeader();
       auto *F = HeaderBB->getParent();
       bool OptForSize = F->hasOptSize() ||
-                        llvm::shouldOptimizeForSize(HeaderBB, PSI, BFI);
+                        llvm::shouldOptimizeForSize(HeaderBB, PSI, BFI,
+                                                    PGSOQueryType::IRPass);
       if (OptForSize) {
         LLVM_DEBUG(
             dbgs() << "Versioning is needed but not allowed when optimizing "
                       "for size.\n");
-        return false;
-      }
-
-      if (!L->isLoopSimplifyForm()) {
-        LLVM_DEBUG(dbgs() << "Loop is not is loop-simplify form");
         return false;
       }
 
