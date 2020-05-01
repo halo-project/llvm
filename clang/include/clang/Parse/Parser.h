@@ -2721,6 +2721,7 @@ private:
                                 SourceLocation &EllipsisLoc);
   void ParseAlignmentSpecifier(ParsedAttributes &Attrs,
                                SourceLocation *endLoc = nullptr);
+  ExprResult ParseExtIntegerArgument();
 
   VirtSpecifiers::Specifier isCXX11VirtSpecifier(const Token &Tok) const;
   VirtSpecifiers::Specifier isCXX11VirtSpecifier() const {
@@ -3109,6 +3110,11 @@ private:
   /// <iterators> = 'iterator' '(' { [ <iterator-type> ] identifier =
   /// <range-specification> }+ ')'
   ExprResult ParseOpenMPIteratorsExpr();
+
+  /// Parses allocators and traits in the context of the uses_allocator clause.
+  /// Expected format:
+  /// '(' { <allocator> [ '(' <allocator_traits> ')' ] }+ ')'
+  OMPClause *ParseOpenMPUsesAllocatorClause(OpenMPDirectiveKind DKind);
 
 public:
   /// Parses simple expression in parens for single-expression clauses of OpenMP

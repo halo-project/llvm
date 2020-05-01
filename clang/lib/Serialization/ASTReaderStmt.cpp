@@ -1051,12 +1051,16 @@ void ASTStmtReader::VisitCastExpr(CastExpr *E) {
 }
 
 void ASTStmtReader::VisitBinaryOperator(BinaryOperator *E) {
+  bool hasFP_Features;
+  BinaryOperator::Opcode opc;
   VisitExpr(E);
+  E->setHasStoredFPFeatures(hasFP_Features = Record.readInt());
+  E->setOpcode(opc = (BinaryOperator::Opcode)Record.readInt());
   E->setLHS(Record.readSubExpr());
   E->setRHS(Record.readSubExpr());
-  E->setOpcode((BinaryOperator::Opcode)Record.readInt());
   E->setOperatorLoc(readSourceLocation());
-  E->setFPFeatures(FPOptions(Record.readInt()));
+  if (hasFP_Features)
+    E->setStoredFPFeatures(FPOptions(Record.readInt()));
 }
 
 void ASTStmtReader::VisitCompoundAssignOperator(CompoundAssignOperator *E) {
@@ -1748,14 +1752,10 @@ void ASTStmtReader::VisitCXXNullPtrLiteralExpr(CXXNullPtrLiteralExpr *E) {
 void ASTStmtReader::VisitCXXTypeidExpr(CXXTypeidExpr *E) {
   VisitExpr(E);
   E->setSourceRange(readSourceRange());
-  if (E->isTypeOperand()) { // typeid(int)
-    E->setTypeOperandSourceInfo(
-        readTypeSourceInfo());
-    return;
-  }
-
-  // typeid(42+2)
-  E->setExprOperand(Record.readSubExpr());
+  if (E->isTypeOperand())
+    E->Operand = readTypeSourceInfo();
+  else
+    E->Operand = Record.readSubExpr();
 }
 
 void ASTStmtReader::VisitCXXThisExpr(CXXThisExpr *E) {
@@ -2160,16 +2160,11 @@ void ASTStmtReader::VisitMSPropertySubscriptExpr(MSPropertySubscriptExpr *E) {
 void ASTStmtReader::VisitCXXUuidofExpr(CXXUuidofExpr *E) {
   VisitExpr(E);
   E->setSourceRange(readSourceRange());
-  std::string UuidStr = readString();
-  E->setUuidStr(StringRef(UuidStr).copy(Record.getContext()));
-  if (E->isTypeOperand()) { // __uuidof(ComType)
-    E->setTypeOperandSourceInfo(
-        readTypeSourceInfo());
-    return;
-  }
-
-  // __uuidof(expr)
-  E->setExprOperand(Record.readSubExpr());
+  E->Guid = readDeclAs<MSGuidDecl>();
+  if (E->isTypeOperand())
+    E->Operand = readTypeSourceInfo();
+  else
+    E->Operand = Record.readSubExpr();
 }
 
 void ASTStmtReader::VisitSEHLeaveStmt(SEHLeaveStmt *S) {
@@ -2313,6 +2308,7 @@ void ASTStmtReader::VisitOMPParallelDirective(OMPParallelDirective *D) {
   // The NumClauses field was read in ReadStmtFromStream.
   Record.skipInts(1);
   VisitOMPExecutableDirective(D);
+  D->setTaskReductionRefExpr(Record.readSubExpr());
   D->setHasCancel(Record.readInt());
 }
 
@@ -2322,6 +2318,7 @@ void ASTStmtReader::VisitOMPSimdDirective(OMPSimdDirective *D) {
 
 void ASTStmtReader::VisitOMPForDirective(OMPForDirective *D) {
   VisitOMPLoopDirective(D);
+  D->setTaskReductionRefExpr(Record.readSubExpr());
   D->setHasCancel(Record.readInt());
 }
 
@@ -2334,6 +2331,7 @@ void ASTStmtReader::VisitOMPSectionsDirective(OMPSectionsDirective *D) {
   // The NumClauses field was read in ReadStmtFromStream.
   Record.skipInts(1);
   VisitOMPExecutableDirective(D);
+  D->setTaskReductionRefExpr(Record.readSubExpr());
   D->setHasCancel(Record.readInt());
 }
 
@@ -2365,6 +2363,7 @@ void ASTStmtReader::VisitOMPCriticalDirective(OMPCriticalDirective *D) {
 
 void ASTStmtReader::VisitOMPParallelForDirective(OMPParallelForDirective *D) {
   VisitOMPLoopDirective(D);
+  D->setTaskReductionRefExpr(Record.readSubExpr());
   D->setHasCancel(Record.readInt());
 }
 
@@ -2379,6 +2378,7 @@ void ASTStmtReader::VisitOMPParallelMasterDirective(
   // The NumClauses field was read in ReadStmtFromStream.
   Record.skipInts(1);
   VisitOMPExecutableDirective(D);
+  D->setTaskReductionRefExpr(Record.readSubExpr());
 }
 
 void ASTStmtReader::VisitOMPParallelSectionsDirective(
@@ -2387,6 +2387,7 @@ void ASTStmtReader::VisitOMPParallelSectionsDirective(
   // The NumClauses field was read in ReadStmtFromStream.
   Record.skipInts(1);
   VisitOMPExecutableDirective(D);
+  D->setTaskReductionRefExpr(Record.readSubExpr());
   D->setHasCancel(Record.readInt());
 }
 
@@ -2494,11 +2495,14 @@ void ASTStmtReader::VisitOMPTargetParallelDirective(
   VisitStmt(D);
   Record.skipInts(1);
   VisitOMPExecutableDirective(D);
+  D->setTaskReductionRefExpr(Record.readSubExpr());
+  D->setHasCancel(Record.readBool());
 }
 
 void ASTStmtReader::VisitOMPTargetParallelForDirective(
     OMPTargetParallelForDirective *D) {
   VisitOMPLoopDirective(D);
+  D->setTaskReductionRefExpr(Record.readSubExpr());
   D->setHasCancel(Record.readInt());
 }
 
@@ -2568,6 +2572,7 @@ void ASTStmtReader::VisitOMPTargetUpdateDirective(OMPTargetUpdateDirective *D) {
 void ASTStmtReader::VisitOMPDistributeParallelForDirective(
     OMPDistributeParallelForDirective *D) {
   VisitOMPLoopDirective(D);
+  D->setTaskReductionRefExpr(Record.readSubExpr());
   D->setHasCancel(Record.readInt());
 }
 
@@ -2608,6 +2613,7 @@ void ASTStmtReader::VisitOMPTeamsDistributeParallelForSimdDirective(
 void ASTStmtReader::VisitOMPTeamsDistributeParallelForDirective(
     OMPTeamsDistributeParallelForDirective *D) {
   VisitOMPLoopDirective(D);
+  D->setTaskReductionRefExpr(Record.readSubExpr());
   D->setHasCancel(Record.readInt());
 }
 
@@ -2626,6 +2632,7 @@ void ASTStmtReader::VisitOMPTargetTeamsDistributeDirective(
 void ASTStmtReader::VisitOMPTargetTeamsDistributeParallelForDirective(
     OMPTargetTeamsDistributeParallelForDirective *D) {
   VisitOMPLoopDirective(D);
+  D->setTaskReductionRefExpr(Record.readSubExpr());
   D->setHasCancel(Record.readInt());
 }
 
@@ -2942,11 +2949,13 @@ Stmt *ASTReader::ReadStmtFromStream(ModuleFile &F) {
       break;
 
     case EXPR_BINARY_OPERATOR:
-      S = new (Context) BinaryOperator(Empty);
+      S = BinaryOperator::CreateEmpty(Context,
+                                      Record[ASTStmtReader::NumExprFields]);
       break;
 
     case EXPR_COMPOUND_ASSIGN_OPERATOR:
-      S = new (Context) CompoundAssignOperator(Empty);
+      S = CompoundAssignOperator::CreateEmpty(
+          Context, Record[ASTStmtReader::NumExprFields]);
       break;
 
     case EXPR_CONDITIONAL_OPERATOR:

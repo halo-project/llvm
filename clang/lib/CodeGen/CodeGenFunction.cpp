@@ -257,6 +257,7 @@ TypeEvaluationKind CodeGenFunction::getEvaluationKind(QualType type) {
     case Type::Enum:
     case Type::ObjCObjectPointer:
     case Type::Pipe:
+    case Type::ExtInt:
       return TEK_Scalar;
 
     // Complexes.
@@ -2011,6 +2012,7 @@ void CodeGenFunction::EmitVariablyModifiedType(QualType type) {
     case Type::ObjCObject:
     case Type::ObjCInterface:
     case Type::ObjCObjectPointer:
+    case Type::ExtInt:
       llvm_unreachable("type class is never variably-modified!");
 
     case Type::Adjusted:
@@ -2463,7 +2465,7 @@ void CodeGenFunction::emitAlignmentAssumptionCheck(
     llvm::Value *OffsetValue, llvm::Value *TheCheck,
     llvm::Instruction *Assumption) {
   assert(Assumption && isa<llvm::CallInst>(Assumption) &&
-         cast<llvm::CallInst>(Assumption)->getCalledValue() ==
+         cast<llvm::CallInst>(Assumption)->getCalledOperand() ==
              llvm::Intrinsic::getDeclaration(
                  Builder.GetInsertBlock()->getParent()->getParent(),
                  llvm::Intrinsic::assume) &&

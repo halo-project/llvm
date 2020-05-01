@@ -7,11 +7,17 @@
 @import A;
 
 Typedef t1;
-// CHECK-DAG: TypedefDecl {{.*}} imported in A Typedef
+// RUN: lldb-test symbols -dump-clang-ast -find type --language=ObjC++ \
+// RUN:   -compiler-context 'Module:A,Typedef:Typedef' %t.o \
+// RUN:   | FileCheck %s --check-prefix=CHECK-TYPEDEF
+// CHECK-TYPEDEF: TypedefDecl {{.*}} imported in A Typedef
 
 TopLevelStruct s1;
-// CHECK-DAG: CXXRecordDecl {{.*}} imported in A struct TopLevelStruct
-// CHECK-DAG: -FieldDecl {{.*}} in A a 'int'
+// RUN: lldb-test symbols -dump-clang-ast -find type --language=ObjC++ \
+// RUN:   -compiler-context 'Module:A,Struct:TopLevelStruct' %t.o \
+// RUN:   | FileCheck %s --check-prefix=CHECK-TOPLEVELSTRUCT
+// CHECK-TOPLEVELSTRUCT: CXXRecordDecl {{.*}} imported in A struct TopLevelStruct
+// CHECK-TOPLEVELSTRUCT: -FieldDecl {{.*}} in A a 'int'
 
 Struct s2;
 // CHECK-DAG: CXXRecordDecl {{.*}} imported in A struct
@@ -28,15 +34,28 @@ Enum e1;
 // CHECK-DAG: EnumDecl {{.*}} imported in A {{.*}} Enum_e
 // FIXME: -EnumConstantDecl {{.*}} imported in A a
 
+@implementation SomeClass {
+  int private_ivar;
+}
+@synthesize number = private_ivar;
+@end
+
 SomeClass *obj1;
-// CHECK-DAG: ObjCInterfaceDecl {{.*}} imported in A {{.*}} SomeClass
+// RUN: lldb-test symbols -dump-clang-ast -find type --language=ObjC++ \
+// RUN:   -compiler-context 'Module:A,Struct:SomeClass' %t.o \
+// RUN:   | FileCheck %s --check-prefix=CHECK-OBJC
+// CHECK-OBJC: ObjCInterfaceDecl {{.*}} imported in A SomeClass
+// CHECK-OBJC-NEXT: |-ObjCIvarDecl
+// CHECK-OBJC-NEXT: |-ObjCMethodDecl 0x[[NUMBER:[0-9a-f]+]]{{.*}} imported in A
+// CHECK-OBJC-NEXT: `-ObjCPropertyDecl {{.*}} imported in A number 'int' readonly
+// CHECK-OBJC-NEXT:   `-getter ObjCMethod 0x[[NUMBER]] 'number'
 
 // Template specializations are not yet supported, so they lack the ownership info:
 Template<int> t2;
-// CHECK-DAG: ClassTemplateSpecializationDecl {{.*}} struct Template
+// CHECK-DAG: ClassTemplateSpecializationDecl {{.*}} imported in A struct Template
 
 Namespace::InNamespace<int> t3;
-// CHECK-DAG: ClassTemplateSpecializationDecl {{.*}} struct InNamespace
+// CHECK-DAG: ClassTemplateSpecializationDecl {{.*}} imported in A struct InNamespace
 
 Namespace::AlsoInNamespace<int> t4;
-// CHECK-DAG: ClassTemplateSpecializationDecl {{.*}} struct AlsoInNamespace
+// CHECK-DAG: ClassTemplateSpecializationDecl {{.*}} imported in A.B struct AlsoInNamespace
