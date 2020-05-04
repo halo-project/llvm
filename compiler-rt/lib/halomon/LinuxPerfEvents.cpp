@@ -46,7 +46,7 @@ namespace linux {
 void handle_perf_event(MonitorState *MS, perf_event_header *EvtHeader) {
 
   if (EvtHeader->type == PERF_RECORD_SAMPLE) {
-    // logs() << "PERF_RECORD_SAMPLE event.\n";
+    // clogs() << "PERF_RECORD_SAMPLE event.\n";
 
     struct SInfo {
       perf_event_header header;
@@ -109,7 +109,7 @@ void handle_perf_event(MonitorState *MS, perf_event_header *EvtHeader) {
     }
 
   } else {
-    // logs() << "some unhandled perf event was encountered.\n";
+    // clogs() << "some unhandled perf event was encountered.\n";
   }
 
 }
@@ -288,7 +288,7 @@ int get_perf_events_fd(const std::string &Name,
   int Ret = pfm_get_os_event_encoding(Name.c_str(), PFM_PLM3, PFM_OS_PERF_EVENT_EXT, &Arg);
   if (Ret != PFM_SUCCESS) {
     std::string Msg = pfm_strerror(Ret);
-    logs() << "Unable to get event encoding for " << Name << ": " <<
+    clogs() << "Unable to get event encoding for " << Name << ": " <<
                 Msg << "\n";
     return -1;
   }
@@ -411,23 +411,23 @@ int get_perf_events_fd(const std::string &Name,
     return try_perf_event_open(&Attr, TID, CPU, -1, 0, [](int ErrNo, perf_event_attr &Attr) {
 
       // okay then we give up. print an error and forward the invalid FD
-      logs() << "Unsuccessful call to perf_event_open: ";
+      clogs() << "Unsuccessful call to perf_event_open: ";
       switch (ErrNo) {
-        case E2BIG: {logs() << "E2BIG\n"; break;}
-        case EACCES: {logs() << "EACCES\n"; break;}
-        case EBADF: {logs() << "EBADF\n"; break;}
-        case EBUSY: {logs() << "EBUSY\n"; break;}
-        case EFAULT: {logs() << "EFAULT\n"; break;}
-        case EINVAL: {logs() << "EINVAL\n"; break;}
-        case EMFILE: {logs() << "EMFILE\n"; break;}
-        case ENODEV: {logs() << "ENODEV\n"; break;}
-        case ENOSPC: {logs() << "ENOSPC\n"; break;}
-        case ENOSYS: {logs() << "ENOSYS\n"; break;}
-        case EOPNOTSUPP: {logs() << "EOPNOTSUPP\n"; break;}
-        case EOVERFLOW: {logs() << "EOVERFLOW\n"; break;}
-        case EPERM: {logs() << "EPERM\n"; break;}
-        case ESRCH: {logs() << "ESRCH\n"; break;}
-        default: {logs() << "Code = " << ErrNo << " (unknown name)\n"; break;}
+        case E2BIG: {clogs() << "E2BIG\n"; break;}
+        case EACCES: {clogs() << "EACCES\n"; break;}
+        case EBADF: {clogs() << "EBADF\n"; break;}
+        case EBUSY: {clogs() << "EBUSY\n"; break;}
+        case EFAULT: {clogs() << "EFAULT\n"; break;}
+        case EINVAL: {clogs() << "EINVAL\n"; break;}
+        case EMFILE: {clogs() << "EMFILE\n"; break;}
+        case ENODEV: {clogs() << "ENODEV\n"; break;}
+        case ENOSPC: {clogs() << "ENOSPC\n"; break;}
+        case ENOSYS: {clogs() << "ENOSYS\n"; break;}
+        case EOPNOTSUPP: {clogs() << "EOPNOTSUPP\n"; break;}
+        case EOVERFLOW: {clogs() << "EOVERFLOW\n"; break;}
+        case EPERM: {clogs() << "EPERM\n"; break;}
+        case ESRCH: {clogs() << "ESRCH\n"; break;}
+        default: {clogs() << "Code = " << ErrNo << " (unknown name)\n"; break;}
       };
       return -1;
     });
@@ -449,14 +449,14 @@ bool setup_sigio_fd(asio::io_service &PerfSignalService, asio::posix::stream_des
 
   if (sigprocmask(SIG_BLOCK, &SigMask, NULL) == -1) {
     std::string Msg = strerror(errno);
-    logs() << "Unable to block signals: " << Msg << "\n";
+    clogs() << "Unable to block signals: " << Msg << "\n";
     return true;
   }
 
   SigFD = signalfd(-1, &SigMask, 0);
   if (SigFD == -1) {
     std::string Msg = strerror(errno);
-    logs() << "Unable create signal file handle: " << Msg << "\n";
+    clogs() << "Unable create signal file handle: " << Msg << "\n";
     return true;
   }
 
@@ -488,7 +488,7 @@ std::string get_self_exe() {
   ssize_t len = readlink("/proc/self/exe", buf.data(), buf.size()-1);
   if (len == -1) {
     std::string Msg = strerror(errno);
-    logs() << Msg << "\n";
+    clogs() << Msg << "\n";
     halo::fatal_error("path to process's executable not found.");
   }
   buf[len] = '\0'; // null terminate
@@ -564,7 +564,7 @@ PerfHandle::PerfHandle(MonitorState *mon, int CPU, int MyPID, size_t pagesz)
   int Ret = pfm_initialize();
   if (Ret != PFM_SUCCESS) {
     std::string Msg = pfm_strerror(Ret);
-    logs() << "Failed to initialize PFM library: " << Msg << "\n";
+    clogs() << "Failed to initialize PFM library: " << Msg << "\n";
     fatal_error("error in initializing perf handle");
   }
 
@@ -588,18 +588,18 @@ PerfHandle::PerfHandle(MonitorState *mon, int CPU, int MyPID, size_t pagesz)
   FD = get_perf_events_fd(EventName, EventPeriod,
                                   MyPID, CPU, NumBufPages, PageSz);
   if (FD == -1)
-    fatal_error("error in perf handle ctor");
+    fatal_error("error in perf handle ctor: get_perf_events_fd failed");
 
   EventBufSz = NumBufPages*PageSz;
   EventBuf = (uint8_t *) mmap(NULL, EventBufSz,
                            PROT_READ|PROT_WRITE, MAP_SHARED, FD, 0);
   if (EventBuf == MAP_FAILED) {
     if (errno == EPERM)
-      logs() << "Consider increasing /proc/sys/kernel/perf_event_mlock_kb or "
+      clogs() << "Consider increasing /proc/sys/kernel/perf_event_mlock_kb or "
                    "allocating less memory for events buffer.\n";
     std::string Msg = strerror(errno);
-    logs() << "Unable to map perf events pages: " << Msg << "\n";
-    fatal_error("error in perf handle ctor");
+    clogs() << "Unable to map perf events pages: " << Msg << "\n";
+    fatal_error("error in perf handle ctor : unable to map perf events pages");
   }
 
   // configure the file descriptor
@@ -614,14 +614,14 @@ PerfHandle::~PerfHandle() {
   int ret = munmap(EventBuf, EventBufSz);
   if (ret) {
     std::string Msg = strerror(errno);
-    logs() << "Failed to unmap event buffer: " << Msg << "\n";
+    clogs() << "Failed to unmap event buffer: " << Msg << "\n";
     fatal_error("error in PerfHandle dtor 1");
   }
 
   ret = close(FD);
   if (ret) {
     std::string Msg = strerror(errno);
-    logs() << "Failed to close perf_event file descriptor: " << Msg << "\n";
+    clogs() << "Failed to close perf_event file descriptor: " << Msg << "\n";
     fatal_error("error in PerfHandle dtor 2");
   }
 }
