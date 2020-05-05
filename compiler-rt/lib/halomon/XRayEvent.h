@@ -1,7 +1,7 @@
 #pragma once
 
 #include <thread>
-
+#include "Logging.h"
 #include "xray/xray_interface_internal.h"
 
 namespace halo {

@@ -48,6 +48,7 @@ protobuf_generate_cpp(PROTO_SRCS PROTO_HDRS ${PROTO_FILES})
 # enumerate files in our local dir and the shared net dir
 set(HALOMON_SOURCES
   ${HALO_NET_DIR}/Logging.cpp
+  DynamicLinker.cpp
   LinuxPerfEvents.cpp
   Monitor.cpp
   MonitorState.cpp
