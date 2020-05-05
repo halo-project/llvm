@@ -3,7 +3,6 @@
 #include <cassert>
 #include <cstdlib>
 #include <string>
-#include "Logging.h"
 #include <atomic>
 #include <thread>
 
@@ -44,8 +43,8 @@ namespace halo {
 namespace linux {
 
 void handle_perf_event(MonitorState *MS, perf_event_header *EvtHeader) {
-
-  if (EvtHeader->type == PERF_RECORD_SAMPLE) {
+  auto evtType = EvtHeader->type;
+  if (evtType == PERF_RECORD_SAMPLE) {
     // clogs() << "PERF_RECORD_SAMPLE event.\n";
 
     struct SInfo {
@@ -68,14 +67,18 @@ void handle_perf_event(MonitorState *MS, perf_event_header *EvtHeader) {
       perf_branch_entry lbr[1];     // lbr[bnr] length array.
     };
 
-    // struct SInfo3 {
-    //   uint64_t weight;              // PERF_SAMPLE_WEIGHT
-    //   perf_mem_data_src data_src;   // PERF_SAMPLE_DATA_SRC
-    // };
+    struct SInfo3 {
+      // weight is a 64-bit value provided by the hardware is recorded
+      // that indicates how costly the event was.  This allows expensive events to  stand  out  more
+      // clearly in profiles.
+      uint64_t weight;              // PERF_SAMPLE_WEIGHT
+
+      perf_mem_data_src data_src;   // PERF_SAMPLE_DATA_SRC
+    };
 
     SInfo *SI = (SInfo *) EvtHeader;
     SInfo2 *SI2 = (SInfo2 *) &SI->ips[SI->nr];
-    // SInfo3 *SI3 = (SInfo3 *) &SI2->lbr[SI2->bnr];
+    SInfo3 *SI3 = (SInfo3 *) &SI2->lbr[SI2->bnr];
 
     pb::RawSample &Sample = MS->newSample();
 
@@ -86,6 +89,7 @@ void handle_perf_event(MonitorState *MS, perf_event_header *EvtHeader) {
     Sample.set_instr_ptr(SI->ip);
     Sample.set_thread_id(SI->tid);
     Sample.set_time(SI->time);
+    Sample.set_weight(SI3->weight);
 
     // record the call chain.
     uint64_t ChainLen = SI->nr;
@@ -107,6 +111,24 @@ void handle_perf_event(MonitorState *MS, perf_event_header *EvtHeader) {
       BI->set_mispred((bool)BR->mispred);
       BI->set_predicted((bool)BR->predicted);
     }
+
+  } else if (evtType == PERF_RECORD_MMAP) {
+    // this process mmap'd memory marked as PROT_EXEC
+    struct MMapRecord {
+      perf_event_header header;
+      uint32_t pid;       // process ID.
+      uint32_t tid;       // thread ID
+      uint64_t addr;      // address of the allocated memory.
+      uint64_t len;       // length  of  the  allocated  memory.
+      uint64_t pgoff;     // page offset of the allocated memory
+      char filename[1];   // a string describing the backing of the allocated memory.
+    };
+
+    // MMapRecord *MMR = (MMapRecord *) EvtHeader;
+    // clogs() << "recieved a PERF_RECORD_MMAP event."
+    //   << " addr = " << std::hex << "0x" << MMR->addr << std::dec
+    //   << ", len = " << MMR->len
+    //   << "\n";
 
   } else {
     // clogs() << "some unhandled perf event was encountered.\n";
