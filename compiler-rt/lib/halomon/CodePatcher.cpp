@@ -177,7 +177,7 @@ llvm::Error CodePatcher::replaceAll(pb::CodeReplacement const& CR,
       return MaybeSymbol.takeError();
 
     auto DySym = MaybeSymbol.get();
-    if (!DySym.Symbol.getFlags().isCallable())
+    if (!DySym.getFlags().isCallable())
       return makeError("JITed function symbol is not callable.");
 
     NewCode.push_back({Request, DySym});
@@ -213,7 +213,7 @@ llvm::Error CodePatcher::replaceAll(pb::CodeReplacement const& CR,
     auto &OrigSymb = Info.first;
     auto &NewSymb = Info.second;
 
-    auto Error = redirectTo(OrigSymb.addr(), NewSymb.Symbol.getAddress());
+    auto Error = redirectTo(OrigSymb.addr(), NewSymb.getAddress());
     if (Error) {
       llvm::errs() << "Unable to redirect " << OrigSymb.label() << "\n";
       return Error;
