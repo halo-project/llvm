@@ -162,66 +162,66 @@ llvm::Expected<int32_t> CodePatcher::getXRayID(uint64_t FnPtr) {
   return Result->second;
 }
 
-llvm::Error CodePatcher::replaceAll(pb::CodeReplacement const& CR,
-                                      std::unique_ptr<DyLib> Dylib, Channel &Chan) {
-  // perform linking on all requested symbols and collect those
-  // new addresses.
+// llvm::Error CodePatcher::replaceAll(pb::CodeReplacement const& CR,
+//                                       std::unique_ptr<DyLib> Dylib, Channel &Chan) {
+//   // perform linking on all requested symbols and collect those
+//   // new addresses.
 
-  llvm::SmallVector<std::pair<pb::FunctionSymbol const&, DySymbol>, 10> NewCode;
+//   llvm::SmallVector<std::pair<pb::FunctionSymbol const&, DySymbol>, 10> NewCode;
 
-  for (pb::FunctionSymbol const& Request : CR.symbols()) {
-    auto &Label = Request.label();
-    auto MaybeSymbol = Dylib->requireSymbol(Label);
+//   for (pb::FunctionSymbol const& Request : CR.symbols()) {
+//     auto &Label = Request.label();
+//     auto MaybeSymbol = Dylib->requireSymbol(Label);
 
-    if (!MaybeSymbol)
-      return MaybeSymbol.takeError();
+//     if (!MaybeSymbol)
+//       return MaybeSymbol.takeError();
 
-    auto DySym = MaybeSymbol.get();
-    if (!DySym.getFlags().isCallable())
-      return makeError("JITed function symbol is not callable.");
+//     auto DySym = MaybeSymbol.get();
+//     if (!DySym.getFlags().isCallable())
+//       return makeError("JITed function symbol is not callable.");
 
-    NewCode.push_back({Request, DySym});
-  }
+//     NewCode.push_back({Request, DySym});
+//   }
 
-  // Nothing to do!
-  if (NewCode.empty())
-    return llvm::Error::success();
+//   // Nothing to do!
+//   if (NewCode.empty())
+//     return llvm::Error::success();
 
-  Dylib->dump(logs());
+//   Dylib->dump(logs());
 
-  // save the dylib since we definitely need it.
-  Dylibs.push_back(std::move(Dylib));
+//   // save the dylib since we definitely need it.
+//   Dylibs.push_back(std::move(Dylib));
 
-  // TODO: send a message to server containing the new address & size information.
+//   // TODO: send a message to server containing the new address & size information.
 
-  // TODO: inform perf-events of these new code addresses so we recieve samples
-  // from them. it might be the case that any pages mapped as executable
-  // generates the corresponding perf_event or something? research is needed.
+//   // TODO: inform perf-events of these new code addresses so we recieve samples
+//   // from them. it might be the case that any pages mapped as executable
+//   // generates the corresponding perf_event or something? research is needed.
 
-  // TODO: update XRay's function information table so that we can instrument
-  // the new code, etc.
-  // I believe the way we need to do this is to have the DyLib
-  // resolve its XRay function entry table. Then, in this code patcher, we
-  // translate requests to say, instrument a function, to the right XRaySledEntry
-  // based on whether the process's version has been overridden / redirected.
-  // If it has been redirected, we obtain the SledEntry from the Dylib instead
-  // of XRay's table.
+//   // TODO: update XRay's function information table so that we can instrument
+//   // the new code, etc.
+//   // I believe the way we need to do this is to have the DyLib
+//   // resolve its XRay function entry table. Then, in this code patcher, we
+//   // translate requests to say, instrument a function, to the right XRaySledEntry
+//   // based on whether the process's version has been overridden / redirected.
+//   // If it has been redirected, we obtain the SledEntry from the Dylib instead
+//   // of XRay's table.
 
 
-  // for now, let's try patching in the new functions.
-  for (auto &Info : NewCode) {
-    auto &OrigSymb = Info.first;
-    auto &NewSymb = Info.second;
+//   // for now, let's try patching in the new functions.
+//   for (auto &Info : NewCode) {
+//     auto &OrigSymb = Info.first;
+//     auto &NewSymb = Info.second;
 
-    auto Error = redirectTo(OrigSymb.addr(), NewSymb.getAddress());
-    if (Error) {
-      llvm::errs() << "Unable to redirect " << OrigSymb.label() << "\n";
-      return Error;
-    }
+//     auto Error = redirectTo(OrigSymb.addr(), NewSymb.getAddress());
+//     if (Error) {
+//       llvm::errs() << "Unable to redirect " << OrigSymb.label() << "\n";
+//       return Error;
+//     }
 
-  }
+//   }
 
-  return llvm::Error::success();
-}
+//   return llvm::Error::success();
+// }
 
 } // end namespace

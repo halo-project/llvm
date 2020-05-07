@@ -24,12 +24,14 @@ namespace object = llvm::object;
 
 namespace halo {
 
-DyLib::DyLib (llvm::DataLayout DataLayout, std::unique_ptr<std::string> ObjFile)
+DyLib::DyLib (llvm::DataLayout DataLayout, pb::LoadDyLib &Msg)
   : DL(DataLayout),
     Mangle(ES, DL),
     ObjectLayer(ES, []() { return std::make_unique<llvm::SectionMemoryManager>(); }),
-    RawObjFile(std::move(ObjFile)),
-    MainJD(ES.createBareJITDylib("<main>")) {
+    RawObjFile(Msg.release_objfile()),
+    Name(Msg.name()),
+    MainJD(ES.createBareJITDylib(Name)),
+    LinkEvtListener(AllSymbols) {
 
   ObjectLayer.registerJITEventListener(LinkEvtListener);
 
@@ -47,39 +49,68 @@ DyLib::DyLib (llvm::DataLayout DataLayout, std::unique_ptr<std::string> ObjFile)
 
   auto Buffer = llvm::MemoryBuffer::getMemBuffer(*RawObjFile);
   cantFail(ObjectLayer.add(MainJD, std::move(Buffer)));
+
+  for (auto const& Info : Msg.symbols()) {
+    std::string const& Label = Info.label();
+    auto &NewEntry = AllSymbols[Label];
+    NewEntry.setLabel(Label);
+  }
+}
+
+llvm::Error DyLib::load() {
+  // we need our own copy because the LinkEvtListener is going to mutate AllSymbols as we iterate
+  std::vector<std::string> Labels(AllSymbols.keys().begin(), AllSymbols.keys().end());
+
+  for (auto const& Lab : Labels) {
+    // force linking for this symbol
+    auto MaybeEvalSymb = ES.lookup({&MainJD}, Lab);
+    if (!MaybeEvalSymb)
+      return MaybeEvalSymb.takeError();
+
+    auto EvalSymb = MaybeEvalSymb.get();
+    if (!EvalSymb)
+      return makeError("evaluated symbol has value zero!");
+
+    auto &Entry = AllSymbols[Lab];
+    Entry.setSymbol(EvalSymb);
+
+    assert(Entry.getSize() > 0 && "size zero function?");
+  }
+
+  return llvm::Error::success();
+}
+
+
+void DyLib::getInfo(pb::DyLibInfo &Info) const {
+  Info.set_name(Name);
+  auto CodeMap = Info.mutable_funcs();
+
+  for (auto const& Entry : AllSymbols) {
+    DySymbol const& Symb = Entry.second;
+    pb::FunctionInfo FI;
+    FI.set_label(Symb.getLabel());
+    FI.set_size(Symb.getSize());
+    FI.set_start(Symb.getAddress());
+    FI.set_patchable(false); // TODO: this status should be in the DySymb!!
+
+    CodeMap->insert({Symb.getLabel(), FI});
+  }
 }
 
 
 llvm::Expected<DySymbol> DyLib::requireSymbol(llvm::StringRef MangledName) {
   if (haveSymbol(MangledName)) {
-    auto &Info = RequiredSymbols[MangledName];
+    auto &Info = AllSymbols[MangledName];
     Info.retain();
     return Info;
   }
 
-  auto MaybeEvalSymb = ES.lookup({&MainJD}, MangledName);
-  if (!MaybeEvalSymb)
-    return MaybeEvalSymb.takeError();
-
-  auto EvalSymb = MaybeEvalSymb.get();
-  if (!EvalSymb)
-    return makeError("evaluated symbol has value zero!");
-
-  auto MaybeSize = LinkEvtListener.getSize(MangledName);
-  if (!MaybeSize)
-    return makeError("evaluated symbol has no size?");
-
-  auto &NewEntry = RequiredSymbols[MangledName];
-  NewEntry.setSymbol(EvalSymb);
-  NewEntry.setSize(MaybeSize.getValue());
-  NewEntry.retain();
-
-  return NewEntry;
+  return makeError("requested symbol is unknown to this dylib.");
 }
 
 size_t DyLib::numRequiredSymbols() const {
   size_t UsedSymbols = 0;
-  for (auto const& Entry : RequiredSymbols)
+  for (auto const& Entry : AllSymbols)
     if (Entry.second.useCount() > 0)
       UsedSymbols++;
 
@@ -89,7 +120,7 @@ size_t DyLib::numRequiredSymbols() const {
 // returns true if this symbol was contained in the dylib and a use was dropped.
 bool DyLib::dropSymbol(llvm::StringRef Value) {
   if (haveSymbol(Value)) {
-    auto &Symb = RequiredSymbols[Value];
+    auto &Symb = AllSymbols[Value];
     Symb.release();
     return true;
   }
@@ -108,12 +139,15 @@ bool DyLib::dropSymbol(uint64_t Addr) {
 
 void DyLib::dump(llvm::raw_ostream &OS) {
   ES.dump(OS);
-  LinkEvtListener.dump(OS);
+  OS << "halo::DySymbol Info : {\n";
+  for (auto const& Entry : AllSymbols)
+    Entry.second.dump(OS);
+  OS << "}\n";
 }
 
 
 bool DyLib::haveSymbol(llvm::StringRef MangledName) const {
-  return RequiredSymbols.find(MangledName) != RequiredSymbols.end();
+  return AllSymbols.find(MangledName) != AllSymbols.end();
 }
 
 bool DyLib::haveSymbol(uint64_t Address) const {
@@ -124,7 +158,7 @@ bool DyLib::haveSymbol(uint64_t Address) const {
 }
 
 llvm::Optional<DySymbol*> DyLib::findByAddr(uint64_t Addr) {
-  for (llvm::StringMapEntry<DySymbol> &Entry : RequiredSymbols) {
+  for (llvm::StringMapEntry<DySymbol> &Entry : AllSymbols) {
     auto &Sym = Entry.getValue();
     if (Sym.getAddress() == Addr)
       return &Sym;
@@ -133,7 +167,7 @@ llvm::Optional<DySymbol*> DyLib::findByAddr(uint64_t Addr) {
 }
 
 llvm::Optional<DySymbol const*> DyLib::findByAddr(uint64_t Addr) const {
-  for (llvm::StringMapEntry<DySymbol> const& Entry : RequiredSymbols) {
+  for (llvm::StringMapEntry<DySymbol> const& Entry : AllSymbols) {
     auto const& Sym = Entry.getValue();
     if (Sym.getAddress() == Addr)
       return &Sym;
@@ -161,11 +195,11 @@ void DynamicLinker::setLayout(std::string const& Bitcode) {
   setLayout(DL);
 }
 
-llvm::Expected<std::unique_ptr<DyLib>> DynamicLinker::run(std::unique_ptr<std::string> ObjFile) const {
+llvm::Expected<std::unique_ptr<DyLib>> DynamicLinker::createDyLib(pb::LoadDyLib &DL) const {
   if (!Valid)
     return makeError("Dynamic linker's DataLayout was not set properly!");
 
-  return std::make_unique<DyLib>(Layout, std::move(ObjFile));
+  return std::make_unique<DyLib>(Layout, DL);
 }
 
 
@@ -209,26 +243,17 @@ void DyLib::LinkingEventListener::notifyObjectLoaded(ObjectKey K, const object::
     llvm::StringRef Label = Name.get();
     uint64_t Size = P.second;
 
-    assert(SymbolInfo.find(Label) == SymbolInfo.end() && "redefined symbol? is the size / addr same?");
-    SymbolInfo[Label] = Size;
+    // for now, we only set the size here.
+    DySymbol &Symb = SymbolInfo[Label];
+    Symb.setSize(Size);
   }
 }
 
-llvm::Optional<uint64_t> DyLib::LinkingEventListener::getSize(llvm::StringRef MangledName) const {
-  auto Result = SymbolInfo.find(MangledName);
-  if (Result != SymbolInfo.end())
-    return Result->second;
-  return llvm::None;
-}
-
-void DyLib::LinkingEventListener::dump(llvm::raw_ostream &OS) {
-  OS << "LinkingEventListener {\n";
-  for (auto const& Entry : SymbolInfo) {
-    OS << Entry.first()
-       << ", size = " << Entry.second
+void DySymbol::dump(llvm::raw_ostream &OS) const {
+    OS << getLabel()
+       << " @ 0x"; OS.write_hex(getAddress());
+    OS << ", size = " << getSize()
        << "\n";
-  }
-  OS << "}";
 }
 
 } // end namespace halo

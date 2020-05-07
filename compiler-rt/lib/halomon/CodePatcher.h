@@ -23,7 +23,8 @@ public:
 
 llvm::Error start_instrumenting(uint64_t FnPtr);
 llvm::Error stop_instrumenting(uint64_t FnPtr);
-llvm::Error replaceAll(pb::CodeReplacement const&, std::unique_ptr<DyLib>, Channel &);
+void addDyLib(std::unique_ptr<DyLib> Lib) { Dylibs.push_back(std::move(Lib)); }
+// llvm::Error replaceAll(pb::CodeReplacement const&, std::unique_ptr<DyLib>, Channel &);
 
 bool isPatchable(uint64_t FnPtr) const {
   return AddrToID.find(FnPtr) != AddrToID.end();

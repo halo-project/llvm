@@ -76,26 +76,37 @@ void MonitorState::server_listen_loop() {
 
       } break;
 
-      case msg::CodeReplacement: {
-        logs(LC) << "got code replacement\n";
+      case msg::LoadDyLib: {
+        logs(LC) << "got a new dylib\n";
         llvm::StringRef Blob(Body.data(), Body.size());
-        pb::CodeReplacement CR;
-        CR.ParseFromString(Blob.str());
+        pb::LoadDyLib DL;
+        DL.ParseFromString(Blob.str());
 
-        // msg::print_proto(CR);
+        // msg::print_proto(DL);
 
-        std::unique_ptr<std::string> ObjFileStorage(CR.release_objfile());
-        auto MaybeDylib = Linker.run(std::move(ObjFileStorage));
+        auto MaybeDylib = Linker.createDyLib(DL);
 
         if (!MaybeDylib)
           llvm::report_fatal_error(std::move(MaybeDylib.takeError()));
 
         auto Dylib = std::move(MaybeDylib.get());
 
-        auto Error = Patcher.replaceAll(CR, std::move(Dylib), Net.Chan);
+        auto Err = Dylib->load();
+        if (Err)
+          fatal_error(std::move(Err));
 
-        if (Error)
-          llvm::report_fatal_error(std::move(Error));
+        // Dylib->dump(logs());
+
+        // extract info
+        pb::DyLibInfo LoadedLibInfo;
+        Dylib->getInfo(LoadedLibInfo);
+
+        // save the dylib
+        Patcher.addDyLib(std::move(Dylib));
+
+        // send info back to server
+        bool SendErr = Net.Chan.send_proto(msg::DyLibInfo, LoadedLibInfo);
+        assert(!SendErr && "problem sending loaded lib info!");
 
       } break;
 
