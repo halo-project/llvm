@@ -38,6 +38,8 @@ public:
 
   bool isMaterialized() const { return Materialized; }
 
+  bool isPatchable() const { return false; }
+
   std::string getLabel() const { return Label; }
 
   void dump(llvm::raw_ostream &OS) const;

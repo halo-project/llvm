@@ -35,7 +35,7 @@ DyLib::DyLib (llvm::DataLayout DataLayout, pb::LoadDyLib &Msg)
 
   ObjectLayer.registerJITEventListener(LinkEvtListener);
 
-  // TODO: look at Orc/ExecutionUtils.h for utilities to link in C++ stuff.
+  // NOTE: look at Orc/ExecutionUtils.h for utilities to link in C++ stuff.
   // MainJD.addGenerator(
   //     cantFail(orc::LocalCXXRuntimeOverrides)
   // );...
@@ -91,7 +91,7 @@ void DyLib::getInfo(pb::DyLibInfo &Info) const {
     FI.set_label(Symb.getLabel());
     FI.set_size(Symb.getSize());
     FI.set_start(Symb.getAddress());
-    FI.set_patchable(false); // TODO: this status should be in the DySymb!!
+    FI.set_patchable(Symb.isPatchable());
 
     CodeMap->insert({Symb.getLabel(), FI});
   }
