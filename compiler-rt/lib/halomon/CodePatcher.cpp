@@ -128,6 +128,59 @@ llvm::Error CodePatcher::stop_instrumenting(uint64_t FnPtr) {
 }
 
 
+llvm::Expected<std::unique_ptr<DyLib>&> CodePatcher::findDylib(uint64_t FnPtr) {
+  for (auto &Lib : Dylibs)
+    if (Lib->haveSymbol(FnPtr))
+      return Lib;
+
+  return makeError("no DyLib contains the given function pointer.");
+}
+
+llvm::Error CodePatcher::setSymbolRequired(uint64_t FnPtr, bool Require) {
+  if (FnPtr == 0)
+    return llvm::Error::success();
+
+  auto MaybeLib = findDylib(FnPtr);
+  if (!MaybeLib)
+    return MaybeLib.takeError();
+
+  if (!Require) {
+    return MaybeLib.get()->dropSymbol(FnPtr)
+              ? llvm::Error::success()
+              : makeError("symbol drop failed!");
+
+  } else {
+    // its required
+    auto Required = MaybeLib.get()->requireSymbol(FnPtr);
+    if (!Required)
+      return Required.takeError();
+  }
+
+  return llvm::Error::success();
+}
+
+
+llvm::Error CodePatcher::unpatch(uint64_t FnPtr) {
+  auto Maybe = getXRayID(FnPtr);
+  if (!Maybe)
+    return Maybe.takeError();
+
+  auto XRayID = Maybe.get();
+
+  if (Status[XRayID] == Unpatched)
+    return llvm::Error::success();
+
+  __xray_unpatch_function(XRayID);
+  Status[XRayID] = Unpatched;
+
+  // NOTE: I don't think this needs to be an atomic write, since the the unpatch above is atomic.
+  auto PrevRedirect = RedirectionTable[XRayID];
+  RedirectionTable[XRayID] = 0;
+
+  return setSymbolRequired(PrevRedirect, false);
+}
+
+
 llvm::Error CodePatcher::redirectTo(uint64_t OldFnPtr, uint64_t NewFnPtr) {
   auto Maybe = getXRayID(OldFnPtr);
   if (!Maybe)
@@ -135,22 +188,27 @@ llvm::Error CodePatcher::redirectTo(uint64_t OldFnPtr, uint64_t NewFnPtr) {
 
   auto XRayID = Maybe.get();
 
+  // require the symbol from the dylib
+  auto Err = setSymbolRequired(NewFnPtr, true);
+  if (Err)
+    return Err;
+
   // TODO: might need to become an atomic write!
   auto PrevRedirect = RedirectionTable[XRayID];
   RedirectionTable[XRayID] = NewFnPtr;
 
-  if (Status[XRayID] != Redirected) {
+  auto FnStatus = Status[XRayID];
+  if (FnStatus == Unpatched) {
     // patch in the redirect
     __xray_redirect_function(XRayID);
     Status[XRayID] = Redirected;
-  } else {
-    // we don't need the old redirect anymore.
-    for (auto &Lib : Dylibs)
-      if (Lib->dropSymbol(PrevRedirect))
-        break;
+
+  } else if (FnStatus != Redirected) {
+    return makeError("trying to redirect a function while it is not in \
+                       valid states unpatched or redirected.");
   }
 
-  return llvm::Error::success();
+  return setSymbolRequired(PrevRedirect, false);
 }
 
 
@@ -160,6 +218,38 @@ llvm::Expected<int32_t> CodePatcher::getXRayID(uint64_t FnPtr) {
     return makeError("function ptr has no known xray id");
 
   return Result->second;
+}
+
+llvm::Error CodePatcher::modifyFunction(pb::ModifyFunction const& Req) {
+  pb::FunctionState NewState = Req.desired_state();
+
+  if (NewState == pb::UNPATCHED) {
+
+    auto Error = unpatch(Req.addr());
+    if (Error) {
+      clogs() << "Unpatching failure for " << Req.name() << "\n";
+      return Error;
+    }
+
+
+  } else if (NewState == pb::REDIRECTED) {
+
+    auto Error = redirectTo(Req.addr(), Req.other_addr());
+    if (Error) {
+      clogs() << "Redirection failure for " << Req.name() << "\n";
+      return Error;
+    }
+
+
+  } else if (NewState == pb::BAKEOFF) {
+
+      return makeError("todo: implement a bakeoff");
+
+  } else {
+    return makeError("unhandled function modification request!");
+  }
+
+  return llvm::Error::success();
 }
 
 // llvm::Error CodePatcher::replaceAll(pb::CodeReplacement const& CR,

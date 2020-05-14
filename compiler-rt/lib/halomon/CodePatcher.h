@@ -23,8 +23,10 @@ public:
 
 llvm::Error start_instrumenting(uint64_t FnPtr);
 llvm::Error stop_instrumenting(uint64_t FnPtr);
+
 void addDyLib(std::unique_ptr<DyLib> Lib) { Dylibs.push_back(std::move(Lib)); }
-// llvm::Error replaceAll(pb::CodeReplacement const&, std::unique_ptr<DyLib>, Channel &);
+
+llvm::Error modifyFunction(pb::ModifyFunction const&);
 
 bool isPatchable(uint64_t FnPtr) const {
   return AddrToID.find(FnPtr) != AddrToID.end();
@@ -46,7 +48,12 @@ void garbageCollect();
 
 private:
   llvm::Expected<int32_t> getXRayID(uint64_t FnPtr);
+
   llvm::Error redirectTo(uint64_t OldFnPtr, uint64_t NewFnPtr);
+  llvm::Error unpatch(uint64_t FnPtr);
+
+  llvm::Expected<std::unique_ptr<DyLib>&> findDylib(uint64_t FnPtr);
+  llvm::Error setSymbolRequired(uint64_t FnPtr, bool Require);
 
   size_t MaxValidID;
   std::unordered_map<uintptr_t, int32_t> AddrToID;

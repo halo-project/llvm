@@ -45,36 +45,36 @@ void MonitorState::server_listen_loop() {
         stop_sampling();
       } break;
 
-      case msg::StartMeasureFunction: {
-        logs(LC) << "got request to START measuring a function\n";
-        llvm::StringRef Blob(Body.data(), Body.size());
-        pb::FunctionAddress Req;
-        Req.ParseFromString(Blob.str());
+      // case msg::StartMeasureFunction: {
+      //   logs(LC) << "got request to START measuring a function\n";
+      //   llvm::StringRef Blob(Body.data(), Body.size());
+      //   pb::FunctionAddress Req;
+      //   Req.ParseFromString(Blob.str());
 
-        logs(LC) << "Recieved request to measure perf of func "
-                  << Req.func_addr() << "\n";
+      //   logs(LC) << "Recieved request to measure perf of func "
+      //             << Req.func_addr() << "\n";
 
-        auto Error = Patcher.start_instrumenting(Req.func_addr());
-        if (Error)
-          llvm::report_fatal_error(std::move(Error));
+      //   auto Error = Patcher.start_instrumenting(Req.func_addr());
+      //   if (Error)
+      //     llvm::report_fatal_error(std::move(Error));
 
-      } break;
+      // } break;
 
 
-      case msg::StopMeasureFunction: {
-        logs(LC) << "got request to STOP measuring a function\n";
-        llvm::StringRef Blob(Body.data(), Body.size());
-        pb::FunctionAddress Req;
-        Req.ParseFromString(Blob.str());
+      // case msg::StopMeasureFunction: {
+      //   logs(LC) << "got request to STOP measuring a function\n";
+      //   llvm::StringRef Blob(Body.data(), Body.size());
+      //   pb::FunctionAddress Req;
+      //   Req.ParseFromString(Blob.str());
 
-        logs(LC) << "Recieved request to STOP measuring perf of func "
-                  << Req.func_addr() << "\n";
+      //   logs(LC) << "Recieved request to STOP measuring perf of func "
+      //             << Req.func_addr() << "\n";
 
-        auto Error = Patcher.stop_instrumenting(Req.func_addr());
-        if (Error)
-          llvm::report_fatal_error(std::move(Error));
+      //   auto Error = Patcher.stop_instrumenting(Req.func_addr());
+      //   if (Error)
+      //     llvm::report_fatal_error(std::move(Error));
 
-      } break;
+      // } break;
 
       case msg::LoadDyLib: {
         logs(LC) << "got a new dylib\n";
@@ -107,6 +107,16 @@ void MonitorState::server_listen_loop() {
         // send info back to server
         bool SendErr = Net.Chan.send_proto(msg::DyLibInfo, LoadedLibInfo);
         assert(!SendErr && "problem sending loaded lib info!");
+
+      } break;
+
+      case msg::ModifyFunction: {
+        logs(LC) << "got a function modification request\n";
+        llvm::StringRef Blob(Body.data(), Body.size());
+        pb::ModifyFunction MF;
+        MF.ParseFromString(Blob.str());
+
+
 
       } break;
 

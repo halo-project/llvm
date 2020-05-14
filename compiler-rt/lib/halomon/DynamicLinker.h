@@ -75,9 +75,14 @@ public:
   // Each call to this method increases the reference count of the returned
   // symbol in the dylib. Use dropSymbol to release uses of the symbol when finished.
   llvm::Expected<DySymbol> requireSymbol(llvm::StringRef MangledName);
+  llvm::Expected<DySymbol> requireSymbol(uint64_t Addr);
 
   // queries this library for the number of active symbols it contains.
   size_t numRequiredSymbols() const;
+
+  bool haveSymbol(llvm::StringRef MangledName) const;
+
+  bool haveSymbol(uint64_t Address) const;
 
   // returns true if this symbol was contained in the dylib and a use was dropped.
   bool dropSymbol(llvm::StringRef Value);
@@ -100,11 +105,7 @@ private:
                               const llvm::RuntimeDyld::LoadedObjectInfo &L) override;
   private:
     llvm::StringMap<DySymbol>& SymbolInfo;
-  };
-
-  bool haveSymbol(llvm::StringRef MangledName) const;
-
-  bool haveSymbol(uint64_t Address) const;
+  }; // end linking listener class
 
   llvm::Optional<DySymbol*> findByAddr(uint64_t Addr);
 

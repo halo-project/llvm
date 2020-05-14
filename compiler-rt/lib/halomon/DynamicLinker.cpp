@@ -108,6 +108,17 @@ llvm::Expected<DySymbol> DyLib::requireSymbol(llvm::StringRef MangledName) {
   return makeError("requested symbol is unknown to this dylib.");
 }
 
+llvm::Expected<DySymbol> DyLib::requireSymbol(uint64_t Addr) {
+  auto Maybe = findByAddr(Addr);
+  if (Maybe) {
+    auto Info = Maybe.getValue();
+    Info->retain();
+    return *Info;
+  }
+
+  return makeError("requested symbol is unknown to this dylib.");
+}
+
 size_t DyLib::numRequiredSymbols() const {
   size_t UsedSymbols = 0;
   for (auto const& Entry : AllSymbols)
