@@ -12,7 +12,7 @@ namespace halo {
 
 class DyLib;
 
-/// Representation of a symbol from a loaded, dynamically-linked library.
+/// Representation of a function symbol from a loaded, dynamically-linked library.
 class DySymbol {
   friend DyLib; // The DyLib is exclusively in charge of managing reference-counts.
                 // Users of a DySymbol should inform the corresponding DyLib of dropped uses.
@@ -27,6 +27,8 @@ public:
     Symbol = Symb;
   }
 
+  void setVisibility(bool Vis) { Visible = Vis; }
+
   /// @returns the absolute address of this symbol in memory within this process.
   llvm::JITTargetAddress getAddress() const { return Symbol.getAddress(); }
 
@@ -36,9 +38,16 @@ public:
   /// @returns additional information about this symbol, such as whether it is callable code.
   llvm::JITSymbolFlags getFlags() const { return Symbol.getFlags(); }
 
+  /// Has this symbol actually been processed by the linker yet?
   bool isMaterialized() const { return Materialized; }
 
+  /// Indicates whether this function symbol can be patched via XRay.
   bool isPatchable() const { return false; }
+
+  /// Indicates whether this symbol has a standard calling-convention
+  /// that is suitable for use in code patching, i.e., "JIT visibility".
+  /// Has nothing to do with ELF object-file visibility.
+  bool isVisible() const { return Visible; }
 
   std::string getLabel() const { return Label; }
 
@@ -56,6 +65,7 @@ private:
     uint64_t SymbolSize = 0;
     uint32_t Uses = 0;
     bool Materialized = false;
+    bool Visible = false;
     std::string Label;
 };
 

@@ -38,7 +38,9 @@ DyLib::DyLib (llvm::DataLayout DataLayout, pb::LoadDyLib &Msg)
   // NOTE: look at Orc/ExecutionUtils.h for utilities to link in C++ stuff.
   // MainJD.addGenerator(
   //     cantFail(orc::LocalCXXRuntimeOverrides)
-  // );...
+  // );
+
+
 
   // exposes symbols found via dlsym to this dylib.
   MainJD.addGenerator(
@@ -54,6 +56,7 @@ DyLib::DyLib (llvm::DataLayout DataLayout, pb::LoadDyLib &Msg)
     std::string const& Label = Info.label();
     auto &NewEntry = AllSymbols[Label];
     NewEntry.setLabel(Label);
+    NewEntry.setVisibility(Info.externally_visible());
   }
 }
 
@@ -61,8 +64,8 @@ llvm::Error DyLib::load() {
   // we need our own copy because the LinkEvtListener is going to mutate AllSymbols as we iterate
   std::vector<std::string> Labels(AllSymbols.keys().begin(), AllSymbols.keys().end());
 
+  // force linking for the given labels
   for (auto const& Lab : Labels) {
-    // force linking for this symbol
     auto MaybeEvalSymb = ES.lookup({&MainJD}, Lab);
     if (!MaybeEvalSymb)
       return MaybeEvalSymb.takeError();
@@ -71,26 +74,37 @@ llvm::Error DyLib::load() {
     if (!EvalSymb)
       return makeError("evaluated symbol has value zero!");
 
-    auto &Entry = AllSymbols[Lab];
-    Entry.setSymbol(EvalSymb);
+    auto &Symb = AllSymbols[Lab];
+    Symb.setSymbol(EvalSymb);
 
-    assert(Entry.getSize() > 0 && "size zero function?");
+    assert(Symb.getSize() > 0 && "size zero function?");
   }
 
   return llvm::Error::success();
 }
 
-
+/// should to be called after loading the library to perform the linking.
 void DyLib::getInfo(pb::DyLibInfo &Info) const {
   Info.set_name(Name);
   auto CodeMap = Info.mutable_funcs();
 
   for (auto const& Entry : AllSymbols) {
     DySymbol const& Symb = Entry.second;
+
+    Symb.dump(logs());
+
+    assert(Symb.isMaterialized() && "address not materialized?");
+
+    uint64_t Size = Symb.getSize();
+    assert (Size != 0 && "Size zero function after linking?");
+
+    uint64_t Addr = Symb.getAddress();
+    assert (Addr != 0 && "Function's address is invalid.");
+
     pb::FunctionInfo FI;
     FI.set_label(Symb.getLabel());
-    FI.set_size(Symb.getSize());
-    FI.set_start(Symb.getAddress());
+    FI.set_size(Size);
+    FI.set_start(Addr);
     FI.set_patchable(Symb.isPatchable());
 
     CodeMap->insert({Symb.getLabel(), FI});
