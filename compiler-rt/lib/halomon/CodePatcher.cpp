@@ -199,7 +199,11 @@ llvm::Error CodePatcher::redirectTo(uint64_t OldFnPtr,
     if (MaybeSymbol)
       return MaybeSymbol.takeError();
 
-    NewFnPtr = MaybeSymbol.get().getAddress();
+    DySymbol& Symb = MaybeSymbol.get();
+    if (!Symb.isVisible())
+      return makeError("Lib " + newLibName + ", symbol " + newFnName + "is not JIT visible.");
+
+    NewFnPtr = Symb.getAddress();
   }
 
   // TODO: might need to become an atomic write!
