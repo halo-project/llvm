@@ -64,7 +64,7 @@ llvm::Error DyLib::load() {
   // we need our own copy because the LinkEvtListener is going to mutate AllSymbols as we iterate
   std::vector<std::string> Labels(AllSymbols.keys().begin(), AllSymbols.keys().end());
 
-  // force linking for the given labels
+  // force linking for the given function labels
   for (auto const& Lab : Labels) {
     auto MaybeEvalSymb = ES.lookup({&MainJD}, Lab);
     if (!MaybeEvalSymb)
@@ -73,6 +73,9 @@ llvm::Error DyLib::load() {
     auto EvalSymb = MaybeEvalSymb.get();
     if (!EvalSymb)
       return makeError("evaluated symbol has value zero!");
+
+    if (!EvalSymb.getFlags().isCallable())
+      return makeError("JITed function symbol is not callable.");
 
     auto &Symb = AllSymbols[Lab];
     Symb.setSymbol(EvalSymb);

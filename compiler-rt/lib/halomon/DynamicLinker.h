@@ -101,6 +101,8 @@ public:
   // returns true if this symbol was contained in the dylib and a use was dropped.
   bool dropSymbol(DySymbol &Sym) { return dropSymbol(Sym.getAddress()); }
 
+  std::string const& getName() const { return Name; }
+
   void getInfo(pb::DyLibInfo &) const;
 
   void dump(llvm::raw_ostream &OS);

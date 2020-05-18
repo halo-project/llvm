@@ -116,7 +116,9 @@ void MonitorState::server_listen_loop() {
         pb::ModifyFunction MF;
         MF.ParseFromString(Blob.str());
 
-
+        auto Err = Patcher.modifyFunction(MF);
+        if (Err)
+          fatal_error(std::move(Err));
 
       } break;
 

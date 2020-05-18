@@ -84,15 +84,7 @@ uint64_t CodePatcher::getFnPtr(int32_t xrayID) {
 // One possible way to handle this is to ptrace ourselves to pause all of
 // the threads, and inspect their state: https://en.wikipedia.org/wiki/Ptrace
 //
-// void CodePatcher::garbageCollect() {
-//   auto Cur = Dylibs.begin();
-//   while (Cur != Dylibs.end()) {
-//     if ((*Cur)->numRequiredSymbols() == 0)
-//       Cur = Dylibs.erase(Cur);
-//     else
-//       Cur++;
-//   }
-// }
+// void CodePatcher::garbageCollect() {}
 
 
 // START instrumenting
@@ -129,11 +121,19 @@ llvm::Error CodePatcher::stop_instrumenting(uint64_t FnPtr) {
 
 
 llvm::Expected<std::unique_ptr<DyLib>&> CodePatcher::findDylib(uint64_t FnPtr) {
-  for (auto &Lib : Dylibs)
-    if (Lib->haveSymbol(FnPtr))
-      return Lib;
+  for (auto &Entry : Dylibs)
+    if (Entry.second->haveSymbol(FnPtr))
+      return Entry.second;
 
   return makeError("no DyLib contains the given function pointer.");
+}
+
+llvm::Expected<std::unique_ptr<DyLib>&> CodePatcher::findDylib(std::string const& LibName) {
+  auto Result = Dylibs.find(LibName);
+  if (Result == Dylibs.end())
+    return makeError("no DyLib with the given name: " + LibName);
+
+  return Result->second;
 }
 
 llvm::Error CodePatcher::setSymbolRequired(uint64_t FnPtr, bool Require) {
@@ -180,18 +180,27 @@ llvm::Error CodePatcher::unpatch(uint64_t FnPtr) {
   return setSymbolRequired(PrevRedirect, false);
 }
 
+llvm::Error CodePatcher::redirectTo(uint64_t OldFnPtr,
+                            std::string const& newLibName, std::string const& newFnName) {
+  auto MaybeX = getXRayID(OldFnPtr);
+  if (!MaybeX)
+    return MaybeX.takeError();
+  auto XRayID = MaybeX.get();
 
-llvm::Error CodePatcher::redirectTo(uint64_t OldFnPtr, uint64_t NewFnPtr) {
-  auto Maybe = getXRayID(OldFnPtr);
-  if (!Maybe)
-    return Maybe.takeError();
+  uint64_t NewFnPtr = 0;
+  if (!isOriginalLib(newLibName)) {
+    // find lib
+    auto MaybeLib = findDylib(newLibName);
+    if (!MaybeLib)
+      return MaybeLib.takeError();
 
-  auto XRayID = Maybe.get();
+    // require the symbol from the dylib
+    auto MaybeSymbol = MaybeLib.get()->requireSymbol(newFnName);
+    if (MaybeSymbol)
+      return MaybeSymbol.takeError();
 
-  // require the symbol from the dylib
-  auto Err = setSymbolRequired(NewFnPtr, true);
-  if (Err)
-    return Err;
+    NewFnPtr = MaybeSymbol.get().getAddress();
+  }
 
   // TODO: might need to become an atomic write!
   auto PrevRedirect = RedirectionTable[XRayID];
@@ -220,6 +229,7 @@ llvm::Expected<int32_t> CodePatcher::getXRayID(uint64_t FnPtr) {
   return Result->second;
 }
 
+
 llvm::Error CodePatcher::modifyFunction(pb::ModifyFunction const& Req) {
   pb::FunctionState NewState = Req.desired_state();
 
@@ -233,8 +243,7 @@ llvm::Error CodePatcher::modifyFunction(pb::ModifyFunction const& Req) {
 
 
   } else if (NewState == pb::REDIRECTED) {
-
-    auto Error = redirectTo(Req.addr(), Req.other_addr());
+    auto Error = redirectTo(Req.addr(), Req.other_lib(), Req.other_name());
     if (Error) {
       clogs() << "Redirection failure for " << Req.name() << "\n";
       return Error;
@@ -251,67 +260,5 @@ llvm::Error CodePatcher::modifyFunction(pb::ModifyFunction const& Req) {
 
   return llvm::Error::success();
 }
-
-// llvm::Error CodePatcher::replaceAll(pb::CodeReplacement const& CR,
-//                                       std::unique_ptr<DyLib> Dylib, Channel &Chan) {
-//   // perform linking on all requested symbols and collect those
-//   // new addresses.
-
-//   llvm::SmallVector<std::pair<pb::FunctionSymbol const&, DySymbol>, 10> NewCode;
-
-//   for (pb::FunctionSymbol const& Request : CR.symbols()) {
-//     auto &Label = Request.label();
-//     auto MaybeSymbol = Dylib->requireSymbol(Label);
-
-//     if (!MaybeSymbol)
-//       return MaybeSymbol.takeError();
-
-//     auto DySym = MaybeSymbol.get();
-//     if (!DySym.getFlags().isCallable())
-//       return makeError("JITed function symbol is not callable.");
-
-//     NewCode.push_back({Request, DySym});
-//   }
-
-//   // Nothing to do!
-//   if (NewCode.empty())
-//     return llvm::Error::success();
-
-//   Dylib->dump(logs());
-
-//   // save the dylib since we definitely need it.
-//   Dylibs.push_back(std::move(Dylib));
-
-//   // TODO: send a message to server containing the new address & size information.
-
-//   // TODO: inform perf-events of these new code addresses so we recieve samples
-//   // from them. it might be the case that any pages mapped as executable
-//   // generates the corresponding perf_event or something? research is needed.
-
-//   // TODO: update XRay's function information table so that we can instrument
-//   // the new code, etc.
-//   // I believe the way we need to do this is to have the DyLib
-//   // resolve its XRay function entry table. Then, in this code patcher, we
-//   // translate requests to say, instrument a function, to the right XRaySledEntry
-//   // based on whether the process's version has been overridden / redirected.
-//   // If it has been redirected, we obtain the SledEntry from the Dylib instead
-//   // of XRay's table.
-
-
-//   // for now, let's try patching in the new functions.
-//   for (auto &Info : NewCode) {
-//     auto &OrigSymb = Info.first;
-//     auto &NewSymb = Info.second;
-
-//     auto Error = redirectTo(OrigSymb.addr(), NewSymb.getAddress());
-//     if (Error) {
-//       llvm::errs() << "Unable to redirect " << OrigSymb.label() << "\n";
-//       return Error;
-//     }
-
-//   }
-
-//   return llvm::Error::success();
-// }
 
 } // end namespace
