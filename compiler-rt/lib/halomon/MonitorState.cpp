@@ -95,7 +95,7 @@ void MonitorState::server_listen_loop() {
         if (Err)
           fatal_error(std::move(Err));
 
-        // Dylib->dump(logs());
+        Dylib->dump(logs(), false);
 
         // extract info
         pb::DyLibInfo LoadedLibInfo;

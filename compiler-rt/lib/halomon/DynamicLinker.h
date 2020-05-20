@@ -105,7 +105,7 @@ public:
 
   void getInfo(pb::DyLibInfo &) const;
 
-  void dump(llvm::raw_ostream &OS);
+  void dump(llvm::raw_ostream &OS, bool All=true);
 
 private:
 

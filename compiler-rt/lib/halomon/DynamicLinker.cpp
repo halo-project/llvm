@@ -94,7 +94,7 @@ void DyLib::getInfo(pb::DyLibInfo &Info) const {
   for (auto const& Entry : AllSymbols) {
     DySymbol const& Symb = Entry.second;
 
-    Symb.dump(logs());
+    // Symb.dump(logs());
 
     assert(Symb.isMaterialized() && "address not materialized?");
 
@@ -122,7 +122,7 @@ llvm::Expected<DySymbol> DyLib::requireSymbol(llvm::StringRef MangledName) {
     return Info;
   }
 
-  return makeError("requested symbol is unknown to this dylib.");
+  return makeError("requested symbol " + MangledName + " is unknown to this dylib.");
 }
 
 llvm::Expected<DySymbol> DyLib::requireSymbol(uint64_t Addr) {
@@ -133,7 +133,7 @@ llvm::Expected<DySymbol> DyLib::requireSymbol(uint64_t Addr) {
     return *Info;
   }
 
-  return makeError("requested symbol is unknown to this dylib.");
+  return makeError("requested symbol at addr " + std::to_string(Addr) + " is unknown to this dylib.");
 }
 
 size_t DyLib::numRequiredSymbols() const {
@@ -165,9 +165,11 @@ bool DyLib::dropSymbol(uint64_t Addr) {
   return false;
 }
 
-void DyLib::dump(llvm::raw_ostream &OS) {
-  ES.dump(OS);
-  OS << "halo::DySymbol Info : {\n";
+void DyLib::dump(llvm::raw_ostream &OS, bool All) {
+  if (All)
+    ES.dump(OS);
+
+  OS << "halo::DyLib " << Name << " : {\n";
   for (auto const& Entry : AllSymbols)
     Entry.second.dump(OS);
   OS << "}\n";
@@ -281,6 +283,7 @@ void DySymbol::dump(llvm::raw_ostream &OS) const {
     OS << getLabel()
        << " @ 0x"; OS.write_hex(getAddress());
     OS << ", size = " << getSize()
+       << ", jit-visible = " << isVisible()
        << "\n";
 }
 

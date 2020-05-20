@@ -196,7 +196,7 @@ llvm::Error CodePatcher::redirectTo(uint64_t OldFnPtr,
 
     // require the symbol from the dylib
     auto MaybeSymbol = MaybeLib.get()->requireSymbol(newFnName);
-    if (MaybeSymbol)
+    if (!MaybeSymbol)
       return MaybeSymbol.takeError();
 
     DySymbol& Symb = MaybeSymbol.get();
@@ -226,6 +226,8 @@ llvm::Error CodePatcher::redirectTo(uint64_t OldFnPtr,
 
 
 llvm::Expected<int32_t> CodePatcher::getXRayID(uint64_t FnPtr) {
+  // clogs() << "looking up xray id for addr = " << FnPtr << "\n";
+
   auto Result = AddrToID.find(FnPtr);
   if (Result == AddrToID.end())
     return makeError("function ptr has no known xray id");
@@ -247,11 +249,16 @@ llvm::Error CodePatcher::modifyFunction(pb::ModifyFunction const& Req) {
 
 
   } else if (NewState == pb::REDIRECTED) {
+    assert(Req.addr() != 0 && "address zero function? seems suspicious.");
+
     auto Error = redirectTo(Req.addr(), Req.other_lib(), Req.other_name());
     if (Error) {
       clogs() << "Redirection failure for " << Req.name() << "\n";
       return Error;
     }
+
+    clogs() << "redirected " << Req.name() << " @ " << Req.addr()
+            << " --> " << Req.other_lib() << "::" << Req.other_name() << "\n";
 
 
   } else if (NewState == pb::BAKEOFF) {
