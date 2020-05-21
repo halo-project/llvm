@@ -122,7 +122,7 @@ llvm::Expected<DySymbol> DyLib::requireSymbol(llvm::StringRef MangledName) {
     return Info;
   }
 
-  return makeError("requested symbol " + MangledName + " is unknown to this dylib.");
+  return makeError("requested symbol " + MangledName + " is unknown to dylib " + Name);
 }
 
 llvm::Expected<DySymbol> DyLib::requireSymbol(uint64_t Addr) {
