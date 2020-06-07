@@ -7,10 +7,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "TestDialect.h"
-#include "mlir/Conversion/StandardToStandard/StandardToStandard.h"
+#include "mlir/Dialect/StandardOps/IR/Ops.h"
+#include "mlir/Dialect/StandardOps/Transforms/FuncConversions.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "mlir/Transforms/FoldUtils.h"
 
 using namespace mlir;
 
@@ -39,13 +41,36 @@ namespace {
 //===----------------------------------------------------------------------===//
 
 namespace {
+struct FoldingPattern : public RewritePattern {
+public:
+  FoldingPattern(MLIRContext *context)
+      : RewritePattern(TestOpInPlaceFoldAnchor::getOperationName(),
+                       /*benefit=*/1, context) {}
+
+  LogicalResult matchAndRewrite(Operation *op,
+                                PatternRewriter &rewriter) const override {
+    // Exercice OperationFolder API for a single-result operation that is folded
+    // upon construction. The operation being created through the folder has an
+    // in-place folder, and it should be still present in the output.
+    // Furthermore, the folder should not crash when attempting to recover the
+    // (unchanged) opeation result.
+    OperationFolder folder(op->getContext());
+    Value result = folder.create<TestOpInPlaceFold>(
+        rewriter, op->getLoc(), rewriter.getIntegerType(32), op->getOperand(0),
+        rewriter.getI32IntegerAttr(0));
+    assert(result);
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
 struct TestPatternDriver : public PassWrapper<TestPatternDriver, FunctionPass> {
   void runOnFunction() override {
     mlir::OwningRewritePatternList patterns;
     populateWithGenerated(&getContext(), &patterns);
 
     // Verify named pattern is generated with expected name.
-    patterns.insert<TestNamedPatternRule>(&getContext());
+    patterns.insert<FoldingPattern, TestNamedPatternRule>(&getContext());
 
     applyPatternsAndFoldGreedily(getFunction(), patterns);
   }
@@ -72,9 +97,9 @@ static void invokeCreateWithInferredReturnType(Operation *op) {
     for (int j = 0; j < e; ++j) {
       std::array<Value, 2> values = {{fop.getArgument(i), fop.getArgument(j)}};
       SmallVector<Type, 2> inferredReturnTypes;
-      if (succeeded(OpTy::inferReturnTypes(context, llvm::None, values,
-                                           op->getAttrs(), op->getRegions(),
-                                           inferredReturnTypes))) {
+      if (succeeded(OpTy::inferReturnTypes(
+              context, llvm::None, values, op->getAttrDictionary(),
+              op->getRegions(), inferredReturnTypes))) {
         OperationState state(location, OpTy::getOperationName());
         // TODO(jpienaar): Expand to regions.
         OpTy::build(b, state, values, op->getAttrs());
@@ -256,6 +281,23 @@ struct TestUndoBlockArgReplace : public ConversionPattern {
   }
 };
 
+/// A rewrite pattern that tests the undo mechanism when erasing a block.
+struct TestUndoBlockErase : public ConversionPattern {
+  TestUndoBlockErase(MLIRContext *ctx)
+      : ConversionPattern("test.undo_block_erase", /*benefit=*/1, ctx) {}
+
+  LogicalResult
+  matchAndRewrite(Operation *op, ArrayRef<Value> operands,
+                  ConversionPatternRewriter &rewriter) const final {
+    Block *secondBlock = &*std::next(op->getRegion(0).begin());
+    rewriter.setInsertionPointToStart(secondBlock);
+    rewriter.create<ILLegalOpF>(op->getLoc(), rewriter.getF32Type());
+    rewriter.eraseBlock(secondBlock);
+    rewriter.updateRootInPlace(op, [] {});
+    return success();
+  }
+};
+
 //===----------------------------------------------------------------------===//
 // Type-Conversion Rewrite Testing
 
@@ -418,12 +460,28 @@ struct TestBoundedRecursiveRewrite
   /// The conversion target handles bounding the recursion of this pattern.
   bool hasBoundedRewriteRecursion() const final { return true; }
 };
+
+struct TestNestedOpCreationUndoRewrite
+    : public OpRewritePattern<IllegalOpWithRegionAnchor> {
+  using OpRewritePattern<IllegalOpWithRegionAnchor>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(IllegalOpWithRegionAnchor op,
+                                PatternRewriter &rewriter) const final {
+    // rewriter.replaceOpWithNewOp<IllegalOpWithRegion>(op);
+    rewriter.replaceOpWithNewOp<IllegalOpWithRegion>(op);
+    return success();
+  };
+};
 } // namespace
 
 namespace {
 struct TestTypeConverter : public TypeConverter {
   using TypeConverter::TypeConverter;
-  TestTypeConverter() { addConversion(convertType); }
+  TestTypeConverter() {
+    addConversion(convertType);
+    addMaterialization(materializeCast);
+    addMaterialization(materializeOneToOneCast);
+  }
 
   static LogicalResult convertType(Type t, SmallVectorImpl<Type> &results) {
     // Drop I16 types.
@@ -433,6 +491,12 @@ struct TestTypeConverter : public TypeConverter {
     // Convert I64 to F64.
     if (t.isSignlessInteger(64)) {
       results.push_back(FloatType::getF64(t.getContext()));
+      return success();
+    }
+
+    // Convert I42 to I43.
+    if (t.isInteger(42)) {
+      results.push_back(IntegerType::get(43, t.getContext()));
       return success();
     }
 
@@ -447,12 +511,24 @@ struct TestTypeConverter : public TypeConverter {
     return success();
   }
 
-  /// Override the hook to materialize a conversion. This is necessary because
-  /// we generate 1->N type mappings.
-  Operation *materializeConversion(PatternRewriter &rewriter, Type resultType,
-                                   ArrayRef<Value> inputs,
-                                   Location loc) override {
-    return rewriter.create<TestCastOp>(loc, resultType, inputs);
+  /// Hook for materializing a conversion. This is necessary because we generate
+  /// 1->N type mappings.
+  static Optional<Value> materializeCast(PatternRewriter &rewriter,
+                                         Type resultType, ValueRange inputs,
+                                         Location loc) {
+    if (inputs.size() == 1)
+      return inputs[0];
+    return rewriter.create<TestCastOp>(loc, resultType, inputs).getResult();
+  }
+
+  /// Materialize the cast for one-to-one conversion from i64 to f64.
+  static Optional<Value> materializeOneToOneCast(PatternRewriter &rewriter,
+                                                 IntegerType resultType,
+                                                 ValueRange inputs,
+                                                 Location loc) {
+    if (resultType.getWidth() == 42 && inputs.size() == 1)
+      return rewriter.create<TestCastOp>(loc, resultType, inputs).getResult();
+    return llvm::None;
   }
 };
 
@@ -467,14 +543,14 @@ struct TestLegalizePatternDriver
     TestTypeConverter converter;
     mlir::OwningRewritePatternList patterns;
     populateWithGenerated(&getContext(), &patterns);
-    patterns.insert<TestRegionRewriteBlockMovement, TestRegionRewriteUndo,
-                    TestCreateBlock, TestCreateIllegalBlock,
-                    TestUndoBlockArgReplace, TestPassthroughInvalidOp,
-                    TestSplitReturnType, TestChangeProducerTypeI32ToF32,
-                    TestChangeProducerTypeF32ToF64,
-                    TestChangeProducerTypeF32ToInvalid, TestUpdateConsumerType,
-                    TestNonRootReplacement, TestBoundedRecursiveRewrite>(
-        &getContext());
+    patterns.insert<
+        TestRegionRewriteBlockMovement, TestRegionRewriteUndo, TestCreateBlock,
+        TestCreateIllegalBlock, TestUndoBlockArgReplace, TestUndoBlockErase,
+        TestPassthroughInvalidOp, TestSplitReturnType,
+        TestChangeProducerTypeI32ToF32, TestChangeProducerTypeF32ToF64,
+        TestChangeProducerTypeF32ToInvalid, TestUpdateConsumerType,
+        TestNonRootReplacement, TestBoundedRecursiveRewrite,
+        TestNestedOpCreationUndoRewrite>(&getContext());
     patterns.insert<TestDropOpSignatureConversion>(&getContext(), converter);
     mlir::populateFuncOpTypeConversionPattern(patterns, &getContext(),
                                               converter);

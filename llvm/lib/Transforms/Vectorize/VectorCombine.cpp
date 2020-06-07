@@ -14,6 +14,7 @@
 
 #include "llvm/Transforms/Vectorize/VectorCombine.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/Analysis/BasicAliasAnalysis.h"
 #include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
@@ -25,8 +26,8 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/CommandLine.h"
-#include "llvm/Transforms/Vectorize.h"
 #include "llvm/Transforms/Utils/Local.h"
+#include "llvm/Transforms/Vectorize.h"
 
 using namespace llvm;
 using namespace llvm::PatternMatch;
@@ -34,6 +35,7 @@ using namespace llvm::PatternMatch;
 #define DEBUG_TYPE "vector-combine"
 STATISTIC(NumVecCmp, "Number of vector compares formed");
 STATISTIC(NumVecBO, "Number of vector binops formed");
+STATISTIC(NumScalarBO, "Number of scalar binops formed");
 
 static cl::opt<bool> DisableVectorCombine(
     "disable-vector-combine", cl::init(false), cl::Hidden,
@@ -210,8 +212,8 @@ static bool foldExtractExtract(Instruction &I, const TargetTransformInfo &TTI) {
 
   Value *V0, *V1;
   uint64_t C0, C1;
-  if (!match(Ext0, m_ExtractElement(m_Value(V0), m_ConstantInt(C0))) ||
-      !match(Ext1, m_ExtractElement(m_Value(V1), m_ConstantInt(C1))) ||
+  if (!match(Ext0, m_ExtractElt(m_Value(V0), m_ConstantInt(C0))) ||
+      !match(Ext1, m_ExtractElt(m_Value(V1), m_ConstantInt(C1))) ||
       V0->getType() != V1->getType())
     return false;
 
@@ -222,8 +224,8 @@ static bool foldExtractExtract(Instruction &I, const TargetTransformInfo &TTI) {
   //       probably becomes unnecessary.
   uint64_t InsertIndex = std::numeric_limits<uint64_t>::max();
   if (I.hasOneUse())
-    match(I.user_back(), m_InsertElement(m_Value(), m_Value(),
-                                         m_ConstantInt(InsertIndex)));
+    match(I.user_back(),
+          m_InsertElt(m_Value(), m_Value(), m_ConstantInt(InsertIndex)));
 
   Instruction *ConvertToShuffle;
   if (isExtractExtractCheap(Ext0, Ext1, I.getOpcode(), TTI, ConvertToShuffle,
@@ -265,8 +267,8 @@ static bool foldExtractExtract(Instruction &I, const TargetTransformInfo &TTI) {
 static bool foldBitcastShuf(Instruction &I, const TargetTransformInfo &TTI) {
   Value *V;
   ArrayRef<int> Mask;
-  if (!match(&I, m_BitCast(m_OneUse(m_ShuffleVector(m_Value(V), m_Undef(),
-                                                    m_Mask(Mask))))))
+  if (!match(&I, m_BitCast(
+                     m_OneUse(m_Shuffle(m_Value(V), m_Undef(), m_Mask(Mask))))))
     return false;
 
   // Disallow non-vector casts and length-changing shuffles.
@@ -302,9 +304,68 @@ static bool foldBitcastShuf(Instruction &I, const TargetTransformInfo &TTI) {
   // bitcast (shuf V, MaskC) --> shuf (bitcast V), MaskC'
   IRBuilder<> Builder(&I);
   Value *CastV = Builder.CreateBitCast(V, DestTy);
-  Value *Shuf = Builder.CreateShuffleVector(CastV, UndefValue::get(DestTy),
-                                            NewMask);
+  Value *Shuf =
+      Builder.CreateShuffleVector(CastV, UndefValue::get(DestTy), NewMask);
   I.replaceAllUsesWith(Shuf);
+  return true;
+}
+
+/// Match a vector binop instruction with inserted scalar operands and convert
+/// to scalar binop followed by insertelement.
+static bool scalarizeBinop(Instruction &I, const TargetTransformInfo &TTI) {
+  Instruction *Ins0, *Ins1;
+  if (!match(&I, m_BinOp(m_Instruction(Ins0), m_Instruction(Ins1))))
+    return false;
+
+  // TODO: Deal with mismatched index constants and variable indexes?
+  Constant *VecC0, *VecC1;
+  Value *V0, *V1;
+  uint64_t Index;
+  if (!match(Ins0, m_InsertElt(m_Constant(VecC0), m_Value(V0),
+                               m_ConstantInt(Index))) ||
+      !match(Ins1, m_InsertElt(m_Constant(VecC1), m_Value(V1),
+                               m_SpecificInt(Index))))
+    return false;
+
+  Type *ScalarTy = V0->getType();
+  Type *VecTy = I.getType();
+  assert(VecTy->isVectorTy() && ScalarTy == V1->getType() &&
+         (ScalarTy->isIntegerTy() || ScalarTy->isFloatingPointTy()) &&
+         "Unexpected types for insert into binop");
+
+  Instruction::BinaryOps Opcode = cast<BinaryOperator>(&I)->getOpcode();
+  int ScalarOpCost = TTI.getArithmeticInstrCost(Opcode, ScalarTy);
+  int VectorOpCost = TTI.getArithmeticInstrCost(Opcode, VecTy);
+
+  // Get cost estimate for the insert element. This cost will factor into
+  // both sequences.
+  int InsertCost =
+      TTI.getVectorInstrCost(Instruction::InsertElement, VecTy, Index);
+  int OldCost = InsertCost + InsertCost + VectorOpCost;
+  int NewCost = ScalarOpCost + InsertCost +
+                !Ins0->hasOneUse() * InsertCost +
+                !Ins1->hasOneUse() * InsertCost;
+
+  // We want to scalarize unless the vector variant actually has lower cost.
+  if (OldCost < NewCost)
+    return false;
+
+  // vec_bo (inselt VecC0, V0, Index), (inselt VecC1, V1, Index) -->
+  // inselt NewVecC, (scalar_bo V0, V1), Index
+  ++NumScalarBO;
+  IRBuilder<> Builder(&I);
+  Value *Scalar = Builder.CreateBinOp(Opcode, V0, V1, I.getName() + ".scalar");
+
+  // All IR flags are safe to back-propagate. There is no potential for extra
+  // poison to be created by the scalar instruction.
+  if (auto *ScalarInst = dyn_cast<Instruction>(Scalar))
+    ScalarInst->copyIRFlags(&I);
+
+  // Fold the vector constants in the original vectors into a new base vector.
+  Constant *NewVecC = ConstantExpr::get(Opcode, VecC0, VecC1);
+  Value *Insert = Builder.CreateInsertElement(NewVecC, Scalar, Index);
+  I.replaceAllUsesWith(Insert);
+  Insert->takeName(&I);
   return true;
 }
 
@@ -321,15 +382,15 @@ static bool runImpl(Function &F, const TargetTransformInfo &TTI,
     if (!DT.isReachableFromEntry(&BB))
       continue;
     // Do not delete instructions under here and invalidate the iterator.
-    // Walk the block backwards for efficiency. We're matching a chain of
-    // use->defs, so we're more likely to succeed by starting from the bottom.
+    // Walk the block forwards to enable simple iterative chains of transforms.
     // TODO: It could be more efficient to remove dead instructions
     //       iteratively in this loop rather than waiting until the end.
-    for (Instruction &I : make_range(BB.rbegin(), BB.rend())) {
+    for (Instruction &I : BB) {
       if (isa<DbgInfoIntrinsic>(I))
         continue;
       MadeChange |= foldExtractExtract(I, TTI);
       MadeChange |= foldBitcastShuf(I, TTI);
+      MadeChange |= scalarizeBinop(I, TTI);
     }
   }
 
@@ -357,6 +418,8 @@ public:
     AU.setPreservesCFG();
     AU.addPreserved<DominatorTreeWrapperPass>();
     AU.addPreserved<GlobalsAAWrapperPass>();
+    AU.addPreserved<AAResultsWrapperPass>();
+    AU.addPreserved<BasicAAWrapperPass>();
     FunctionPass::getAnalysisUsage(AU);
   }
 
@@ -390,5 +453,7 @@ PreservedAnalyses VectorCombinePass::run(Function &F,
   PreservedAnalyses PA;
   PA.preserveSet<CFGAnalyses>();
   PA.preserve<GlobalsAA>();
+  PA.preserve<AAManager>();
+  PA.preserve<BasicAA>();
   return PA;
 }

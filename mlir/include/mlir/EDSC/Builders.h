@@ -118,10 +118,9 @@ protected:
   /// As a consequence we must allocate a new OpBuilder + ScopedContext and
   /// let the escape.
   void enter(mlir::Block *block) {
-    bodyScope = new ScopedContext(
-        ScopedContext::getBuilderRef(),
-        OpBuilder::InsertPoint(block, std::prev(block->end())),
-        ScopedContext::getLocation());
+    bodyScope = new ScopedContext(ScopedContext::getBuilderRef(),
+                                  OpBuilder::InsertPoint(block, block->end()),
+                                  ScopedContext::getLocation());
     if (!block->empty()) {
       auto &termOp = block->back();
       if (termOp.isKnownTerminator())
@@ -304,7 +303,7 @@ struct StructuredIndexed {
            "MemRef, RankedTensor or Vector expected");
   }
 
-  bool hasValue() const { return value; }
+  bool hasValue() const { return (bool)value; }
   Value getValue() const {
     assert(value && "StructuredIndexed Value not set.");
     return value;
@@ -359,7 +358,22 @@ public:
   /// Emits a `load` when converting to a Value.
   operator Value() const { return Load(value, indices); }
 
+  /// Returns the base memref.
   Value getBase() const { return value; }
+
+  /// Returns the underlying memref.
+  MemRefType getMemRefType() const {
+    return value.getType().template cast<MemRefType>();
+  }
+
+  /// Returns the underlying MemRef elemental type cast as `T`.
+  template <typename T>
+  T getElementalTypeAs() const {
+    return value.getType()
+        .template cast<MemRefType>()
+        .getElementType()
+        .template cast<T>();
+  }
 
   /// Arithmetic operator overloadings.
   Value operator+(Value e);

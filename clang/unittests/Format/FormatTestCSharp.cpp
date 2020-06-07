@@ -245,11 +245,13 @@ TEST_F(FormatTestCSharp, Attributes) {
                "}");
 
   verifyFormat("[TestMethod]\n"
-               "public string Host { set; get; }");
+               "public string Host\n"
+               "{ set; get; }");
 
   verifyFormat("[TestMethod(\"start\", HelpText = \"Starts the server "
                "listening on provided host\")]\n"
-               "public string Host { set; get; }");
+               "public string Host\n"
+               "{ set; get; }");
 
   verifyFormat(
       "[DllImport(\"Hello\", EntryPoint = \"hello_world\")]\n"
@@ -581,8 +583,7 @@ TEST_F(FormatTestCSharp, CSharpNamedArguments) {
   FormatStyle Style = getGoogleStyle(FormatStyle::LK_CSharp);
 
   verifyFormat(R"(//
-PrintOrderDetails(orderNum: 31, productName: "Red Mug",
-                  sellerName: "Gift Shop");)",
+PrintOrderDetails(orderNum: 31, productName: "Red Mug", sellerName: "Gift Shop");)",
                Style);
 
   // Ensure that trailing comments do not cause problems.
@@ -639,8 +640,7 @@ class TimePeriod {
     get { return _seconds / 3600; }
     set {
       if (value < 0 || value > 24)
-        throw new ArgumentOutOfRangeException(
-            $"{nameof(value)} must be between 0 and 24.");
+        throw new ArgumentOutOfRangeException($"{nameof(value)} must be between 0 and 24.");
       _seconds = value * 3600;
     }
   }
@@ -677,6 +677,32 @@ class MyClass {
                                      DefaultThirdArgument);
 })",
                Style);
+
+  // Brace wrapping and single-lining of accessor can be controlled by config.
+  Style.AllowShortBlocksOnASingleLine = FormatStyle::SBS_Never;
+  Style.BreakBeforeBraces = FormatStyle::BS_Custom;
+  Style.BraceWrapping.AfterFunction = true;
+
+  verifyFormat(R"(//
+public class SaleItem {
+  public decimal Price
+  { get; set; }
+})",
+               Style);
+
+  verifyFormat(R"(//
+class TimePeriod {
+  public double Hours
+  {
+    get {
+      return _seconds / 3600;
+    }
+    set {
+      _seconds = value * 3600;
+    }
+  }
+})",
+               Style);
 }
 
 TEST_F(FormatTestCSharp, CSharpSpaces) {
@@ -706,6 +732,9 @@ TEST_F(FormatTestCSharp, CSharpSpaces) {
   verifyFormat(R"(char[,,] rawCharArray = MakeCharacterGrid();)", Style);
   verifyFormat(R"(var (key, value))", Style);
 
+  // `&&` is not seen as a reference.
+  verifyFormat(R"(A == typeof(X) && someBool)", Style);
+
   // Not seen as a C-style cast.
   verifyFormat(R"(//
 foreach ((A a, B b) in someList) {
@@ -724,7 +753,9 @@ TEST_F(FormatTestCSharp, CSharpNullableTypes) {
 
   verifyFormat(R"(//
 public class A {
-  void foo() { int? value = some.bar(); }
+  void foo() {
+    int? value = some.bar();
+  }
 })",
                Style); // int? is nullable not a conditional expression.
 
@@ -761,23 +792,23 @@ TEST_F(FormatTestCSharp, CSharpGenericTypeConstraints) {
 
   verifyFormat(R"(//
 class ItemFactory<T>
-    where T : new() {})", Style);
+    where T : new() {})",
+               Style);
 
   verifyFormat(R"(//
 class Dictionary<TKey, TVal>
     where TKey : IComparable<TKey>
     where TVal : IMyInterface {
   public void MyMethod<T>(T t)
-      where T : IMyInterface { doThing(); }
+      where T : IMyInterface {
+    doThing();
+  }
 })",
                Style);
 
   verifyFormat(R"(//
 class ItemFactory<T>
-    where T : new(),
-              IAnInterface<T>,
-              IAnotherInterface<T>,
-              IAnotherInterfaceStill<T> {})",
+    where T : new(), IAnInterface<T>, IAnotherInterface<T>, IAnotherInterfaceStill<T> {})",
                Style);
 
   Style.ColumnLimit = 50; // Force lines to be wrapped.

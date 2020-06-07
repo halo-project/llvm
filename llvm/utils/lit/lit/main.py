@@ -4,6 +4,7 @@ lit - LLVM Integrated Tester.
 See lit.pod for more information.
 """
 
+import itertools
 import os
 import platform
 import sys
@@ -13,6 +14,7 @@ import lit.cl_arguments
 import lit.discovery
 import lit.display
 import lit.LitConfig
+import lit.reports
 import lit.run
 import lit.Test
 import lit.util
@@ -44,6 +46,11 @@ def main(builtin_params={}):
 
     if opts.show_suites or opts.show_tests:
         print_discovered(discovered_tests, opts.show_suites, opts.show_tests)
+        sys.exit(0)
+
+    if opts.show_used_features:
+        features = set(itertools.chain.from_iterable(t.getUsedFeatures() for t in discovered_tests))
+        print(' '.join(sorted(features)))
         sys.exit(0)
 
     # Command line overrides configuration for maxIndividualTestTime.
@@ -98,11 +105,8 @@ def main(builtin_params={}):
 
     print_results(discovered_tests, elapsed, opts)
 
-    if opts.output_path:
-        #TODO(yln): pass in discovered_tests
-        write_test_results(executed_tests, lit_config, elapsed, opts.output_path)
-    if opts.xunit_output_file:
-        write_test_results_xunit(executed_tests, opts)
+    for report in opts.reports:
+        report.write_results(executed_tests, elapsed)
 
     if lit_config.numErrors:
         sys.stderr.write('\n%d error(s) in tests\n' % lit_config.numErrors)
@@ -126,16 +130,13 @@ def create_params(builtin_params, user_params):
 
 
 def print_discovered(tests, show_suites, show_tests):
-    # Suite names are not necessarily unique.  Include object identity in sort
-    # key to avoid mixing tests of different suites.
-    tests.sort(key=lambda t: (t.suite.name, t.suite, t.path_in_suite))
+    tests.sort(key=lit.reports.by_suite_and_test_path)
 
     if show_suites:
-        import itertools
         tests_by_suite = itertools.groupby(tests, lambda t: t.suite)
         print('-- Test Suites --')
-        for suite, suite_iter in tests_by_suite:
-            test_count = sum(1 for _ in suite_iter)
+        for suite, test_iter in tests_by_suite:
+            test_count = sum(1 for _ in test_iter)
             print('  %s - %d tests' % (suite.name, test_count))
             print('    Source Root: %s' % suite.source_root)
             print('    Exec Root  : %s' % suite.exec_root)
@@ -251,9 +252,8 @@ def execute_in_tmp_dir(run, lit_config):
             try:
                 import shutil
                 shutil.rmtree(tmp_dir)
-            except:
-                # FIXME: Re-try after timeout on Windows.
-                lit_config.warning("Failed to delete temp directory '%s'" % tmp_dir)
+            except Exception as e: 
+                lit_config.warning("Failed to delete temp directory '%s', try upgrading your version of Python to fix this" % tmp_dir)
 
 
 def print_histogram(tests):
@@ -265,34 +265,33 @@ def print_histogram(tests):
 
 def add_result_category(result_code, label):
     assert isinstance(result_code, lit.Test.ResultCode)
-    category = (result_code, "%s Tests" % label, label)
+    category = (result_code, label)
     result_codes.append(category)
 
 
-# Status code, summary label, group label
 result_codes = [
     # Passes
-    (lit.Test.EXCLUDED,    'Excluded Tests',      'Excluded'),
-    (lit.Test.SKIPPED,     'Skipped Tests',       'Skipped'),
-    (lit.Test.UNSUPPORTED, 'Unsupported Tests',   'Unsupported'),
-    (lit.Test.PASS,        'Expected Passes',     ''),
-    (lit.Test.FLAKYPASS,   'Passes With Retry',   ''),
-    (lit.Test.XFAIL,       'Expected Failures',   'Expected Failing'),
+    (lit.Test.EXCLUDED,    'Excluded'),
+    (lit.Test.SKIPPED,     'Skipped'),
+    (lit.Test.UNSUPPORTED, 'Unsupported'),
+    (lit.Test.PASS,        'Passed'),
+    (lit.Test.FLAKYPASS,   'Passed With Retry'),
+    (lit.Test.XFAIL,       'Expectedly Failed'),
     # Failures
-    (lit.Test.UNRESOLVED,  'Unresolved Tests',    'Unresolved'),
-    (lit.Test.TIMEOUT,     'Individual Timeouts', 'Timed Out'),
-    (lit.Test.FAIL,        'Unexpected Failures', 'Failing'),
-    (lit.Test.XPASS,       'Unexpected Passes',   'Unexpected Passing')
+    (lit.Test.UNRESOLVED,  'Unresolved'),
+    (lit.Test.TIMEOUT,     'Timed Out'),
+    (lit.Test.FAIL,        'Failed'),
+    (lit.Test.XPASS,       'Unexpectedly Passed')
 ]
 
 
 def print_results(tests, elapsed, opts):
-    tests_by_code = {code: [] for (code, _, _) in result_codes}
+    tests_by_code = {code: [] for code, _ in result_codes}
     for test in tests:
         tests_by_code[test.result.code].append(test)
 
-    for (code, _, group_label) in result_codes:
-        print_group(code, group_label, tests_by_code[code], opts)
+    for (code, label) in result_codes:
+        print_group(code, label, tests_by_code[code], opts)
 
     print_summary(tests_by_code, opts.quiet, elapsed)
 
@@ -318,7 +317,7 @@ def print_summary(tests_by_code, quiet, elapsed):
         print('\nTesting Time: %.2fs' % elapsed)
 
     codes = [c for c in result_codes if not quiet or c.isFailure]
-    groups = [(label, len(tests_by_code[code])) for code, label, _ in codes]
+    groups = [(label, len(tests_by_code[code])) for code, label in codes]
     groups = [(label, count) for label, count in groups if count]
     if not groups:
         return
@@ -330,98 +329,3 @@ def print_summary(tests_by_code, quiet, elapsed):
         label = label.ljust(max_label_len)
         count = str(count).rjust(max_count_len)
         print('  %s: %s' % (label, count))
-
-
-def write_test_results(tests, lit_config, elapsed, output_path):
-    # TODO(yln): audit: unexecuted tests
-    # Construct the data we will write.
-    data = {}
-    # Encode the current lit version as a schema version.
-    data['__version__'] = lit.__versioninfo__
-    data['elapsed'] = elapsed
-    # FIXME: Record some information on the lit configuration used?
-    # FIXME: Record information from the individual test suites?
-
-    # Encode the tests.
-    data['tests'] = tests_data = []
-    for test in tests:
-        test_data = {
-            'name' : test.getFullName(),
-            'code' : test.result.code.name,
-            'output' : test.result.output,
-            'elapsed' : test.result.elapsed }
-
-        # Add test metrics, if present.
-        if test.result.metrics:
-            test_data['metrics'] = metrics_data = {}
-            for key, value in test.result.metrics.items():
-                metrics_data[key] = value.todata()
-
-        # Report micro-tests separately, if present
-        if test.result.microResults:
-            for key, micro_test in test.result.microResults.items():
-                # Expand parent test name with micro test name
-                parent_name = test.getFullName()
-                micro_full_name = parent_name + ':' + key
-
-                micro_test_data = {
-                    'name' : micro_full_name,
-                    'code' : micro_test.code.name,
-                    'output' : micro_test.output,
-                    'elapsed' : micro_test.elapsed }
-                if micro_test.metrics:
-                    micro_test_data['metrics'] = micro_metrics_data = {}
-                    for key, value in micro_test.metrics.items():
-                        micro_metrics_data[key] = value.todata()
-
-                tests_data.append(micro_test_data)
-
-        tests_data.append(test_data)
-
-    # Write the output.
-    f = open(output_path, 'w')
-    try:
-        import json
-        json.dump(data, f, indent=2, sort_keys=True)
-        f.write('\n')
-    finally:
-        f.close()
-
-def write_test_results_xunit(tests, opts):
-    # TODO(yln): audit: unexecuted tests
-    from xml.sax.saxutils import quoteattr
-    # Collect the tests, indexed by test suite
-    by_suite = {}
-    for result_test in tests:
-        suite = result_test.suite.config.name
-        if suite not in by_suite:
-            by_suite[suite] = {
-                                'passes'   : 0,
-                                'failures' : 0,
-                                'skipped': 0,
-                                'tests'    : [] }
-        by_suite[suite]['tests'].append(result_test)
-        if result_test.isFailure():
-            by_suite[suite]['failures'] += 1
-        elif result_test.result.code == lit.Test.UNSUPPORTED:
-            by_suite[suite]['skipped'] += 1
-        else:
-            by_suite[suite]['passes'] += 1
-    xunit_output_file = open(opts.xunit_output_file, "w")
-    xunit_output_file.write("<?xml version=\"1.0\" encoding=\"UTF-8\" ?>\n")
-    xunit_output_file.write("<testsuites>\n")
-    for suite_name, suite in by_suite.items():
-        safe_suite_name = quoteattr(suite_name.replace(".", "-"))
-        xunit_output_file.write("<testsuite name=" + safe_suite_name)
-        xunit_output_file.write(" tests=\"" + str(suite['passes'] +
-            suite['failures'] + suite['skipped']) + "\"")
-        xunit_output_file.write(" failures=\"" + str(suite['failures']) + "\"")
-        xunit_output_file.write(" skipped=\"" + str(suite['skipped']) +
-            "\">\n")
-
-        for result_test in suite['tests']:
-            result_test.writeJUnitXML(xunit_output_file)
-            xunit_output_file.write("\n")
-        xunit_output_file.write("</testsuite>\n")
-    xunit_output_file.write("</testsuites>")
-    xunit_output_file.close()

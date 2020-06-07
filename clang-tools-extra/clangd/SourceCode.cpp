@@ -8,6 +8,7 @@
 #include "SourceCode.h"
 
 #include "FuzzyMatch.h"
+#include "Preamble.h"
 #include "Protocol.h"
 #include "refactor/Tweak.h"
 #include "support/Context.h"
@@ -564,7 +565,7 @@ format::FormatStyle getFormatStyleForFile(llvm::StringRef File,
   if (!Style) {
     log("getStyle() failed for file {0}: {1}. Fallback is LLVM style.", File,
         Style.takeError());
-    Style = format::getLLVMStyle();
+    return format::getLLVMStyle();
   }
   return *Style;
 }
@@ -961,7 +962,9 @@ llvm::Optional<DefinedMacro> locateMacroAt(const syntax::Token &SpelledTok,
     Loc = Loc.getLocWithOffset(-1);
   MacroDefinition MacroDef = PP.getMacroDefinitionAtLoc(IdentifierInfo, Loc);
   if (auto *MI = MacroDef.getMacroInfo())
-    return DefinedMacro{IdentifierInfo->getName(), MI};
+    return DefinedMacro{
+        IdentifierInfo->getName(), MI,
+        translatePreamblePatchLocation(MI->getDefinitionLoc(), SM)};
   return None;
 }
 

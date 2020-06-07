@@ -94,7 +94,9 @@ public:
   bool isDefault() const { return DefaultType; }
   bool isFloat() const { return Float; }
   bool isInteger() const { return !Float && !Predicate; }
-  bool isScalarPredicate() const { return !Float && ElementBitwidth == 1; }
+  bool isScalarPredicate() const {
+    return !Float && Predicate && NumVectors == 0;
+  }
   bool isPredicateVector() const { return Predicate; }
   bool isPredicatePattern() const { return PredicatePattern; }
   bool isPrefetchOp() const { return PrefetchOp; }
@@ -211,13 +213,13 @@ public:
   /// Return true if the intrinsic takes a splat operand.
   bool hasSplat() const {
     // These prototype modifiers are described in arm_sve.td.
-    return Proto.find_first_of("ajfrKLR") != std::string::npos;
+    return Proto.find_first_of("ajfrKLR@") != std::string::npos;
   }
 
   /// Return the parameter index of the splat operand.
   unsigned getSplatIdx() const {
     // These prototype modifiers are described in arm_sve.td.
-    auto Idx = Proto.find_first_of("ajfrKLR");
+    auto Idx = Proto.find_first_of("ajfrKLR@");
     assert(Idx != std::string::npos && Idx > 0 &&
            "Prototype has no splat operand");
     return Idx - 1;
@@ -235,6 +237,23 @@ private:
 
 class SVEEmitter {
 private:
+  // The reinterpret builtins are generated separately because they
+  // need the cross product of all types (121 functions in total),
+  // which is inconvenient to specify in the arm_sve.td file or
+  // generate in CGBuiltin.cpp.
+  struct ReinterpretTypeInfo {
+    const char *Suffix;
+    const char *Type;
+    const char *BuiltinType;
+  };
+  SmallVector<ReinterpretTypeInfo, 11> Reinterprets = {
+      {"s8", "svint8_t", "q16Sc"},   {"s16", "svint16_t", "q8Ss"},
+      {"s32", "svint32_t", "q4Si"},  {"s64", "svint64_t", "q2SWi"},
+      {"u8", "svuint8_t", "q16Uc"},  {"u16", "svuint16_t", "q8Us"},
+      {"u32", "svuint32_t", "q4Ui"}, {"u64", "svuint64_t", "q2UWi"},
+      {"f16", "svfloat16_t", "q8h"}, {"f32", "svfloat32_t", "q4f"},
+      {"f64", "svfloat64_t", "q2d"}};
+
   RecordKeeper &Records;
   llvm::StringMap<uint64_t> EltTypes;
   llvm::StringMap<uint64_t> MemEltTypes;
@@ -407,18 +426,19 @@ std::string SVEType::str() const {
 
     if (Float)
       S += "float";
-    else if (isScalarPredicate())
+    else if (isScalarPredicate() || isPredicateVector())
       S += "bool";
     else
       S += "int";
 
-    if (!isScalarPredicate())
+    if (!isScalarPredicate() && !isPredicateVector())
       S += utostr(ElementBitwidth);
     if (!isScalableVector() && isVector())
       S += "x" + utostr(getNumElements());
     if (NumVectors > 1)
       S += "x" + utostr(NumVectors);
-    S += "_t";
+    if (!isScalarPredicate())
+      S += "_t";
   }
 
   if (Constant)
@@ -433,7 +453,6 @@ void SVEType::applyTypespec() {
     switch (I) {
     case 'P':
       Predicate = true;
-      ElementBitwidth = 1;
       break;
     case 'U':
       Signed = false;
@@ -495,6 +514,11 @@ void SVEType::applyModifier(char Mod) {
   case 'q':
     ElementBitwidth /= 4;
     break;
+  case 'b':
+    Signed = false;
+    Float = false;
+    ElementBitwidth /= 4;
+    break;
   case 'o':
     ElementBitwidth *= 4;
     break;
@@ -508,6 +532,20 @@ void SVEType::applyModifier(char Mod) {
   case 's':
   case 'a':
     Bitwidth = ElementBitwidth;
+    NumVectors = 0;
+    break;
+  case 'R':
+    ElementBitwidth /= 2;
+    NumVectors = 0;
+    break;
+  case 'r':
+    ElementBitwidth /= 4;
+    NumVectors = 0;
+    break;
+  case '@':
+    Signed = false;
+    Float = false;
+    ElementBitwidth /= 4;
     NumVectors = 0;
     break;
   case 'K':
@@ -1007,6 +1045,10 @@ void SVEEmitter::createHeader(raw_ostream &OS) {
   OS << "#error \"SVE support not enabled\"\n";
   OS << "#else\n\n";
 
+  OS << "#if !defined(__LITTLE_ENDIAN__)\n";
+  OS << "#error \"Big endian is currently not supported for arm_sve.h\"\n";
+  OS << "#endif\n";
+
   OS << "#include <stdint.h>\n\n";
   OS << "#ifdef  __cplusplus\n";
   OS << "extern \"C\" {\n";
@@ -1017,7 +1059,6 @@ void SVEEmitter::createHeader(raw_ostream &OS) {
   OS << "typedef __fp16 float16_t;\n";
   OS << "typedef float float32_t;\n";
   OS << "typedef double float64_t;\n";
-  OS << "typedef bool bool_t;\n\n";
 
   OS << "typedef __SVInt8_t svint8_t;\n";
   OS << "typedef __SVInt16_t svint16_t;\n";
@@ -1072,6 +1113,22 @@ void SVEEmitter::createHeader(raw_ostream &OS) {
   OS << "/* Function attributes */\n";
   OS << "#define __aio static inline __attribute__((__always_inline__, "
         "__nodebug__, __overloadable__))\n\n";
+
+  // Add reinterpret functions.
+  for (auto ShortForm : { false, true } )
+    for (const ReinterpretTypeInfo &From : Reinterprets)
+      for (const ReinterpretTypeInfo &To : Reinterprets) {
+        if (ShortForm) {
+          OS << "__aio " << From.Type << " svreinterpret_" << From.Suffix;
+          OS << "(" << To.Type << " op) {\n";
+          OS << "  return __builtin_sve_reinterpret_" << From.Suffix << "_"
+             << To.Suffix << "(op);\n";
+          OS << "}\n\n";
+        } else
+          OS << "#define svreinterpret_" << From.Suffix << "_" << To.Suffix
+             << "(...) __builtin_sve_reinterpret_" << From.Suffix << "_"
+             << To.Suffix << "(__VA_ARGS__)\n";
+      }
 
   SmallVector<std::unique_ptr<Intrinsic>, 128> Defs;
   std::vector<Record *> RV = Records.getAllDerivedDefinitions("Inst");
@@ -1147,8 +1204,16 @@ void SVEEmitter::createBuiltins(raw_ostream &OS) {
       OS << "BUILTIN(__builtin_sve_" << Def->getMangledName() << ", \""
          << Def->getBuiltinTypeStr() << "\", \"n\")\n";
   }
+
+  // Add reinterpret builtins
+  for (const ReinterpretTypeInfo &From : Reinterprets)
+    for (const ReinterpretTypeInfo &To : Reinterprets)
+      OS << "BUILTIN(__builtin_sve_reinterpret_" << From.Suffix << "_"
+         << To.Suffix << +", \"" << From.BuiltinType << To.BuiltinType
+         << "\", \"n\")\n";
+
   OS << "#endif\n\n";
-}
+  }
 
 void SVEEmitter::createCodeGenMap(raw_ostream &OS) {
   std::vector<Record *> RV = Records.getAllDerivedDefinitions("Inst");

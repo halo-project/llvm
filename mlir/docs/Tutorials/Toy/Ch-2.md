@@ -146,8 +146,6 @@ This handling can be observed by crafting what should be an invalid IR for Toy
 and seeing it round-trip without tripping the verifier:
 
 ```mlir
-// RUN: toyc %s -emit=mlir
-
 func @main() {
   %0 = "toy.print"() : () -> tensor<2x3xf64>
 }
@@ -238,13 +236,13 @@ class ConstantOp : public mlir::Op<ConstantOp,
   /// operations. This state is a collection of all of the discrete elements
   /// that an operation may contain.
   /// Build a constant with the given return type and `value` attribute.
-  static void build(mlir::Builder *builder, mlir::OperationState &state,
+  static void build(mlir::OpBuilder &builder, mlir::OperationState &state,
                     mlir::Type result, mlir::DenseElementsAttr value);
   /// Build a constant and reuse the type from the given 'value'.
-  static void build(mlir::Builder *builder, mlir::OperationState &state,
+  static void build(mlir::OpBuilder &builder, mlir::OperationState &state,
                     mlir::DenseElementsAttr value);
   /// Build a constant by broadcasting the given 'value'.
-  static void build(mlir::Builder *builder, mlir::OperationState &state,
+  static void build(mlir::OpBuilder &builder, mlir::OperationState &state,
                     double value);
 };
 ```

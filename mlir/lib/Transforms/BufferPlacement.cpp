@@ -43,7 +43,8 @@
 // The current implementation does not support loops and the resulting code will
 // be invalid with respect to program semantics. The only thing that is
 // currently missing is a high-level loop analysis that allows us to move allocs
-// and deallocs outside of the loop blocks.
+// and deallocs outside of the loop blocks. Furthermore, it doesn't also accept
+// functions which return buffers already.
 //
 //===----------------------------------------------------------------------===//
 
@@ -187,13 +188,23 @@ public:
 
   /// Finds all associated dealloc nodes for the alloc nodes using alias
   /// information.
-  DeallocSetT findAssociatedDeallocs(AllocOp alloc) const {
+  DeallocSetT findAssociatedDeallocs(OpResult allocResult) const {
     DeallocSetT result;
-    auto possibleValues = aliases.resolve(alloc);
+    auto possibleValues = aliases.resolve(allocResult);
     for (Value alias : possibleValues)
-      for (Operation *user : alias.getUsers()) {
-        if (isa<DeallocOp>(user))
-          result.insert(user);
+      for (Operation *op : alias.getUsers()) {
+        // Check for an existing memory effect interface.
+        auto effectInstance = dyn_cast<MemoryEffectOpInterface>(op);
+        if (!effectInstance)
+          continue;
+        // Check whether the associated value will be freed using the current
+        // operation.
+        SmallVector<MemoryEffects::EffectInstance, 2> effects;
+        effectInstance.getEffectsOnValue(alias, effects);
+        if (llvm::any_of(effects, [=](MemoryEffects::EffectInstance &it) {
+              return isa<MemoryEffects::Free>(it.getEffect());
+            }))
+          result.insert(op);
       }
     return result;
   }
@@ -328,8 +339,6 @@ private:
 
 /// The actual buffer placement pass that moves alloc and dealloc nodes into
 /// the right positions. It uses the algorithm described at the top of the file.
-// TODO: create a templated version that allows to match dialect-specific
-// alloc/dealloc nodes and to insert dialect-specific dealloc node.
 struct BufferPlacementPass
     : mlir::PassWrapper<BufferPlacementPass, FunctionPass> {
   void runOnFunction() override {
@@ -337,42 +346,64 @@ struct BufferPlacementPass
     auto &analysis = getAnalysis<BufferPlacementAnalysis>();
 
     // Compute an initial placement of all nodes.
-    llvm::SmallDenseMap<Value, BufferPlacementPositions, 16> placements;
-    getFunction().walk([&](AllocOp alloc) {
-      placements[alloc] = analysis.computeAllocAndDeallocPositions(
-          alloc.getOperation()->getResult(0));
-      return WalkResult::advance();
+    llvm::SmallVector<std::pair<OpResult, BufferPlacementPositions>, 16>
+        placements;
+    getFunction().walk([&](MemoryEffectOpInterface op) {
+      // Try to find a single allocation result.
+      SmallVector<MemoryEffects::EffectInstance, 2> effects;
+      op.getEffects(effects);
+
+      SmallVector<MemoryEffects::EffectInstance, 2> allocateResultEffects;
+      llvm::copy_if(effects, std::back_inserter(allocateResultEffects),
+                    [=](MemoryEffects::EffectInstance &it) {
+                      Value value = it.getValue();
+                      return isa<MemoryEffects::Allocate>(it.getEffect()) &&
+                             value && value.isa<OpResult>();
+                    });
+      // If there is one result only, we will be able to move the allocation and
+      // (possibly existing) deallocation ops.
+      if (allocateResultEffects.size() == 1) {
+        // Insert allocation result.
+        auto allocResult = allocateResultEffects[0].getValue().cast<OpResult>();
+        placements.emplace_back(
+            allocResult, analysis.computeAllocAndDeallocPositions(allocResult));
+      }
     });
 
-    // Move alloc (and dealloc - if any) nodes into the right places
-    // and insert dealloc nodes if necessary.
-    getFunction().walk([&](AllocOp alloc) {
+    // Move alloc (and dealloc - if any) nodes into the right places and insert
+    // dealloc nodes if necessary.
+    for (auto &entry : placements) {
       // Find already associated dealloc nodes.
+      OpResult alloc = entry.first;
       auto deallocs = analysis.findAssociatedDeallocs(alloc);
       if (deallocs.size() > 1) {
         emitError(alloc.getLoc(),
-                  "Not supported number of associated dealloc operations");
-        return WalkResult::interrupt();
+                  "not supported number of associated dealloc operations");
+        return;
       }
 
       // Move alloc node to the right place.
-      BufferPlacementPositions &positions = placements[alloc];
-      Operation *allocOperation = alloc.getOperation();
+      BufferPlacementPositions &positions = entry.second;
+      Operation *allocOperation = alloc.getOwner();
       allocOperation->moveBefore(positions.getAllocPosition());
 
       // If there is an existing dealloc, move it to the right place.
+      Operation *nextOp = positions.getDeallocPosition()->getNextNode();
+      // If the Dealloc position is at the terminator operation of the block,
+      // then the value should escape from a deallocation.
+      if (!nextOp) {
+        assert(deallocs.empty() &&
+               "There should be no dealloc for the returned buffer");
+        continue;
+      }
       if (deallocs.size()) {
-        Operation *nextOp = positions.getDeallocPosition()->getNextNode();
-        assert(nextOp && "Invalid Dealloc operation position");
         (*deallocs.begin())->moveBefore(nextOp);
       } else {
         // If there is no dealloc node, insert one in the right place.
-        OpBuilder builder(alloc);
-        builder.setInsertionPointAfter(positions.getDeallocPosition());
+        OpBuilder builder(nextOp);
         builder.create<DeallocOp>(allocOperation->getLoc(), alloc);
       }
-      return WalkResult::advance();
-    });
+    }
   };
 };
 
@@ -405,21 +436,86 @@ LogicalResult FunctionAndBlockSignatureConverter::matchAndRewrite(
                      "FunctionAndBlockSignatureConverter");
     return failure();
   }
-  // Converting shaped type arguments to memref type.
   auto funcType = funcOp.getType();
+
+  // Convert function arguments using the provided TypeConverter.
   TypeConverter::SignatureConversion conversion(funcType.getNumInputs());
   for (auto argType : llvm::enumerate(funcType.getInputs()))
     conversion.addInputs(argType.index(),
                          converter->convertType(argType.value()));
-  // Adding function results to the arguments of the converted function as
-  // memref type. The converted function will be a void function.
-  for (Type resType : funcType.getResults())
-    conversion.addInputs(converter->convertType((resType)));
+
+  // If a function result type is not a memref but it would be a memref after
+  // type conversion, a new argument should be appended to the function
+  // arguments list for this result. Otherwise, it remains unchanged as a
+  // function result.
+  SmallVector<Type, 2> newResultTypes;
+  newResultTypes.reserve(funcOp.getNumResults());
+  for (Type resType : funcType.getResults()) {
+    Type convertedType = converter->convertType(resType);
+    if (BufferAssignmentTypeConverter::isConvertedMemref(convertedType,
+                                                         resType))
+      conversion.addInputs(convertedType);
+    else
+      newResultTypes.push_back(convertedType);
+  }
+
+  // Update the signature of the function.
   rewriter.updateRootInPlace(funcOp, [&] {
-    funcOp.setType(
-        rewriter.getFunctionType(conversion.getConvertedTypes(), llvm::None));
+    funcOp.setType(rewriter.getFunctionType(conversion.getConvertedTypes(),
+                                            newResultTypes));
     rewriter.applySignatureConversion(&funcOp.getBody(), conversion);
   });
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// BufferAssignmentCallOpConverter
+//===----------------------------------------------------------------------===//
+
+// Performs `CallOp` conversion to match its operands and results with the
+// signature of the callee after rewriting the callee with
+// FunctionAndBlockSignatureConverter.
+LogicalResult BufferAssignmentCallOpConverter::matchAndRewrite(
+    CallOp callOp, ArrayRef<Value> operands,
+    ConversionPatternRewriter &rewriter) const {
+
+  Location loc = callOp.getLoc();
+  SmallVector<Value, 2> newOperands, replacingValues;
+  SmallVector<Type, 2> newResultTypes;
+  unsigned numResults = callOp.getNumResults();
+  newOperands.reserve(numResults + operands.size());
+  newOperands.append(operands.begin(), operands.end());
+  newResultTypes.reserve(numResults);
+  replacingValues.reserve(numResults);
+
+  // For each memref result of `CallOp` which has not been a memref before type
+  // conversion, a new buffer is allocated and passed to the operands list of
+  // the new `CallOp`. Otherwise, it remains as a caller result.
+  for (Value result : callOp.getResults()) {
+    Type currType = result.getType();
+    Type newType = converter->convertType(result.getType());
+    if (BufferAssignmentTypeConverter::isConvertedMemref(newType, currType)) {
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.restoreInsertionPoint(
+          bufferAssignment->computeAllocPosition(result.dyn_cast<OpResult>()));
+      Value alloc =
+          rewriter.create<AllocOp>(loc, newType.dyn_cast<MemRefType>());
+      newOperands.push_back(alloc);
+      replacingValues.push_back(alloc);
+    } else {
+      newResultTypes.push_back(currType);
+
+      // No replacing is required.
+      replacingValues.push_back(nullptr);
+    }
+  }
+
+  // Creating the new `CallOp`.
+  rewriter.create<CallOp>(loc, callOp.getCallee(), newResultTypes, newOperands);
+
+  // Replacing the results of the old `CallOp`.
+  rewriter.replaceOp(callOp, replacingValues);
+
   return success();
 }
 
@@ -435,6 +531,11 @@ BufferAssignmentTypeConverter::BufferAssignmentTypeConverter() {
   addConversion([](RankedTensorType type) {
     return (Type)MemRefType::get(type.getShape(), type.getElementType());
   });
+}
+
+/// Checks if `type` has been converted from non-memref type to memref.
+bool BufferAssignmentTypeConverter::isConvertedMemref(Type type, Type before) {
+  return type.isa<MemRefType>() && !before.isa<MemRefType>();
 }
 
 //===----------------------------------------------------------------------===//

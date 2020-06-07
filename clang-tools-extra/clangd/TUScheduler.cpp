@@ -142,11 +142,19 @@ public:
   /// Returns the cached value for \p K, or llvm::None if the value is not in
   /// the cache anymore. If nullptr was cached for \p K, this function will
   /// return a null unique_ptr wrapped into an optional.
-  llvm::Optional<std::unique_ptr<ParsedAST>> take(Key K) {
+  /// If \p AccessMetric is set records whether there was a hit or miss.
+  llvm::Optional<std::unique_ptr<ParsedAST>>
+  take(Key K, const trace::Metric *AccessMetric = nullptr) {
+    // Record metric after unlocking the mutex.
     std::unique_lock<std::mutex> Lock(Mut);
     auto Existing = findByKey(K);
-    if (Existing == LRU.end())
+    if (Existing == LRU.end()) {
+      if (AccessMetric)
+        AccessMetric->record(1, "miss");
       return None;
+    }
+    if (AccessMetric)
+      AccessMetric->record(1, "hit");
     std::unique_ptr<ParsedAST> V = std::move(Existing->second);
     LRU.erase(Existing);
     // GCC 4.8 fails to compile `return V;`, as it tries to call the copy
@@ -231,10 +239,14 @@ public:
       return;
     }
     {
-      std::lock_guard<std::mutex> Lock(Mutex);
-      // If shutdown is issued, don't bother building.
-      if (Done)
-        return;
+      std::unique_lock<std::mutex> Lock(Mutex);
+      // If NextReq was requested with WantDiagnostics::Yes we cannot just drop
+      // that on the floor. Block until we start building it. This won't
+      // dead-lock as we are blocking the caller thread, while builds continue
+      // on preamble thread.
+      ReqCV.wait(Lock, [this] {
+        return !NextReq || NextReq->WantDiags != WantDiagnostics::Yes;
+      });
       NextReq = std::move(Req);
     }
     // Let the worker thread know there's a request, notify_one is safe as there
@@ -351,8 +363,7 @@ class ASTWorker {
   friend class ASTWorkerHandle;
   ASTWorker(PathRef FileName, const GlobalCompilationDatabase &CDB,
             TUScheduler::ASTCache &LRUCache, Semaphore &Barrier, bool RunSync,
-            DebouncePolicy UpdateDebounce, bool StorePreamblesInMemory,
-            ParsingCallbacks &Callbacks);
+            const TUScheduler::Options &Opts, ParsingCallbacks &Callbacks);
 
 public:
   /// Create a new ASTWorker and return a handle to it.
@@ -360,11 +371,12 @@ public:
   /// is null, all requests will be processed on the calling thread
   /// synchronously instead. \p Barrier is acquired when processing each
   /// request, it is used to limit the number of actively running threads.
-  static ASTWorkerHandle
-  create(PathRef FileName, const GlobalCompilationDatabase &CDB,
-         TUScheduler::ASTCache &IdleASTs, AsyncTaskRunner *Tasks,
-         Semaphore &Barrier, DebouncePolicy UpdateDebounce,
-         bool StorePreamblesInMemory, ParsingCallbacks &Callbacks);
+  static ASTWorkerHandle create(PathRef FileName,
+                                const GlobalCompilationDatabase &CDB,
+                                TUScheduler::ASTCache &IdleASTs,
+                                AsyncTaskRunner *Tasks, Semaphore &Barrier,
+                                const TUScheduler::Options &Opts,
+                                ParsingCallbacks &Callbacks);
   ~ASTWorker();
 
   void update(ParseInputs Inputs, WantDiagnostics);
@@ -468,6 +480,7 @@ private:
   std::queue<Request> PreambleRequests;   /* GUARDED_BY(Mutex) */
   llvm::Optional<Request> CurrentRequest; /* GUARDED_BY(Mutex) */
   mutable std::condition_variable RequestsCV;
+  Notification ReceivedPreamble;
   /// Guards the callback that publishes results of AST-related computations
   /// (diagnostics, highlightings) and file statuses.
   std::mutex PublishMu;
@@ -527,14 +540,14 @@ private:
   std::shared_ptr<ASTWorker> Worker;
 };
 
-ASTWorkerHandle
-ASTWorker::create(PathRef FileName, const GlobalCompilationDatabase &CDB,
-                  TUScheduler::ASTCache &IdleASTs, AsyncTaskRunner *Tasks,
-                  Semaphore &Barrier, DebouncePolicy UpdateDebounce,
-                  bool StorePreamblesInMemory, ParsingCallbacks &Callbacks) {
-  std::shared_ptr<ASTWorker> Worker(
-      new ASTWorker(FileName, CDB, IdleASTs, Barrier, /*RunSync=*/!Tasks,
-                    UpdateDebounce, StorePreamblesInMemory, Callbacks));
+ASTWorkerHandle ASTWorker::create(PathRef FileName,
+                                  const GlobalCompilationDatabase &CDB,
+                                  TUScheduler::ASTCache &IdleASTs,
+                                  AsyncTaskRunner *Tasks, Semaphore &Barrier,
+                                  const TUScheduler::Options &Opts,
+                                  ParsingCallbacks &Callbacks) {
+  std::shared_ptr<ASTWorker> Worker(new ASTWorker(
+      FileName, CDB, IdleASTs, Barrier, /*RunSync=*/!Tasks, Opts, Callbacks));
   if (Tasks) {
     Tasks->runAsync("ASTWorker:" + llvm::sys::path::filename(FileName),
                     [Worker]() { Worker->run(); });
@@ -547,15 +560,13 @@ ASTWorker::create(PathRef FileName, const GlobalCompilationDatabase &CDB,
 
 ASTWorker::ASTWorker(PathRef FileName, const GlobalCompilationDatabase &CDB,
                      TUScheduler::ASTCache &LRUCache, Semaphore &Barrier,
-                     bool RunSync, DebouncePolicy UpdateDebounce,
-                     bool StorePreamblesInMemory, ParsingCallbacks &Callbacks)
-    : IdleASTs(LRUCache), RunSync(RunSync), UpdateDebounce(UpdateDebounce),
+                     bool RunSync, const TUScheduler::Options &Opts,
+                     ParsingCallbacks &Callbacks)
+    : IdleASTs(LRUCache), RunSync(RunSync), UpdateDebounce(Opts.UpdateDebounce),
       FileName(FileName), CDB(CDB), Callbacks(Callbacks), Barrier(Barrier),
       Done(false), Status(FileName, Callbacks),
-      PreamblePeer(FileName, Callbacks, StorePreamblesInMemory,
-                   // FIXME: Run PreamblePeer asynchronously once ast patching
-                   // is available.
-                   /*RunSync=*/true, Status, *this) {
+      PreamblePeer(FileName, Callbacks, Opts.StorePreamblesInMemory,
+                   RunSync || !Opts.AsyncPreambleBuilds, Status, *this) {
   // Set a fallback command because compile command can be accessed before
   // `Inputs` is initialized. Other fields are only used after initialization
   // from client inputs.
@@ -640,6 +651,12 @@ void ASTWorker::update(ParseInputs Inputs, WantDiagnostics WantDiags) {
 
     PreamblePeer.update(std::move(Invocation), std::move(Inputs),
                         std::move(CompilerInvocationDiags), WantDiags);
+    // Block until first preamble is ready, as patching an empty preamble would
+    // imply rebuilding it from scratch.
+    // This isn't the natural place to block, rather where the preamble would be
+    // consumed. But that's too late, we'd be running on the worker thread with
+    // the PreambleTask scheduled and so we'd deadlock.
+    ReceivedPreamble.wait();
     return;
   };
   startTask(TaskName, std::move(Task), WantDiags, TUScheduler::NoInvalidation);
@@ -649,10 +666,14 @@ void ASTWorker::runWithAST(
     llvm::StringRef Name,
     llvm::unique_function<void(llvm::Expected<InputsAndAST>)> Action,
     TUScheduler::ASTActionInvalidation Invalidation) {
+  // Tracks ast cache accesses for read operations.
+  static constexpr trace::Metric ASTAccessForRead(
+      "ast_access_read", trace::Metric::Counter, "result");
   auto Task = [=, Action = std::move(Action)]() mutable {
     if (auto Reason = isCancelled())
       return Action(llvm::make_error<CancelledError>(Reason));
-    llvm::Optional<std::unique_ptr<ParsedAST>> AST = IdleASTs.take(this);
+    llvm::Optional<std::unique_ptr<ParsedAST>> AST =
+        IdleASTs.take(this, &ASTAccessForRead);
     if (!AST) {
       StoreDiags CompilerInvocationDiagConsumer;
       std::unique_ptr<CompilerInvocation> Invocation =
@@ -759,6 +780,7 @@ void ASTWorker::updatePreamble(std::unique_ptr<CompilerInvocation> CI,
   };
   if (RunSync) {
     Task();
+    ReceivedPreamble.notify();
     return;
   }
   {
@@ -767,12 +789,16 @@ void ASTWorker::updatePreamble(std::unique_ptr<CompilerInvocation> CI,
                            steady_clock::now(), Context::current().clone(),
                            llvm::None, TUScheduler::NoInvalidation, nullptr});
   }
+  ReceivedPreamble.notify();
   RequestsCV.notify_all();
 }
 
 void ASTWorker::generateDiagnostics(
     std::unique_ptr<CompilerInvocation> Invocation, ParseInputs Inputs,
     std::vector<Diag> CIDiags) {
+  // Tracks ast cache accesses for publishing diags.
+  static constexpr trace::Metric ASTAccessForDiag(
+      "ast_access_diag", trace::Metric::Counter, "result");
   assert(Invocation);
   // No need to rebuild the AST if we won't send the diagnostics.
   {
@@ -801,7 +827,8 @@ void ASTWorker::generateDiagnostics(
   // We might be able to reuse the last we've built for a read request.
   // FIXME: It might be better to not reuse this AST. That way queued AST builds
   // won't be required for diags.
-  llvm::Optional<std::unique_ptr<ParsedAST>> AST = IdleASTs.take(this);
+  llvm::Optional<std::unique_ptr<ParsedAST>> AST =
+      IdleASTs.take(this, &ASTAccessForDiag);
   if (!AST || !InputsAreLatest) {
     auto RebuildStartTime = DebouncePolicy::clock::now();
     llvm::Optional<ParsedAST> NewAST = ParsedAST::build(
@@ -899,6 +926,7 @@ void ASTWorker::stop() {
     Done = true;
   }
   // We are no longer going to build any preambles, let the waiters know that.
+  ReceivedPreamble.notify();
   BuiltFirstPreamble.notify();
   PreamblePeer.stop();
   Status.stop();
@@ -1101,10 +1129,24 @@ bool ASTWorker::shouldSkipHeadLocked() const {
 }
 
 bool ASTWorker::blockUntilIdle(Deadline Timeout) const {
-  std::unique_lock<std::mutex> Lock(Mutex);
-  return wait(Lock, RequestsCV, Timeout, [&] {
-    return PreambleRequests.empty() && Requests.empty() && !CurrentRequest;
-  });
+  auto WaitUntilASTWorkerIsIdle = [&] {
+    std::unique_lock<std::mutex> Lock(Mutex);
+    return wait(Lock, RequestsCV, Timeout, [&] {
+      return PreambleRequests.empty() && Requests.empty() && !CurrentRequest;
+    });
+  };
+  // Make sure ASTWorker has processed all requests, which might issue new
+  // updates to PreamblePeer.
+  WaitUntilASTWorkerIsIdle();
+  // Now that ASTWorker processed all requests, ensure PreamblePeer has served
+  // all update requests. This might create new PreambleRequests for the
+  // ASTWorker.
+  PreamblePeer.blockUntilIdle(Timeout);
+  assert(Requests.empty() &&
+         "No new normal tasks can be scheduled concurrently with "
+         "blockUntilIdle(): ASTWorker isn't threadsafe");
+  // Finally make sure ASTWorker has processed all of the preamble updates.
+  return WaitUntilASTWorkerIsIdle();
 }
 
 // Render a TUAction to a user-facing string representation.
@@ -1162,13 +1204,12 @@ struct TUScheduler::FileData {
 TUScheduler::TUScheduler(const GlobalCompilationDatabase &CDB,
                          const Options &Opts,
                          std::unique_ptr<ParsingCallbacks> Callbacks)
-    : CDB(CDB), StorePreamblesInMemory(Opts.StorePreamblesInMemory),
+    : CDB(CDB), Opts(Opts),
       Callbacks(Callbacks ? move(Callbacks)
                           : std::make_unique<ParsingCallbacks>()),
       Barrier(Opts.AsyncThreadsCount),
       IdleASTs(
-          std::make_unique<ASTCache>(Opts.RetentionPolicy.MaxRetainedASTs)),
-      UpdateDebounce(Opts.UpdateDebounce) {
+          std::make_unique<ASTCache>(Opts.RetentionPolicy.MaxRetainedASTs)) {
   if (0 < Opts.AsyncThreadsCount) {
     PreambleTasks.emplace();
     WorkerThreads.emplace();
@@ -1202,10 +1243,10 @@ bool TUScheduler::update(PathRef File, ParseInputs Inputs,
   bool NewFile = FD == nullptr;
   if (!FD) {
     // Create a new worker to process the AST-related tasks.
-    ASTWorkerHandle Worker = ASTWorker::create(
-        File, CDB, *IdleASTs,
-        WorkerThreads ? WorkerThreads.getPointer() : nullptr, Barrier,
-        UpdateDebounce, StorePreamblesInMemory, *Callbacks);
+    ASTWorkerHandle Worker =
+        ASTWorker::create(File, CDB, *IdleASTs,
+                          WorkerThreads ? WorkerThreads.getPointer() : nullptr,
+                          Barrier, Opts, *Callbacks);
     FD = std::unique_ptr<FileData>(
         new FileData{Inputs.Contents, std::move(Worker)});
   } else {
