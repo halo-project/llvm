@@ -36,8 +36,11 @@ struct HaloPrepare {
         Func.hasFnAttribute(Attribute::ReturnsTwice))
       return Skip;
 
-    // skip non-rentrant functions like 'main'
-    if (Func.hasFnAttribute(Attribute::NoRecurse))
+    // skip non-rentrant functions. while in c++, main() is not recursive, in C it
+    // can be. I think that's an extremely rare case that I'd rather assume it
+    // is not possible. Some parts of Halo (namely, tuning section selection)
+    // work better with the assumption that main() is not patchable.
+    if (Func.hasFnAttribute(Attribute::NoRecurse) || Func.getName() == "main")
       return Skip;
 
     // skip functions that are run only during startup
