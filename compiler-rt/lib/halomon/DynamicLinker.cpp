@@ -1,5 +1,3 @@
-#pragma once
-
 #include "halomon/DynamicLinker.h"
 
 #include "Messages.pb.h"
