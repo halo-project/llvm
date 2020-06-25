@@ -729,8 +729,7 @@ void EmitAssemblyHelper::CreatePasses(legacy::PassManager &MPM,
   }
 
   if (CodeGenOpts.UseHalo) {
-    // TODO: why does PM crash if I ask for EP_EarlyAsPossible ?
-    PMBuilder.addExtension(PassManagerBuilder::EP_ModuleOptimizerEarly,
+    PMBuilder.addExtension(PassManagerBuilder::EP_OptimizerLast,
                            addHaloPreparePass);
     PMBuilder.addExtension(PassManagerBuilder::EP_EnabledOnOptLevel0,
                            addHaloPreparePass);

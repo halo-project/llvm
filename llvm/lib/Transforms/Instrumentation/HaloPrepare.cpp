@@ -16,6 +16,7 @@
 #include "llvm/Analysis/CallGraph.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/GlobalValue.h"
+#include "llvm/Bitcode/BitcodeWriter.h"
 
 #define DEBUG_TYPE "halo-prepare"
 
@@ -26,7 +27,7 @@ struct HaloPrepare {
   // returns a pair of the analyses preserved by this function,
   // and a bool indicating if the function was made patchable.
   std::pair<PreservedAnalyses, bool> makePatchable(Function &Func, CallGraph &CG, LoopInfo &LI) {
-    const size_t INSTR_COUNT_THRESH = 50; // minimum number of instrs to not be considered small
+    const size_t INSTR_COUNT_THRESH = 25; // minimum number of instrs to not be considered small
     std::pair<PreservedAnalyses, bool> Skip = {PreservedAnalyses::all(), false};
 
     // skip if it has some odd attributes
@@ -65,7 +66,7 @@ struct HaloPrepare {
       return Skip;
 
     // Otherwise we mark it as patchable.
-    Func.setLinkage(GlobalValue::ExternalLinkage);
+    Func.setLinkage(GlobalValue::ExternalLinkage); // TODO: remove? calling convention changes are fine if run late.
     Func.addFnAttr("xray-instruction-threshold", "1"); // XRay force patching
 
     return {PreservedAnalyses::none(), true};
@@ -139,8 +140,10 @@ public:
   bool runOnModule(Module &M) override {
     auto &CG = getAnalysis<CallGraphWrapperPass>().getCallGraph();
 
+    bool PreservedTotal = true;
+
     // STEP 1: fix up global linkages.
-    bool PreservedTotal = Prepare.fixGlobals(M).areAllPreserved();
+    PreservedTotal = PreservedTotal && Prepare.fixGlobals(M).areAllPreserved();
 
     // STEP 2: make (some) functions patchable by the runtime system.
     SmallPtrSet<Function*, 32> PatchedFuncs;
@@ -165,6 +168,14 @@ public:
     auto Result = Prepare.recordPatchableFuncs(M, PatchedFuncs);
     PreservedTotal = PreservedTotal && Result.areAllPreserved();
 
+    // STEP 4: embed the bitcode inside the module
+
+    // FIXME: we pass empty command-line args here.
+    // it would be useful to provide those! mainly, the
+    // opt level flag used is what haloserver can utilize.
+    std::vector<uint8_t> CmdArgs;
+    EmbedBitcodeInModule(M, llvm::MemoryBufferRef(), true, true, &CmdArgs);
+    PreservedTotal = false;
 
     return !PreservedTotal;
   }
