@@ -52,7 +52,7 @@ struct HaloPrepare {
       return Skip;
 
 
-    auto CGNode = CG[&Func];
+    CallGraphNode *CGNode = CG[&Func];
     size_t NumCallees = CGNode->size();
     bool IsLeaf = NumCallees == 0;
     bool NoLoops = LI.empty(); // NOTE: this does NOT mean a cycle-free CFG!
@@ -66,12 +66,37 @@ struct HaloPrepare {
       return Skip;
 
     // Otherwise we mark it as patchable.
-    Func.setLinkage(GlobalValue::ExternalLinkage); // prevent calling convention changes
-    Func.addFnAttr("xray-instruction-threshold", "1"); // XRay force patching
+
+    // NOTE: the problem with 'fastcc' is that the code generator can arbitrarily choose
+    // its convention, so when we recompile the program with different optimizations,
+    // it may decide to change the convention dynamically. This must be avoided!
+
+     // prevent further calling convention changes
+    Func.setLinkage(GlobalValue::ExternalLinkage);
+
+    // use standard C calling convention. we cannot use fastcc! This should be correct for C & C++ programs.
+    Func.setCallingConv(CallingConv::C);
+
+    // XRay force patching
+    Func.addFnAttr("xray-instruction-threshold", "1");
 
     return {PreservedAnalyses::none(), true};
   }
 
+
+  PreservedAnalyses fixupCallsites(Module &M, SmallPtrSet<Function*, 32> &PatchedFuncs) {
+    if (PatchedFuncs.empty())
+      return PreservedAnalyses::all();
+
+    for (Function &Func : M.functions())
+      for (BasicBlock &Blk : Func)
+        for (Instruction &I : Blk)
+          if (CallBase *CB = dyn_cast<CallBase>(&I))
+            if (PatchedFuncs.count(CB->getFunction()))
+              CB->setCallingConv(CallingConv::C); // to match what 'makePatchable' changed
+
+    return PreservedAnalyses::none();
+  }
 
 
   PreservedAnalyses recordPatchableFuncs(Module &M, SmallPtrSet<Function*, 32> &PatchedFuncs) {
@@ -145,6 +170,7 @@ public:
     // STEP 1: fix up global linkages.
     PreservedTotal = PreservedTotal && Prepare.fixGlobals(M).areAllPreserved();
 
+
     // STEP 2: make (some) functions patchable by the runtime system.
     SmallPtrSet<Function*, 32> PatchedFuncs;
     for (Function &Func : M.functions()) {
@@ -163,12 +189,18 @@ public:
         PatchedFuncs.insert(&Func);
     }
 
-    // STEP 3: record in the module itself information about
+
+    // STEP 3: fix-up call-sites involving the patchable functions so they use the right convention
+    PreservedTotal = PreservedTotal && Prepare.fixupCallsites(M, PatchedFuncs).areAllPreserved();
+
+
+    // STEP 4: record in the module itself information about
     // which functions were made patchable
     auto Result = Prepare.recordPatchableFuncs(M, PatchedFuncs);
     PreservedTotal = PreservedTotal && Result.areAllPreserved();
 
-    // STEP 4: embed the bitcode inside the module
+
+    // STEP 5: embed the bitcode inside the module
 
     // FIXME: we pass empty command-line args here.
     // it would be useful to provide those! mainly, the
