@@ -27,7 +27,7 @@ struct HaloPrepare {
   // returns a pair of the analyses preserved by this function,
   // and a bool indicating if the function was made patchable.
   std::pair<PreservedAnalyses, bool> makePatchable(Function &Func, CallGraph &CG, LoopInfo &LI) {
-    const size_t INSTR_COUNT_THRESH = 25; // minimum number of instrs to not be considered small
+    const size_t INSTR_COUNT_THRESH = 100; // minimum number of instrs to not be considered small
     std::pair<PreservedAnalyses, bool> Skip = {PreservedAnalyses::all(), false};
 
     // skip if it has some odd attributes
@@ -66,7 +66,7 @@ struct HaloPrepare {
       return Skip;
 
     // Otherwise we mark it as patchable.
-    Func.setLinkage(GlobalValue::ExternalLinkage); // TODO: remove? calling convention changes are fine if run late.
+    Func.setLinkage(GlobalValue::ExternalLinkage); // prevent calling convention changes
     Func.addFnAttr("xray-instruction-threshold", "1"); // XRay force patching
 
     return {PreservedAnalyses::none(), true};
