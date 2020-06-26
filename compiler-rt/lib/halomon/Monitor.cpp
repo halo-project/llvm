@@ -4,6 +4,7 @@
 
 #include "halomon/MonitorState.h"
 #include "llvm/Support/Host.h"
+#include "llvm/ADT/StringMap.h"
 
 namespace halo {
 
@@ -34,6 +35,13 @@ void monitor_loop(MonitorState &M, std::atomic<bool> &ShutdownRequested) {
     pb::ClientEnroll CE;
     CE.set_process_triple(llvm::sys::getProcessTriple());
     CE.set_host_cpu(llvm::sys::getHostCPUName().str());
+
+    llvm::StringMap<bool> FeatureMap;
+    llvm::sys::getHostCPUFeatures(FeatureMap);
+    auto PBFeatureMap = CE.mutable_cpu_features();
+    for (auto const& Entry : FeatureMap)
+      PBFeatureMap->insert({Entry.getKey().str(), Entry.getValue()});
+
     auto Error = M.gather_module_info(M.ExePath, M.Patcher, CE.mutable_module());
     if (Error)
       warning(Error);
