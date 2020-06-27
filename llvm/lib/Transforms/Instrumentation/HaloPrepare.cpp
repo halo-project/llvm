@@ -14,7 +14,7 @@
 #include "llvm/Transforms/Instrumentation/Halo.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Analysis/CallGraph.h"
-#include "llvm/Analysis/LoopInfo.h"
+#include "llvm/Analysis/CFG.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
 
@@ -26,7 +26,7 @@ struct HaloPrepare {
 
   // returns a pair of the analyses preserved by this function,
   // and a bool indicating if the function was made patchable.
-  std::pair<PreservedAnalyses, bool> makePatchable(Function &Func, CallGraph &CG, LoopInfo &LI) {
+  std::pair<PreservedAnalyses, bool> makePatchable(Function &Func, CallGraph &CG) {
     const size_t INSTR_COUNT_THRESH = 100; // minimum number of instrs to not be considered small
     std::pair<PreservedAnalyses, bool> Skip = {PreservedAnalyses::all(), false};
 
@@ -34,14 +34,13 @@ struct HaloPrepare {
     if (Func.hasFnAttribute(Attribute::NoDuplicate) ||
         Func.hasFnAttribute(Attribute::Naked) ||
         Func.hasFnAttribute(Attribute::Builtin) ||
+        Func.hasFnAttribute(Attribute::NoReturn) ||
         Func.hasFnAttribute(Attribute::ReturnsTwice))
       return Skip;
 
-    // skip non-rentrant functions. while in c++, main() is not recursive, in C it
-    // can be. I think that's an extremely rare case that I'd rather assume it
-    // is not possible. Some parts of Halo (namely, tuning section selection)
-    // work better with the assumption that main() is not patchable.
-    if (Func.hasFnAttribute(Attribute::NoRecurse) || Func.getName() == "main")
+    // skip the "main" function. main can be recursive in C, but
+    // I am choosing to assume it is _not_ recursive, as in C++.
+    if (Func.getName() == "main")
       return Skip;
 
     // skip functions that are run only during startup
@@ -55,21 +54,33 @@ struct HaloPrepare {
     CallGraphNode *CGNode = CG[&Func];
     size_t NumCallees = CGNode->size();
     bool IsLeaf = NumCallees == 0;
-    bool NoLoops = LI.empty(); // NOTE: this does NOT mean a cycle-free CFG!
-    bool IsSmall = Func.getInstructionCount() < INSTR_COUNT_THRESH;
+
+    // no const capture in lambda :(
+    auto IsSmall = [&]() -> bool {
+        return static_cast<Function const&>(Func).getInstructionCount() < INSTR_COUNT_THRESH;
+    };
+    auto NoLoops = [&]() -> bool {
+      // this is supposedly cheaper than relying on LoopInfo, and more correct, because
+      // LoopInfo will identify natural loops, whereas we care about all cycles in the CFG.
+      SmallVector<std::pair<const BasicBlock *, const BasicBlock *>, 16> Backedges;
+      llvm::FindFunctionBackedges(static_cast<Function const&>(Func), Backedges);
+      return Backedges.empty();
+    };
 
     LLVM_DEBUG(dbgs() << "\n" << Func.getName() << " calls " << NumCallees
-           << " funs;\n\t has loops = " << !NoLoops << ".\n");
+           << " funs; has loops = " << !(NoLoops())
+           << "; is large = " << !(IsSmall()) << ".\n");
 
     // skip if it's a leaf with no loop and is small
-    if (IsLeaf && NoLoops && IsSmall)
+    if (IsLeaf && IsSmall() && NoLoops())
       return Skip;
 
     // Otherwise we mark it as patchable.
 
     // NOTE: the problem with 'fastcc' is that the code generator can arbitrarily choose
     // its convention, so when we recompile the program with different optimizations,
-    // it may decide to change the convention dynamically. This must be avoided!
+    // it may decide to change the convention dynamically. This must be avoided,
+    // and we do so by assigning a fixed convention to patchable functions.
 
      // prevent further calling convention changes
     Func.setLinkage(GlobalValue::ExternalLinkage);
@@ -177,8 +188,7 @@ public:
       if (Func.isDeclaration())
         continue;
 
-      auto &LI = getAnalysis<LoopInfoWrapperPass>(Func).getLoopInfo();
-      auto Result = Prepare.makePatchable(Func, CG, LI);
+      auto Result = Prepare.makePatchable(Func, CG);
 
       PreservedTotal = PreservedTotal && Result.first.areAllPreserved();
 
@@ -214,7 +224,6 @@ public:
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.addRequired<CallGraphWrapperPass>();
-    AU.addRequired<LoopInfoWrapperPass>();
   }
 
 private:
@@ -226,7 +235,6 @@ INITIALIZE_PASS_BEGIN(
     HaloPrepareLegacyPass, "halo-prepare",
     "Prepare the module for use with Halo.", false, false)
 INITIALIZE_PASS_DEPENDENCY(CallGraphWrapperPass)
-INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)
 INITIALIZE_PASS_END(
     HaloPrepareLegacyPass, "halo-prepare",
     "Prepare the module for use with Halo.", false, false)
