@@ -200,7 +200,7 @@ using namespace llvm;
 
 static cl::opt<unsigned> MaxDevirtIterations("pm-max-devirt-iterations",
                                              cl::ReallyHidden, cl::init(4));
-static cl::opt<bool>
+cl::opt<bool>
     RunPartialInlining("enable-npm-partial-inlining", cl::init(false),
                        cl::Hidden, cl::ZeroOrMore,
                        cl::desc("Run Partial inlinining pass"));
@@ -210,12 +210,12 @@ static cl::opt<int> PreInlineThreshold(
     cl::desc("Control the amount of inlining in pre-instrumentation inliner "
              "(default = 75)"));
 
-static cl::opt<bool>
+cl::opt<bool>
     RunNewGVN("enable-npm-newgvn", cl::init(false),
               cl::Hidden, cl::ZeroOrMore,
               cl::desc("Run NewGVN instead of GVN"));
 
-static cl::opt<bool> EnableGVNHoist(
+cl::opt<bool> EnableGVNHoist(
     "enable-npm-gvn-hoist", cl::init(false), cl::Hidden,
     cl::desc("Enable the GVN hoisting pass for the new PM (default = off)"));
 
@@ -229,11 +229,11 @@ static cl::opt<InliningAdvisorMode> UseInlineAdvisor(
                clEnumValN(InliningAdvisorMode::Release, "release",
                           "Use release mode (AOT-compiled model).")));
 
-static cl::opt<bool> EnableGVNSink(
+cl::opt<bool> EnableGVNSink(
     "enable-npm-gvn-sink", cl::init(false), cl::Hidden,
     cl::desc("Enable the GVN hoisting pass for the new PM (default = off)"));
 
-static cl::opt<bool> EnableUnrollAndJam(
+cl::opt<bool> EnableUnrollAndJam(
     "enable-npm-unroll-and-jam", cl::init(false), cl::Hidden,
     cl::desc("Enable the Unroll and Jam pass for the new PM (default = off)"));
 
