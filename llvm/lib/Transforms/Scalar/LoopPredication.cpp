@@ -213,8 +213,8 @@ static cl::opt<bool> EnableIVTruncation("loop-predication-enable-iv-truncation",
 static cl::opt<bool> EnableCountDownLoop("loop-predication-enable-count-down-loop",
                                         cl::Hidden, cl::init(true));
 
-cl::opt<bool>
-    LoopPredicationSkipProfitabilityChecks("loop-predication-skip-profitability-checks",
+static cl::opt<bool>
+    SkipProfitabilityChecks("loop-predication-skip-profitability-checks",
                             cl::Hidden, cl::init(false));
 
 // This is the scale factor for the latch probability. We use this during
@@ -911,7 +911,7 @@ Optional<LoopICmp> LoopPredication::parseLoopLatchICmp() {
 
 
 bool LoopPredication::isLoopProfitableToPredicate() {
-  if (LoopPredicationSkipProfitabilityChecks || !BPI)
+  if (SkipProfitabilityChecks || !BPI)
     return true;
 
   SmallVector<std::pair<BasicBlock *, BasicBlock *>, 8> ExitEdges;

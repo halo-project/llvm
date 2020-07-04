@@ -51,7 +51,7 @@
 
 using namespace llvm;
 
-static cl::opt<bool>
+cl::opt<bool>
     RunPartialInlining("enable-partial-inlining", cl::init(false), cl::Hidden,
                        cl::ZeroOrMore, cl::desc("Run Partial inlinining pass"));
 
@@ -68,7 +68,7 @@ static cl::opt<bool>
 RunLoopRerolling("reroll-loops", cl::Hidden,
                  cl::desc("Run the loop rerolling pass"));
 
-static cl::opt<bool> RunNewGVN("enable-newgvn", cl::init(false), cl::Hidden,
+cl::opt<bool> RunNewGVN("enable-newgvn", cl::init(false), cl::Hidden,
                                cl::desc("Run the NewGVN pass"));
 
 // Experimental option to use CFL-AA
@@ -88,7 +88,7 @@ static cl::opt<bool> EnableLoopInterchange(
     "enable-loopinterchange", cl::init(false), cl::Hidden,
     cl::desc("Enable the new, experimental LoopInterchange Pass"));
 
-static cl::opt<bool> EnableUnrollAndJam("enable-unroll-and-jam",
+cl::opt<bool> EnableUnrollAndJam("enable-unroll-and-jam",
                                         cl::init(false), cl::Hidden,
                                         cl::desc("Enable Unroll And Jam Pass"));
 
@@ -103,7 +103,7 @@ static cl::opt<bool>
 cl::opt<bool> EnableHotColdSplit("hot-cold-split", cl::init(false),
     cl::ZeroOrMore, cl::desc("Enable hot-cold splitting pass"));
 
-static cl::opt<bool> UseLoopVersioningLICM(
+cl::opt<bool> UseLoopVersioningLICM(
     "enable-loop-versioning-licm", cl::init(false), cl::Hidden,
     cl::desc("Enable the experimental Loop Versioning LICM pass"));
 
@@ -116,7 +116,7 @@ static cl::opt<int> PreInlineThreshold(
     cl::desc("Control the amount of inlining in pre-instrumentation inliner "
              "(default = 75)"));
 
-static cl::opt<bool> EnableGVNHoist(
+cl::opt<bool> EnableGVNHoist(
     "enable-gvn-hoist", cl::init(false), cl::ZeroOrMore,
     cl::desc("Enable the GVN hoisting pass (default = off)"));
 
@@ -130,7 +130,7 @@ static cl::opt<bool> EnableSimpleLoopUnswitch(
     cl::desc("Enable the simple loop unswitch pass. Also enables independent "
              "cleanup passes integrated into the loop pass manager pipeline."));
 
-static cl::opt<bool> EnableGVNSink(
+cl::opt<bool> EnableGVNSink(
     "enable-gvn-sink", cl::init(false), cl::ZeroOrMore,
     cl::desc("Enable the GVN sinking pass (default = off)"));
 

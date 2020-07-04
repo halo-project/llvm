@@ -99,7 +99,7 @@ static const char *LICMVersioningMetaData = "llvm.loop.licm_versioning.disable";
 
 /// Threshold minimum allowed percentage for possible
 /// invariant instructions in a loop.
-static cl::opt<float>
+cl::opt<float>
     LVInvarThreshold("licm-versioning-invariant-threshold",
                      cl::desc("LoopVersioningLICM's minimum allowed percentage"
                               "of possible invariant instructions per loop"),
