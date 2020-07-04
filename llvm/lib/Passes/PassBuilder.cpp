@@ -200,7 +200,7 @@ using namespace llvm;
 
 static cl::opt<unsigned> MaxDevirtIterations("pm-max-devirt-iterations",
                                              cl::ReallyHidden, cl::init(4));
-cl::opt<bool>
+static cl::opt<bool>
     RunPartialInlining("enable-npm-partial-inlining", cl::init(false),
                        cl::Hidden, cl::ZeroOrMore,
                        cl::desc("Run Partial inlinining pass"));
@@ -210,12 +210,12 @@ static cl::opt<int> PreInlineThreshold(
     cl::desc("Control the amount of inlining in pre-instrumentation inliner "
              "(default = 75)"));
 
-cl::opt<bool>
+static cl::opt<bool>
     RunNewGVN("enable-npm-newgvn", cl::init(false),
               cl::Hidden, cl::ZeroOrMore,
               cl::desc("Run NewGVN instead of GVN"));
 
-cl::opt<bool> EnableGVNHoist(
+static cl::opt<bool> EnableGVNHoist(
     "enable-npm-gvn-hoist", cl::init(false), cl::Hidden,
     cl::desc("Enable the GVN hoisting pass for the new PM (default = off)"));
 
@@ -229,11 +229,11 @@ static cl::opt<InliningAdvisorMode> UseInlineAdvisor(
                clEnumValN(InliningAdvisorMode::Release, "release",
                           "Use release mode (AOT-compiled model).")));
 
-cl::opt<bool> EnableGVNSink(
+static cl::opt<bool> EnableGVNSink(
     "enable-npm-gvn-sink", cl::init(false), cl::Hidden,
     cl::desc("Enable the GVN hoisting pass for the new PM (default = off)"));
 
-cl::opt<bool> EnableUnrollAndJam(
+static cl::opt<bool> EnableUnrollAndJam(
     "enable-npm-unroll-and-jam", cl::init(false), cl::Hidden,
     cl::desc("Enable the Unroll and Jam pass for the new PM (default = off)"));
 
@@ -271,7 +271,6 @@ PipelineTuningOptions::PipelineTuningOptions() {
   LicmMssaOptCap = SetLicmMssaOptCap;
   LicmMssaNoAccForPromotionCap = SetLicmMssaNoAccForPromotionCap;
   CallGraphProfile = EnableCallGraphProfile;
-  Inlining = None;
 }
 
 extern cl::opt<bool> EnableHotColdSplit;
@@ -640,7 +639,6 @@ PassBuilder::buildFunctionSimplificationPipeline(OptimizationLevel Level,
   LPM1.addPass(LoopRotatePass(Level != OptimizationLevel::Oz));
   // TODO: Investigate promotion cap for O1.
   LPM1.addPass(LICMPass(PTO.LicmMssaOptCap, PTO.LicmMssaNoAccForPromotionCap));
-  LPM1.addPass(LoopPredicationPass());
   LPM1.addPass(SimpleLoopUnswitchPass());
   LPM2.addPass(IndVarSimplifyPass());
   LPM2.addPass(LoopIdiomRecognizePass());
@@ -750,18 +748,12 @@ void PassBuilder::addPGOInstrPasses(ModulePassManager &MPM, bool DebugLogging,
   if (!Level.isOptimizingForSize() && !IsCS) {
     InlineParams IP;
 
-    if (PTO.Inlining.hasValue()) {
-      IP = PTO.Inlining.getValue();
-    } else {
+    IP.DefaultThreshold = PreInlineThreshold;
 
-      IP.DefaultThreshold = PreInlineThreshold;
-
-      // FIXME: The hint threshold has the same value used by the regular inliner.
-      // This should probably be lowered after performance testing.
-      // FIXME: this comment is cargo culted from the old pass manager, revisit).
-      IP.HintThreshold = 325;
-    }
-
+    // FIXME: The hint threshold has the same value used by the regular inliner.
+    // This should probably be lowered after performance testing.
+    // FIXME: this comment is cargo culted from the old pass manager, revisit).
+    IP.HintThreshold = 325;
     ModuleInlinerWrapperPass MIWP(IP, DebugLogging);
     CGSCCPassManager &CGPipeline = MIWP.getPM();
 
@@ -842,10 +834,7 @@ getInlineParamsFromOptLevel(PassBuilder::OptimizationLevel Level) {
 ModuleInlinerWrapperPass
 PassBuilder::buildInlinerPipeline(OptimizationLevel Level, ThinLTOPhase Phase,
                                   bool DebugLogging) {
-  InlineParams IP = PTO.Inlining.hasValue()
-                      ? PTO.Inlining.getValue()
-                      : getInlineParamsFromOptLevel(Level);
-
+  InlineParams IP = getInlineParamsFromOptLevel(Level);
   if (Phase == PassBuilder::ThinLTOPhase::PreLink && PGOOpt &&
       PGOOpt->Action == PGOOptions::SampleUse)
     IP.HotCallSiteThreshold = 0;
@@ -1467,10 +1456,8 @@ PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level, bool DebugLogging,
   // valuable as the inliner doesn't currently care whether it is inlining an
   // invoke or a call.
   // Run the inliner now.
-  InlineParams IP = PTO.Inlining.hasValue()
-                      ? PTO.Inlining.getValue()
-                      : getInlineParamsFromOptLevel(Level);
-  MPM.addPass(ModuleInlinerWrapperPass(IP, DebugLogging));
+  MPM.addPass(ModuleInlinerWrapperPass(getInlineParamsFromOptLevel(Level),
+                                       DebugLogging));
 
   // Optimize globals again after we ran the inliner.
   MPM.addPass(GlobalOptPass());

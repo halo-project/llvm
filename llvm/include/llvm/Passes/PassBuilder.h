@@ -22,7 +22,6 @@
 #include "llvm/Transforms/IPO/Inliner.h"
 #include "llvm/Transforms/Instrumentation.h"
 #include "llvm/Transforms/Scalar/LoopPassManager.h"
-#include "llvm/Analysis/InlineCost.h"
 #include <vector>
 
 namespace llvm {
@@ -110,10 +109,6 @@ public:
   /// Tuning option to enable/disable call graph profile. Its default value is
   /// that of the flag: `-enable-npm-call-graph-profile`.
   bool CallGraphProfile;
-
-  /// Tuning option to control the parameters of the function inliner's
-  /// cost models.
-  Optional<InlineParams> Inlining;
 };
 
 /// This class provides access to building LLVM's passes.
