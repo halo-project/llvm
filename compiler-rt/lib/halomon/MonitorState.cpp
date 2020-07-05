@@ -83,7 +83,10 @@ void MonitorState::server_listen_loop() {
         Patcher.addDyLib(std::move(Dylib));
 
         // send info back to server
-        bool SendErr = Net.Chan.send_proto(msg::DyLibInfo, LoadedLibInfo);
+      #ifndef NDEBUG
+        bool SendErr =
+      #endif
+          Net.Chan.send_proto(msg::DyLibInfo, LoadedLibInfo);
         assert(!SendErr && "problem sending loaded lib info!");
 
       } break;
