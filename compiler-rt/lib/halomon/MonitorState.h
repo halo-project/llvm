@@ -57,7 +57,7 @@ public:
   // information about this process
   std::string ExePath;
 
-  MonitorState(SignalHandler &);
+  MonitorState(SignalHandler &, std::string const& hostname, std::string const& port);
   ~MonitorState();
 
   // tends to the instrumented functions by flushing the

@@ -25,7 +25,7 @@ private:
 public:
   Channel Chan;
 
-  Client(std::string server_hostname, std::string port) :
+  Client(std::string const& server_hostname, std::string const& port) :
     IOService(),
     Resolver(IOService),
     Socket(IOService),

@@ -1,5 +1,6 @@
 #include <thread>
 #include <atomic>
+#include <cstdlib>
 #include "Logging.h"
 
 #include "halomon/MonitorState.h"
@@ -14,7 +15,19 @@ void monitor_loop(SignalHandler &Handler, std::atomic<bool> &ShutdownRequested) 
   /////////////////
   // Setup
 
-  MonitorState M(Handler);
+  std::string hostname = "localhost";
+  std::string port = "29000";
+
+  // check environment for overrides of defaults.
+  char* str = nullptr;
+
+  if ((str = std::getenv("HALO_HOSTNAME")))
+    hostname = str;
+
+  if ((str = std::getenv("HALO_PORT")))
+    port = str;
+
+  MonitorState M(Handler, hostname, port);
 
   Client &C = M.Net;
 

@@ -266,11 +266,10 @@ void MonitorState::send_samples() {
   }
 }
 
-MonitorState::MonitorState(SignalHandler &Handler)
+MonitorState::MonitorState(SignalHandler &Handler, std::string const& hostname, std::string const& port)
                               : SamplingEnabled(false),
                                 Handler(Handler),
-                               // TODO: get the server addr from an env variable.
-                               Net("localhost", "29000"),
+                                Net(hostname, port),
                                ExePath(linux::get_self_exe()) {
 
   // kick-off the chain of async read jobs for the signal file descriptor.
