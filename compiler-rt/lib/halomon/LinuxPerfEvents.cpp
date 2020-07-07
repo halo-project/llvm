@@ -310,8 +310,8 @@ int get_perf_events_fd(const std::string &Name,
   int Ret = pfm_get_os_event_encoding(Name.c_str(), PFM_PLM3, PFM_OS_PERF_EVENT_EXT, &Arg);
   if (Ret != PFM_SUCCESS) {
     std::string Msg = pfm_strerror(Ret);
-    clogs() << "Unable to get event encoding for " << Name << ": " <<
-                Msg << "\n";
+    clogs(LC_Error) << "Unable to get event encoding for " << Name << ": " <<
+                  Msg << "\n";
     return -1;
   }
 
@@ -433,23 +433,23 @@ int get_perf_events_fd(const std::string &Name,
     return try_perf_event_open(&Attr, TID, CPU, -1, 0, [](int ErrNo, perf_event_attr &Attr) {
 
       // okay then we give up. print an error and forward the invalid FD
-      clogs() << "Unsuccessful call to perf_event_open: ";
+      clogs(LC_Error) << "Unsuccessful call to perf_event_open: ";
       switch (ErrNo) {
-        case E2BIG: {clogs() << "E2BIG\n"; break;}
-        case EACCES: {clogs() << "EACCES\n"; break;}
-        case EBADF: {clogs() << "EBADF\n"; break;}
-        case EBUSY: {clogs() << "EBUSY\n"; break;}
-        case EFAULT: {clogs() << "EFAULT\n"; break;}
-        case EINVAL: {clogs() << "EINVAL\n"; break;}
-        case EMFILE: {clogs() << "EMFILE\n"; break;}
-        case ENODEV: {clogs() << "ENODEV\n"; break;}
-        case ENOSPC: {clogs() << "ENOSPC\n"; break;}
-        case ENOSYS: {clogs() << "ENOSYS\n"; break;}
-        case EOPNOTSUPP: {clogs() << "EOPNOTSUPP\n"; break;}
-        case EOVERFLOW: {clogs() << "EOVERFLOW\n"; break;}
-        case EPERM: {clogs() << "EPERM\n"; break;}
-        case ESRCH: {clogs() << "ESRCH\n"; break;}
-        default: {clogs() << "Code = " << ErrNo << " (unknown name)\n"; break;}
+        case E2BIG: {clogs(LC_Error) << "E2BIG\n"; break;}
+        case EACCES: {clogs(LC_Error) << "EACCES\n"; break;}
+        case EBADF: {clogs(LC_Error) << "EBADF\n"; break;}
+        case EBUSY: {clogs(LC_Error) << "EBUSY\n"; break;}
+        case EFAULT: {clogs(LC_Error) << "EFAULT\n"; break;}
+        case EINVAL: {clogs(LC_Error) << "EINVAL\n"; break;}
+        case EMFILE: {clogs(LC_Error) << "EMFILE\n"; break;}
+        case ENODEV: {clogs(LC_Error) << "ENODEV\n"; break;}
+        case ENOSPC: {clogs(LC_Error) << "ENOSPC\n"; break;}
+        case ENOSYS: {clogs(LC_Error) << "ENOSYS\n"; break;}
+        case EOPNOTSUPP: {clogs(LC_Error) << "EOPNOTSUPP\n"; break;}
+        case EOVERFLOW: {clogs(LC_Error) << "EOVERFLOW\n"; break;}
+        case EPERM: {clogs(LC_Error) << "EPERM\n"; break;}
+        case ESRCH: {clogs(LC_Error) << "ESRCH\n"; break;}
+        default: {clogs(LC_Error) << "Code = " << ErrNo << " (unknown name)\n"; break;}
       };
       return -1;
     });
@@ -471,14 +471,14 @@ bool setup_sigio_fd(asio::io_service &PerfSignalService, asio::posix::stream_des
 
   if (sigprocmask(SIG_BLOCK, &SigMask, NULL) == -1) {
     std::string Msg = strerror(errno);
-    clogs() << "Unable to block signals: " << Msg << "\n";
+    clogs(LC_Error) << "Unable to block signals: " << Msg << "\n";
     return true;
   }
 
   SigFD = signalfd(-1, &SigMask, 0);
   if (SigFD == -1) {
     std::string Msg = strerror(errno);
-    clogs() << "Unable create signal file handle: " << Msg << "\n";
+    clogs(LC_Error) << "Unable create signal file handle: " << Msg << "\n";
     return true;
   }
 
@@ -510,7 +510,7 @@ std::string get_self_exe() {
   ssize_t len = readlink("/proc/self/exe", buf.data(), buf.size()-1);
   if (len == -1) {
     std::string Msg = strerror(errno);
-    clogs() << Msg << "\n";
+    clogs(LC_Error) << Msg << "\n";
     halo::fatal_error("path to process's executable not found.");
   }
   buf[len] = '\0'; // null terminate
@@ -625,14 +625,14 @@ PerfHandle::~PerfHandle() {
   int ret = munmap(EventBuf, EventBufSz);
   if (ret) {
     std::string Msg = strerror(errno);
-    clogs() << "Failed to unmap event buffer: " << Msg << "\n";
+    clogs(LC_Error) << "Failed to unmap event buffer: " << Msg << "\n";
     fatal_error("error in PerfHandle dtor 1");
   }
 
   ret = close(FD);
   if (ret) {
     std::string Msg = strerror(errno);
-    clogs() << "Failed to close perf_event file descriptor: " << Msg << "\n";
+    clogs(LC_Error) << "Failed to close perf_event file descriptor: " << Msg << "\n";
     fatal_error("error in PerfHandle dtor 2");
   }
 }
