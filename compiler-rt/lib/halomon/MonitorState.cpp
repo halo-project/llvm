@@ -266,15 +266,12 @@ void MonitorState::send_samples() {
   }
 }
 
-MonitorState::MonitorState() : SamplingEnabled(false),
-                               SigSD(PerfSignalService),
+MonitorState::MonitorState(SignalHandler &Handler)
+                              : SamplingEnabled(false),
+                                Handler(Handler),
                                // TODO: get the server addr from an env variable.
                                Net("localhost", "29000"),
                                ExePath(linux::get_self_exe()) {
-
-    // setup the SIGIO handler
-  if (linux::setup_sigio_fd(PerfSignalService, SigSD, SigFD) )
-    exit(EXIT_FAILURE);
 
   // kick-off the chain of async read jobs for the signal file descriptor.
   schedule_signalfd_read();
@@ -317,7 +314,7 @@ void MonitorState::set_sampling_period(uint64_t period) {
 
 void MonitorState::poll_for_sample_data() {
   if (SamplingEnabled)
-    PerfSignalService.poll();
+    Handler.PerfSignalService.poll();
 }
 
 void MonitorState::check_msgs() {
@@ -326,7 +323,7 @@ void MonitorState::check_msgs() {
 
 void MonitorState::schedule_signalfd_read() {
   // read a signalfd_siginfo from the file descriptor
-  asio::async_read(SigSD, asio::buffer(&SigFDInfo, sizeof(SigFDInfo)),
+  asio::async_read(Handler.SigSD, asio::buffer(&Handler.SigFDInfo, sizeof(Handler.SigFDInfo)),
     [&](const boost::system::error_code &Error, size_t BytesTransferred) {
       handle_signalfd_read(Error, BytesTransferred);
     });
@@ -339,16 +336,16 @@ void MonitorState::handle_signalfd_read(const boost::system::error_code &Error, 
     IOError = true;
   }
 
-  if (BytesTransferred != sizeof(SigFDInfo)) {
+  if (BytesTransferred != sizeof(Handler.SigFDInfo)) {
     logs(LC) << "Read the wrong the number of bytes from the signal file handle: "
                  "read " << BytesTransferred << " bytes\n";
     IOError = true;
   }
 
   // TODO: convert this into a debug-mode assert.
-  if (SigFDInfo.ssi_signo != SIGIO) {
+  if (Handler.SigFDInfo.ssi_signo != SIGIO) {
     logs(LC) << "Unexpected signal recieved on signal file handle: "
-              << SigFDInfo.ssi_signo << "\n";
+              << Handler.SigFDInfo.ssi_signo << "\n";
     IOError = true;
   }
 
@@ -366,7 +363,7 @@ void MonitorState::handle_signalfd_read(const boost::system::error_code &Error, 
   // process the new data.
   bool Matched = false;
   for (auto &Handle : Handles) {
-    Matched = Handle.process_new_samples(SigFDInfo.ssi_fd);
+    Matched = Handle.process_new_samples(Handler.SigFDInfo.ssi_fd);
     if (Matched)
       break;
   }
@@ -387,7 +384,7 @@ void MonitorState::handle_signalfd_read(const boost::system::error_code &Error, 
 
   if (IOError) {
     // stop the service and don't enqueue another read.
-    PerfSignalService.stop(); // TODO: is a 'stop' command right if we only poll?
+    Handler.PerfSignalService.stop(); // TODO: is a 'stop' command right if we only poll?
     return;
   }
 

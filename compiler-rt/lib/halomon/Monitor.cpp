@@ -10,9 +10,11 @@ namespace halo {
 
 ////////////////////////////////////////////////
 // Main loop of the Halo Monitor
-void monitor_loop(MonitorState &M, std::atomic<bool> &ShutdownRequested) {
+void monitor_loop(SignalHandler &Handler, std::atomic<bool> &ShutdownRequested) {
   /////////////////
   // Setup
+
+  MonitorState M(Handler);
 
   Client &C = M.Net;
 
@@ -87,14 +89,20 @@ class HaloMonitor {
 private:
   std::thread MonitorThread;
   std::atomic<bool> ShutdownRequested;
-  MonitorState State;
+
+  // Currently, the handler must be constructed by the main thread
+  // to properly redirect SIGIO signals to the file descriptor.
+  // So that's why it's constructed here, instead of being in the MonitorState.
+  // I'm sure there's a way to install the handler from the spawned thread
+  // but that's not worth the effort right now.
+  SignalHandler Handler;
 public:
   /////////////////////////////////////////////////////////////////////////
   // The main entry-point to start halo's process monitoring system.
   HaloMonitor() : ShutdownRequested(false) {
     // start the monitor thread
     MonitorThread = std::thread(monitor_loop,
-                                  std::ref(State), std::ref(ShutdownRequested));
+                                  std::ref(Handler), std::ref(ShutdownRequested));
 
     logs() << "Halo Running!\n";
   }

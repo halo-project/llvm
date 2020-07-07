@@ -14,6 +14,21 @@ namespace asio = boost::asio;
 
 namespace halo {
 
+// members related to reading from perf events FD
+struct SignalHandler {
+
+  SignalHandler() : SigSD(PerfSignalService) {
+      // setup the SIGIO handler
+    if (linux::setup_sigio_fd(PerfSignalService, SigSD, SigFD) )
+      exit(EXIT_FAILURE);
+  }
+
+  asio::io_service PerfSignalService;
+  asio::posix::stream_descriptor SigSD;
+  int SigFD; // TODO: do we need to close this, or will SigSD's destructor do that for us?
+  signalfd_siginfo SigFDInfo;
+};
+
 ///////////////
 // Maintains the working state of the Halo Monitor thread.
 // This is effectively the global state of the client-side Halo system.
@@ -26,13 +41,8 @@ private:
   bool SamplingEnabled;
   std::vector<pb::RawSample> RawSamples;
 
-  // members related to reading from perf events FD
-  asio::io_service PerfSignalService;
-  asio::posix::stream_descriptor SigSD;
-  int SigFD; // TODO: do we need to close this, or will SigSD's destructor do that for us?
-  signalfd_siginfo SigFDInfo;
-
-  MonitorState *Monitor;
+  SignalHandler &Handler;
+  MonitorState *Monitor;  // why did I do this?
 
   // Boost.Asio methods to enqueue async reads of the SIGIO signal to obtain sampling info.
   void handle_signalfd_read(const boost::system::error_code &Error, size_t BytesTransferred);
@@ -47,7 +57,7 @@ public:
   // information about this process
   std::string ExePath;
 
-  MonitorState();
+  MonitorState(SignalHandler &);
   ~MonitorState();
 
   // tends to the instrumented functions by flushing the
