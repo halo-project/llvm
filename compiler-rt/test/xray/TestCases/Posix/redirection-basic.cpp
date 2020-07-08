@@ -35,7 +35,7 @@ int main() {
   if (maxID == 0)
     return 1;
 
-  uintptr_t* table = (uintptr_t*) std::calloc(maxID, sizeof(uintptr_t));
+  XRayRedirectionEntry* table = (XRayRedirectionEntry*) std::calloc(maxID, sizeof(XRayRedirectionEntry));
   __xray_set_redirection_table(table);
 
   // find the entry corresponding ID for the original function
@@ -48,7 +48,7 @@ int main() {
     return 2;
 
   // set the entry before redirection
-  table[id] = (uintptr_t) &bar;
+  table[id].Redirection = (uintptr_t) &bar;
 
   int res = original(2, 3, 4);
   // CHECK: ORIG -- 2, 3, 4.000000
@@ -64,14 +64,14 @@ int main() {
     printf("bad return value\n");
 
   // disable redirection with just a write to the table.
-  table[id] = 0;
+  table[id].Redirection = 0;
   res = original(2, 3, 4);
   // CHECK-NEXT: ORIG -- 2, 3, 4.000000
   if (res != 2)
     printf("bad return value\n");
 
   // change redirection with just a write to the table.
-  table[id] = (uintptr_t) &buzz;
+  table[id].Redirection = (uintptr_t) &buzz;
   res = original(2, 3, 4);
   // CHECK-NEXT: BUZZ -- 2, 3, 4.000000
   if (res != 5)

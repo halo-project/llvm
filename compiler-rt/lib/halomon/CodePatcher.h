@@ -52,8 +52,8 @@ bool isPatchable(uint64_t FnPtr) const {
 uint64_t getFnPtr(int32_t xrayID);
 
 bool isInstrumenting() const {
-  for (auto S : Status)
-    if (S == Measuring)
+  for (auto S : Metadata)
+    if (S.first == Measuring)
       return true;
   return false;
 }
@@ -79,8 +79,8 @@ private:
   std::unordered_map<std::string, std::unique_ptr<DyLib>> Dylibs;
 
   // These are indexed by XRay function ID.
-  std::vector<uintptr_t> RedirectionTable;
-  std::vector<enum PatchingStatus> Status;
+  std::vector<XRayRedirectionEntry> RedirectionTable;  // NOTE: this is referenced by ASM code
+  std::vector<std::pair<enum PatchingStatus, uint64_t>> Metadata; // metadata about the function, indexed by xray id
 };
 
 } // end namespace

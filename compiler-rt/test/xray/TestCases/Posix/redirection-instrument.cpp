@@ -43,7 +43,7 @@ int main() {
   if (maxID == 0)
     return 1;
 
-  uintptr_t* table = (uintptr_t*) std::calloc(maxID, sizeof(uintptr_t));
+  XRayRedirectionEntry* table = (XRayRedirectionEntry*) std::calloc(maxID, sizeof(XRayRedirectionEntry));
   __xray_set_redirection_table(table);
 
   // find the entry corresponding ID for the original function
@@ -56,7 +56,7 @@ int main() {
     return 2;
 
   // setup
-  table[id] = (uintptr_t) &different;
+  table[id].Redirection = (uintptr_t) &different;
   __xray_set_handler(myhandler);
 
   /////////////
@@ -77,7 +77,7 @@ int main() {
 
   // undo the redirect via table write.
   // this ensures that enabling redirection unpatches exit sleds in that function.
-  table[id] = 0;
+  table[id].Redirection = 0;
   original();
   original();
   // CHECK-NEXT: ORIGINAL.
@@ -88,7 +88,7 @@ int main() {
   // test function specific patching, but global patching / unpatching.
 
   // redo redirection via table write.
-  table[id] = (uintptr_t) &different;
+  table[id].Redirection = (uintptr_t) &different;
   original();
   // CHECK-NEXT: DIFFERENT.
   somethingElse();

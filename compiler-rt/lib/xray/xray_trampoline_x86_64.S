@@ -298,14 +298,20 @@ ASM_SYMBOL(__xray_TypedEvent):
 		// R11 is safe to clobber in SysV and Windows conventions.
 		movq	ASM_SYMBOL(_ZN6__xray17XRayRedirectTableE)(%rip), %r11
 
-		// compute function pointer offset in the table:
-		// OffsetWithinEntry + r11 + (r10 * EntryWidth)
-		leaq	0(%r11, %r10, 8), %r11
+		// compute offset to the table entry.
+		// R10 contains XRay ID, and R11 the base of the table.
+
+		// NOTE: can't use LEA since the EntryWidth is > 8
+		shlq	$4, %r10		// R10 = R10 * EntryWidth -- compute the offset into the table.
+		addq	%r10, %r11	// R11 = Base + R10		-- gives us the pointer to the table entry
 
 		// This load of the function pointer happens concurrently with writes
 		// to the table by the user program. This mov should be sufficient
 		// because synchronization is up to the writer.
 		movq	(%r11), %r10
+
+		// lightweight profiling: increment the call counter
+		incq	8(%r11)
 
 		// test if the fn ptr is zero
 		testq	%r10, %r10

@@ -52,12 +52,14 @@ CodePatcher::CodePatcher() {
   // populate the initial map of addrs to IDs and initialize the function table
   MaxValidID = __xray_max_function_id();
   RedirectionTable.resize(MaxValidID+1);
-  Status.resize(MaxValidID+1);
+  Metadata.resize(MaxValidID+1);
 
   for (size_t i = 0; i <= MaxValidID; i++) {
-    AddrToID[__xray_function_address(i)] = i;
-    RedirectionTable[i] = 0;
-    Status[i] = Unpatched;
+    uint64_t FnAddr = __xray_function_address(i);
+    AddrToID[FnAddr] = i;
+    RedirectionTable[i].Redirection = 0;
+    RedirectionTable[i].CallCount = 0;
+    Metadata[i] = {Unpatched, FnAddr};
   }
 
   __xray_set_redirection_table(RedirectionTable.data());
@@ -94,9 +96,9 @@ llvm::Error CodePatcher::start_instrumenting(uint64_t FnPtr) {
     return Maybe.takeError();
 
   auto id = Maybe.get();
-  if (Status[id] != Measuring) {
+  if (Metadata[id].first != Measuring) {
     __xray_patch_function(id);
-    Status[id] = Measuring;
+    Metadata[id].first = Measuring;
   }
 
   return llvm::Error::success();
@@ -110,10 +112,10 @@ llvm::Error CodePatcher::stop_instrumenting(uint64_t FnPtr) {
     return Maybe.takeError();
 
   auto id = Maybe.get();
-  if (Status[id] == Measuring) {
+  if (Metadata[id].first == Measuring) {
     // NOTE: we go back to unpatched instead of some previous status!
     __xray_unpatch_function(id);
-    Status[id] = Unpatched;
+    Metadata[id].first = Unpatched;
   }
 
   return llvm::Error::success();
@@ -167,15 +169,15 @@ llvm::Error CodePatcher::unpatch(uint64_t FnPtr) {
 
   auto XRayID = Maybe.get();
 
-  if (Status[XRayID] == Unpatched)
+  if (Metadata[XRayID].first == Unpatched)
     return llvm::Error::success();
 
   __xray_unpatch_function(XRayID);
-  Status[XRayID] = Unpatched;
+  Metadata[XRayID].first = Unpatched;
 
   // NOTE: I don't think this needs to be an atomic write, since the the unpatch above is atomic.
-  auto PrevRedirect = RedirectionTable[XRayID];
-  RedirectionTable[XRayID] = 0;
+  auto PrevRedirect = RedirectionTable[XRayID].Redirection;
+  RedirectionTable[XRayID].Redirection = 0;
 
   return setSymbolRequired(PrevRedirect, false);
 }
@@ -207,14 +209,14 @@ llvm::Error CodePatcher::redirectTo(uint64_t OldFnPtr,
   }
 
   // TODO: might need to become an atomic write!
-  auto PrevRedirect = RedirectionTable[XRayID];
-  RedirectionTable[XRayID] = NewFnPtr;
+  auto PrevRedirect = RedirectionTable[XRayID].Redirection;
+  RedirectionTable[XRayID].Redirection = NewFnPtr;
 
-  auto FnStatus = Status[XRayID];
+  auto FnStatus = Metadata[XRayID].first;
   if (FnStatus == Unpatched) {
     // patch in the redirect
     __xray_redirect_function(XRayID);
-    Status[XRayID] = Redirected;
+    Metadata[XRayID].first = Redirected;
 
   } else if (FnStatus != Redirected) {
     return makeError("trying to redirect a function while it is not in \

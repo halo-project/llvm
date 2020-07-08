@@ -420,7 +420,7 @@ int __xray_set_typedevent_handler(void (*entry)(
   return 0;
 }
 
-int __xray_set_redirection_table(uintptr_t* table) XRAY_NEVER_INSTRUMENT {
+int __xray_set_redirection_table(XRayRedirectionEntry* table) XRAY_NEVER_INSTRUMENT {
   if (atomic_load(&XRayInitialized,
                                memory_order_acquire)) {
     atomic_store(&__xray::XRayRedirectTable,

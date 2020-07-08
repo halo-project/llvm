@@ -117,8 +117,13 @@ extern uintptr_t __xray_function_address(int32_t FuncId);
 /// encounter errors (when there are no instrumented functions, etc.).
 extern size_t __xray_max_function_id();
 
+struct XRayRedirectionEntry {
+  alignas(8) uintptr_t Redirection{0}; // the function pointer to redirect calls to
+  alignas(8) uint64_t CallCount{0};    // profiling data indicating number of calls
+};
+
 /// A table of with at least __xray_max_function_id entries that consist of
-/// pointers to functions. The table entries can be modified atomically
+/// redirection entries. The table entries can be modified atomically
 /// after calling this function to dynamically change redirects.
 ///
 /// Spurious calls to function pointers in a removed table may still
@@ -129,11 +134,11 @@ extern size_t __xray_max_function_id();
 /// or overwritten table.
 ///
 /// Returns 1 on success, 0 on error.
-extern int __xray_set_redirection_table(uintptr_t*);
+extern int __xray_set_redirection_table(XRayRedirectionEntry*);
 
 /// Removes the currently set redirection table.
 /// Returns 1 on success, 0 on error.
-extern int __xray_remove_redirection_table(uintptr_t*);
+extern int __xray_remove_redirection_table(XRayRedirectionEntry*);
 
 /// This function will patch the function's ENTRY sled with a redirection
 /// that invokes the corresponding function pointer listed in the redirection
