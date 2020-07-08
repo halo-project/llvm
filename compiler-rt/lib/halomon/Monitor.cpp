@@ -33,29 +33,7 @@ void monitor_loop(SignalHandler &Handler, std::atomic<bool> &ShutdownRequested) 
 
   {
     // try to establish a connection with the optimization server.
-    std::atomic<bool> Done{false};
-    std::thread ConnectionThread([&](){
-      C.blocking_connect();
-      Done = true;
-    });
-    ConnectionThread.detach(); // because we don't want to block on a join.
-
-    const unsigned MS_PER_CHECK = 50;
-    const unsigned MAX_CHECKS = 40;
-    unsigned Checks = 0;
-    while (!Done) {
-      Checks += 1;
-
-      if (ShutdownRequested)
-        return;
-
-      if (Checks >= MAX_CHECKS) {
-        warning("Timed out when trying to connect to " + C.endpoint_name() +" . Shutting down Monitor.");
-        return;
-      }
-
-      std::this_thread::sleep_for(std::chrono::milliseconds(MS_PER_CHECK));
-    }
+    C.blocking_connect();
 
     if (!C.connected()) {
       warning("Failed to connect to " + C.endpoint_name() + " . Shutting down Monitor.");
