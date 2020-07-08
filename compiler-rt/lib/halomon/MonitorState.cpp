@@ -1,6 +1,7 @@
 
 #include "halomon/MonitorState.h"
 #include "halomon/LinuxPerfEvents.h"
+#include "halomon/CallCountProfiler.h"
 
 #include "Logging.h"
 #include "Messages.pb.h"
@@ -113,31 +114,12 @@ void MonitorState::server_listen_loop() {
   });
 }
 
-
-void MonitorState::poll_instrumented_fns() {
-  if (!Patcher.isInstrumenting())
-    return;
-
-  // flush the event queue
-  Patcher.getEvents().consume_all([&](XRayEvent& Evt) {
-    // convert from XRayID -> FuncPtr
-    Evt.FuncPtr = Patcher.getFnPtr(Evt.XRayID);
-    Profiler.addEvent(Evt);
-  });
-
-  // send the data to server
-  auto NumEvents = Profiler.numEvents();
-  if (NumEvents) {
-    pb::XRayProfileData Data;
-    Profiler.serialize(Data);
-    Profiler.clear();
-
-    Net.Chan.send_proto(msg::FunctionMeasurements, Data);
-    logs(LC) << "sent function measurements from "
-           << NumEvents << " events.\n";
-  }
-
+void MonitorState::send_call_counts() {
+  pb::CallCountData CCD;
+  CallCountProfiler::Serialize(Patcher, CCD);
+  Net.Chan.send_proto(msg::CallCountData, CCD);
 }
+
 
 llvm::Error MonitorState::gather_module_info(std::string ObjPath, CodePatcher const& Patcher, pb::ModuleInfo *MI) {
   MI->set_obj_path(ObjPath);

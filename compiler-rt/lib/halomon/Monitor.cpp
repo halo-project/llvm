@@ -68,28 +68,20 @@ void monitor_loop(SignalHandler &Handler, std::atomic<bool> &ShutdownRequested) 
   //////////////////
   // Event Loop
 
+  const unsigned SleepTimeMS = 100;
   while (!ShutdownRequested) {
 
-    M.poll_instrumented_fns();
-
     M.check_msgs();
+
+    M.send_call_counts();
 
     M.poll_for_sample_data();
     M.send_samples();
 
-    // M.Prof->dumpSamples();
-
-    // M.Prof->processSamples(M.Conn);
-
-
-
-    // TODO: communicate with optimization server and perform code replacement
-    // experiments as needed.
-
 
     // TODO: this should probably be a random interval.
     // NOTE: I set this to 100 ms so that batches of 2+ samples are normally sent
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    std::this_thread::sleep_for(std::chrono::milliseconds(SleepTimeMS));
 
   } // end of event loop
 }

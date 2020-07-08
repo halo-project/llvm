@@ -1,6 +1,5 @@
 
 #include "halomon/CodePatcher.h"
-#include "halomon/XRayEvent.h"
 
 #include "xray/xray_interface_internal.h"
 
@@ -14,37 +13,6 @@
 namespace xray = __xray;
 
 namespace halo {
-
-// NOTE: another handler to consider is 'runningtime'
-// which would time only the N'th function call
-
-namespace entrycount {
-
-// NOTE: with LIMIT = 1024, we see a ~30% overhead when patching one of
-// linear_hot's fibs
-
-using Data = uint64_t;
-using FuncID = int32_t;
-constexpr unsigned LIMIT = 1024;
-static ThreadSafeList<XRayEvent> GlobalData;
-thread_local std::unordered_map<FuncID, Data> LocalData; // NOTE: maybe a vector is better?
-
-void handler(int32_t FuncID, XRayEntryType Kind) {
-  if (Kind != XRayEntryType::ENTRY)
-    return;
-
-  auto &Data = LocalData[FuncID];
-
-  if (Data >= LIMIT) {
-    GlobalData.emplace_back(getTimeStamp(), std::this_thread::get_id(), FuncID, Data);
-    Data = 0;
-  } else {
-    Data += 1;
-  }
-}
-
-} // end namespace entrycount
-
 
 CodePatcher::CodePatcher() {
   __xray_init();
@@ -63,19 +31,8 @@ CodePatcher::CodePatcher() {
   }
 
   __xray_set_redirection_table(RedirectionTable.data());
-
-  // the only handler we use
-  __xray_set_handler(entrycount::handler);
-
 }
 
-// boost::lockfree::queue<XRayEvent>& CodePatcher::getEvents() {
-//   return entrycount::GlobalData;
-// }
-
-ThreadSafeList<XRayEvent>& CodePatcher::getEvents() {
-  return entrycount::GlobalData;
-}
 
 uint64_t CodePatcher::getFnPtr(int32_t xrayID) {
   return __xray_function_address(xrayID);
@@ -87,39 +44,6 @@ uint64_t CodePatcher::getFnPtr(int32_t xrayID) {
 // the threads, and inspect their state: https://en.wikipedia.org/wiki/Ptrace
 //
 // void CodePatcher::garbageCollect() {}
-
-
-// START instrumenting
-llvm::Error CodePatcher::start_instrumenting(uint64_t FnPtr) {
-  auto Maybe = getXRayID(FnPtr);
-  if (!Maybe)
-    return Maybe.takeError();
-
-  auto id = Maybe.get();
-  if (Metadata[id].first != Measuring) {
-    __xray_patch_function(id);
-    Metadata[id].first = Measuring;
-  }
-
-  return llvm::Error::success();
-}
-
-
-// STOP instrumenting
-llvm::Error CodePatcher::stop_instrumenting(uint64_t FnPtr) {
-  auto Maybe = getXRayID(FnPtr);
-  if (!Maybe)
-    return Maybe.takeError();
-
-  auto id = Maybe.get();
-  if (Metadata[id].first == Measuring) {
-    // NOTE: we go back to unpatched instead of some previous status!
-    __xray_unpatch_function(id);
-    Metadata[id].first = Unpatched;
-  }
-
-  return llvm::Error::success();
-}
 
 
 llvm::Expected<std::unique_ptr<DyLib>&> CodePatcher::findDylib(uint64_t FnPtr) {

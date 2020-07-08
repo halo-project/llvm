@@ -3,7 +3,6 @@
 #include "halomon/CodePatcher.h"
 #include "halomon/DynamicLinker.h"
 #include "halomon/LinuxPerfEvents.h"
-#include "halomon/XRayProfiler.h"
 
 #include <list>
 
@@ -52,7 +51,6 @@ public:
   Client Net;
   CodePatcher Patcher;
   DynamicLinker Linker;
-  XRayProfiler Profiler;
 
   // information about this process
   std::string ExePath;
@@ -60,9 +58,8 @@ public:
   MonitorState(SignalHandler &, std::string const& hostname, std::string const& port);
   ~MonitorState();
 
-  // tends to the instrumented functions by flushing the
-  // event queue and sending it to the server.
-  void poll_instrumented_fns();
+  // sends fresh call-count information to the server
+  void send_call_counts();
 
   // methods related to sampling
   void start_sampling();

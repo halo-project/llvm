@@ -3,26 +3,23 @@
 #include <unordered_map>
 
 #include "halomon/DynamicLinker.h"
-#include "halomon/ThreadSafeContainers.h"
-#include "halomon/XRayEvent.h"
+#include "xray/xray_interface.h"
 
 #include "Channel.h"
 #include "Messages.pb.h"
 
 namespace halo {
 
+class CallCountProfiler;
+
 enum PatchingStatus {
   Unpatched,
-  Redirected,
-  Measuring,
+  Redirected
 };
 
 class CodePatcher {
 public:
   CodePatcher();
-
-llvm::Error start_instrumenting(uint64_t FnPtr);
-llvm::Error stop_instrumenting(uint64_t FnPtr);
 
 /// the name used to refer to the 'library'
 /// that consists of the code in the original executable
@@ -51,17 +48,9 @@ bool isPatchable(uint64_t FnPtr) const {
 
 uint64_t getFnPtr(int32_t xrayID);
 
-bool isInstrumenting() const {
-  for (auto S : Metadata)
-    if (S.first == Measuring)
-      return true;
-  return false;
-}
-
-// access the thread-safe queue of instrumentation events
-ThreadSafeList<XRayEvent>& getEvents();
-
 void garbageCollect();
+
+friend CallCountProfiler;
 
 private:
   llvm::Expected<int32_t> getXRayID(uint64_t FnPtr);
@@ -80,7 +69,8 @@ private:
 
   // These are indexed by XRay function ID.
   std::vector<XRayRedirectionEntry> RedirectionTable;  // NOTE: this is referenced by ASM code
-  std::vector<std::pair<enum PatchingStatus, uint64_t>> Metadata; // metadata about the function, indexed by xray id
-};
+  std::vector<std::pair<enum PatchingStatus, uint64_t>> Metadata; // <patching status, function address>
+
+  };
 
 } // end namespace
