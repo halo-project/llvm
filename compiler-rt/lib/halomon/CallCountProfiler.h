@@ -25,7 +25,7 @@ class CallCountProfiler {
 public:
 
   static void Serialize(CodePatcher const& P, pb::CallCountData &CCD) {
-    CCD.set_timestamp(getTimeStamp());
+    CCD.set_timestamp(getTimeStamp(CLOCK_MONOTONIC_RAW));
 
     auto Map = CCD.mutable_function_counts();
     for (size_t i = 0; i < P.RedirectionTable.size(); i++) {

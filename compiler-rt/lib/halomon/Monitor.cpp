@@ -1,6 +1,7 @@
 #include <thread>
 #include <atomic>
 #include <cstdlib>
+#include <random>
 #include "Logging.h"
 
 #include "halomon/MonitorState.h"
@@ -67,22 +68,19 @@ void monitor_loop(SignalHandler &Handler, std::atomic<bool> &ShutdownRequested) 
 
   //////////////////
   // Event Loop
+  std::minstd_rand rng; // use default_seed
+  std::uniform_int_distribution<unsigned> sleepDist(50, 150); // avg = 100ms
 
-  const unsigned SleepTimeMS = 100;
   while (!ShutdownRequested) {
 
-    M.check_msgs();
-
     M.send_call_counts();
+
+    M.check_msgs();
 
     M.poll_for_sample_data();
     M.send_samples();
 
-
-    // TODO: this should probably be a random interval.
-    // NOTE: I set this to 100 ms so that batches of 2+ samples are normally sent
-    std::this_thread::sleep_for(std::chrono::milliseconds(SleepTimeMS));
-
+    std::this_thread::sleep_for(std::chrono::milliseconds(sleepDist(rng)));
   } // end of event loop
 }
 
