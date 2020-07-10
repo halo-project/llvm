@@ -54,7 +54,7 @@ using namespace llvm;
 
 STATISTIC(LoopsInterchanged, "Number of loops interchanged");
 
-static cl::opt<int> LoopInterchangeCostThreshold(
+cl::opt<int> LoopInterchangeCostThreshold(
     "loop-interchange-threshold", cl::init(0), cl::Hidden,
     cl::desc("Interchange if you gain more than this number"));
 

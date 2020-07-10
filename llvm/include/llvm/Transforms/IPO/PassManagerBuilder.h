@@ -32,6 +32,9 @@ class FunctionPassManager;
 class PassManagerBase;
 }
 
+// Experimental option to use CFL-AA
+enum class CFLAAType { None, Steensgaard, Andersen, Both };
+
 /// PassManagerBuilder - This class is used to set up a standard optimization
 /// sequence for languages like C and C++, allowing some APIs to customize the
 /// pass sequence in various ways. A simple example of using it would be:

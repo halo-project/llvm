@@ -60,7 +60,7 @@ UseGVNAfterVectorization("use-gvn-after-vectorization",
   cl::init(false), cl::Hidden,
   cl::desc("Run GVN instead of Early CSE after vectorization passes"));
 
-static cl::opt<bool> ExtraVectorizerPasses(
+cl::opt<bool> ExtraVectorizerPasses(
     "extra-vectorizer-passes", cl::init(false), cl::Hidden,
     cl::desc("Run cleanup optimization passes after vectorization."));
 
@@ -72,8 +72,7 @@ cl::opt<bool> RunNewGVN("enable-newgvn", cl::init(false), cl::Hidden,
                                cl::desc("Run the NewGVN pass"));
 
 // Experimental option to use CFL-AA
-enum class CFLAAType { None, Steensgaard, Andersen, Both };
-static cl::opt<CFLAAType>
+cl::opt<CFLAAType>
     UseCFLAA("use-cfl-aa", cl::init(CFLAAType::None), cl::Hidden,
              cl::desc("Enable the new, experimental CFL alias analysis"),
              cl::values(clEnumValN(CFLAAType::None, "none", "Disable CFL-AA"),
@@ -84,7 +83,7 @@ static cl::opt<CFLAAType>
                         clEnumValN(CFLAAType::Both, "both",
                                    "Enable both variants of CFL-AA")));
 
-static cl::opt<bool> EnableLoopInterchange(
+cl::opt<bool> EnableLoopInterchange(
     "enable-loopinterchange", cl::init(false), cl::Hidden,
     cl::desc("Enable the new, experimental LoopInterchange Pass"));
 
