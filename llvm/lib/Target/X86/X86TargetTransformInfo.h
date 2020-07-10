@@ -104,6 +104,7 @@ public:
 
   /// \name Cache TTI Implementation
   /// @{
+  unsigned getCacheLineSize() const;
   llvm::Optional<unsigned> getCacheSize(
     TargetTransformInfo::CacheLevel Level) const;
   llvm::Optional<unsigned> getCacheAssociativity(

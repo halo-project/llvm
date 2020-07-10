@@ -65,6 +65,15 @@ X86TTIImpl::getPopcntSupport(unsigned TyWidth) {
   return ST->hasPOPCNT() ? TTI::PSK_FastHardware : TTI::PSK_Software;
 }
 
+unsigned X86TTIImpl::getCacheLineSize() const {
+  //  - Nehalem
+  //  - Sandy Bridge
+  //  - Haswell
+  //  - Skylake
+  //  - Ice Lake
+  return 64;  // 64 bytes
+}
+
 llvm::Optional<unsigned> X86TTIImpl::getCacheSize(
   TargetTransformInfo::CacheLevel Level) const {
   switch (Level) {
