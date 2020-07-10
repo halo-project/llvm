@@ -37,12 +37,13 @@ using namespace llvm;
 
 // By default, we limit this to creating 16 PHIs (which is a little over half
 // of the allocatable register set).
-static cl::opt<bool>
-PrefetchWrites("loop-prefetch-writes", cl::Hidden, cl::init(false),
+cl::opt<cl::boolOrDefault>
+PrefetchWrites("loop-prefetch-writes", cl::Hidden, cl::init(cl::boolOrDefault::BOU_UNSET),
                cl::desc("Prefetch write addresses"));
 
-static cl::opt<unsigned>
+cl::opt<unsigned>
     PrefetchDistance("prefetch-distance",
+                     cl::init(0),
                      cl::desc("Number of instructions to prefetch ahead"),
                      cl::Hidden);
 
@@ -86,7 +87,7 @@ private:
   }
 
   unsigned getPrefetchDistance() {
-    if (PrefetchDistance.getNumOccurrences() > 0)
+    if (PrefetchDistance != 0)
       return PrefetchDistance;
     return TTI->getPrefetchDistance();
   }
@@ -98,8 +99,8 @@ private:
   }
 
   bool doPrefetchWrites() {
-    if (PrefetchWrites.getNumOccurrences() > 0)
-      return PrefetchWrites;
+    if (PrefetchWrites != cl::boolOrDefault::BOU_UNSET)
+      return PrefetchWrites == cl::boolOrDefault::BOU_TRUE;
     return TTI->enableWritePrefetching();
   }
 
