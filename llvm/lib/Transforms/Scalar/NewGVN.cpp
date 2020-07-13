@@ -3014,7 +3014,7 @@ void NewGVN::updateProcessedCount(const Value *V) {
     ProcessedCount.insert({V, 1});
   } else {
     ++ProcessedCount[V];
-    assert(ProcessedCount[V] < 100 &&
+    assert(ProcessedCount[V] < 1000 &&
            "Seem to have processed the same Value a lot");
   }
 #endif
