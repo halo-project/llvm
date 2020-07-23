@@ -141,7 +141,7 @@ bool types::isAcceptedByClang(ID Id) {
   case TY_CXXHeader: case TY_PP_CXXHeader:
   case TY_ObjCXXHeader: case TY_PP_ObjCXXHeader:
   case TY_CXXModule: case TY_PP_CXXModule:
-  case TY_AST: case TY_ModuleFile:
+  case TY_AST: case TY_ModuleFile: case TY_PCH:
   case TY_LLVM_IR: case TY_LLVM_BC:
     return true;
   }
@@ -278,6 +278,7 @@ types::ID types::lookupTypeForExtension(llvm::StringRef Ext) {
            .Case("gch", TY_PCH)
            .Case("hip", TY_HIP)
            .Case("hpp", TY_CXXHeader)
+           .Case("hxx", TY_CXXHeader)
            .Case("iim", TY_PP_CXXModule)
            .Case("lib", TY_Object)
            .Case("mii", TY_PP_ObjCXX)

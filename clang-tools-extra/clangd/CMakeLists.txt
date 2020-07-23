@@ -25,6 +25,7 @@ set(LLVM_LINK_COMPONENTS
   Support
   AllTargetsInfos
   FrontendOpenMP
+  Option
   )
 
 add_clang_library(clangDaemon
@@ -36,6 +37,10 @@ add_clang_library(clangDaemon
   CollectMacros.cpp
   CompileCommands.cpp
   Compiler.cpp
+  Config.cpp
+  ConfigCompile.cpp
+  ConfigProvider.cpp
+  ConfigYAML.cpp
   Diagnostics.cpp
   DraftStore.cpp
   ExpectedTypes.cpp
@@ -96,6 +101,17 @@ add_clang_library(clangDaemon
   refactor/Tweak.cpp
 
   LINK_LIBS
+  clangdSupport
+  clangTidy
+  ${LLVM_PTHREAD_LIB}
+  ${ALL_CLANG_TIDY_CHECKS}
+
+  DEPENDS
+  omp_gen
+  )
+
+clang_target_link_libraries(clangDaemon
+  PRIVATE
   clangAST
   clangASTMatchers
   clangBasic
@@ -106,15 +122,11 @@ add_clang_library(clangDaemon
   clangLex
   clangSema
   clangSerialization
-  clangTidy
   clangTooling
   clangToolingCore
   clangToolingInclusions
   clangToolingRefactoring
   clangToolingSyntax
-  clangdSupport
-  ${LLVM_PTHREAD_LIB}
-  ${ALL_CLANG_TIDY_CHECKS}
   )
 
 add_subdirectory(refactor/tweaks)

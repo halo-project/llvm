@@ -132,7 +132,7 @@ private:
   Function *insertReset(ArrayRef<std::pair<GlobalVariable *, MDNode *>>);
   Function *insertFlush(Function *ResetF);
 
-  void AddFlushBeforeForkAndExec();
+  bool AddFlushBeforeForkAndExec();
 
   enum class GCovFileType { GCNO, GCDA };
   std::string mangleName(const DICompileUnit *CU, GCovFileType FileType);
@@ -554,14 +554,15 @@ bool GCOVProfiler::runOnModule(
   this->GetTLI = std::move(GetTLI);
   Ctx = &M.getContext();
 
-  AddFlushBeforeForkAndExec();
+  bool Modified = AddFlushBeforeForkAndExec();
 
   FilterRe = createRegexesFromString(Options.Filter);
   ExcludeRe = createRegexesFromString(Options.Exclude);
 
   if (Options.EmitNotes) emitProfileNotes();
-  if (Options.EmitData) return emitProfileArcs();
-  return false;
+  if (Options.EmitData)
+    Modified |= emitProfileArcs();
+  return Modified;
 }
 
 PreservedAnalyses GCOVProfilerPass::run(Module &M,
@@ -620,7 +621,7 @@ static bool shouldKeepInEntry(BasicBlock::iterator It) {
 	return false;
 }
 
-void GCOVProfiler::AddFlushBeforeForkAndExec() {
+bool GCOVProfiler::AddFlushBeforeForkAndExec() {
   SmallVector<CallInst *, 2> Forks;
   SmallVector<CallInst *, 2> Execs;
   for (auto &F : M->functions()) {
@@ -692,6 +693,8 @@ void GCOVProfiler::AddFlushBeforeForkAndExec() {
     Parent->splitBasicBlock(NextInst);
     Parent->back().setDebugLoc(Loc);
   }
+
+  return !Forks.empty() || !Execs.empty();
 }
 
 void GCOVProfiler::emitProfileNotes() {
@@ -841,7 +844,6 @@ bool GCOVProfiler::emitProfileArcs() {
         continue;
       // TODO: Functions using scope-based EH are currently not supported.
       if (isUsingScopeBasedEH(F)) continue;
-      if (!Result) Result = true;
 
       DenseMap<std::pair<BasicBlock *, BasicBlock *>, unsigned> EdgeToCounter;
       unsigned Edges = 0;
@@ -936,6 +938,7 @@ bool GCOVProfiler::emitProfileArcs() {
     Builder.CreateRetVoid();
 
     appendToGlobalCtors(*M, F, 0);
+    Result = true;
   }
 
   return Result;

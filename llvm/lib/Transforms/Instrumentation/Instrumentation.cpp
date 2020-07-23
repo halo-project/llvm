@@ -113,6 +113,7 @@ void llvm::initializeInstrumentation(PassRegistry &Registry) {
   initializePGOInstrumentationUseLegacyPassPass(Registry);
   initializePGOIndirectCallPromotionLegacyPassPass(Registry);
   initializePGOMemOPSizeOptLegacyPassPass(Registry);
+  initializeCGProfileLegacyPassPass(Registry);
   initializeInstrOrderFileLegacyPassPass(Registry);
   initializeInstrProfilingLegacyPassPass(Registry);
   initializeMemorySanitizerLegacyPassPass(Registry);

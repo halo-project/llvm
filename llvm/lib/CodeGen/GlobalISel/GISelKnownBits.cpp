@@ -11,6 +11,7 @@
 //
 //===------------------
 #include "llvm/CodeGen/GlobalISel/GISelKnownBits.h"
+#include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/CodeGen/GlobalISel/Utils.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
@@ -34,6 +35,8 @@ GISelKnownBits::GISelKnownBits(MachineFunction &MF, unsigned MaxDepth)
 Align GISelKnownBits::computeKnownAlignment(Register R, unsigned Depth) {
   const MachineInstr *MI = MRI.getVRegDef(R);
   switch (MI->getOpcode()) {
+  case TargetOpcode::COPY:
+    return computeKnownAlignment(MI->getOperand(1).getReg(), Depth);
   case TargetOpcode::G_FRAME_INDEX: {
     int FrameIdx = MI->getOperand(1).getIndex();
     return MF.getFrameInfo().getObjectAlign(FrameIdx);
@@ -438,6 +441,16 @@ unsigned GISelKnownBits::computeNumSignBits(Register R,
     LLT SrcTy = MRI.getType(Src);
     unsigned Tmp = DstTy.getScalarSizeInBits() - SrcTy.getScalarSizeInBits();
     return computeNumSignBits(Src, DemandedElts, Depth + 1) + Tmp;
+  }
+  case TargetOpcode::G_SEXTLOAD: {
+    Register Dst = MI.getOperand(0).getReg();
+    LLT Ty = MRI.getType(Dst);
+    // TODO: add vector support
+    if (Ty.isVector())
+      break;
+    if (MI.hasOneMemOperand())
+      return Ty.getSizeInBits() - (*MI.memoperands_begin())->getSizeInBits();
+    break;
   }
   case TargetOpcode::G_TRUNC: {
     Register Src = MI.getOperand(1).getReg();
