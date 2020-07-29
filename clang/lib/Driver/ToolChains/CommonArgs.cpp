@@ -877,13 +877,13 @@ void tools::linkHaloRuntimeDeps(const ToolChain &TC, const ArgList &Args,
   SmallString<128> Path(TC.getDriver().ResourceDir);
   llvm::sys::path::append(Path, "..", "..");
 
-  std::string LibFlag = "-lLLVM-" + std::to_string(LLVM_VERSION_MAJOR) + "git";
+  std::string LibFlag = "-lLLVM-" + std::to_string(LLVM_VERSION_MAJOR); // + "git";
 
   // NOTE: -L (install or build)/lib is already passed on the command line
   CmdArgs.push_back("-rpath");
   CmdArgs.push_back(Args.MakeArgString(Path.c_str()));
   // TODO: there doesn't seem to be a build target for libLLVM.so, only
-  // an install target, so we link with libLLVM-Ngit.so for now.
+  // an install target, so we link with libLLVM-N(git)?.so for now.
   CmdArgs.push_back(Args.MakeArgString(LibFlag.c_str()));
 
   CmdArgs.push_back("--no-as-needed");
