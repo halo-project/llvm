@@ -70,9 +70,10 @@ void handle_perf_event(MonitorState *MS, perf_event_header *EvtHeader) {
     struct SInfo3 {
       // weight is a 64-bit value provided by the hardware is recorded
       // that indicates how costly the event was.  This allows expensive events to  stand  out  more
-      // clearly in profiles.
+      // clearly in profiles. This is the PEBS cycle time.
       uint64_t weight;              // PERF_SAMPLE_WEIGHT
 
+      // This is the PEBS cache miss hierarchy info.
       perf_mem_data_src data_src;   // PERF_SAMPLE_DATA_SRC
     };
 
