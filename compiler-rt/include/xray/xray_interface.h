@@ -118,8 +118,15 @@ extern uintptr_t __xray_function_address(int32_t FuncId);
 extern size_t __xray_max_function_id();
 
 struct XRayRedirectionEntry {
+  // the size and alignment of these fields depend on the system-specific assembly
+  // for __xray_FunctionRedirection
+#if defined(__x86_64__)
   alignas(8) uintptr_t Redirection{0}; // the function pointer to redirect calls to
   alignas(8) uint64_t CallCount{0};    // profiling data indicating number of calls
+#elif defined(__arm__)
+  alignas(4) uintptr_t Redirection{0};
+  alignas(4) uint32_t CallCount{0};
+#endif
 };
 
 /// A table of with at least __xray_max_function_id entries that consist of
