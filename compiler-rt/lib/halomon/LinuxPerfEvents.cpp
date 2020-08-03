@@ -42,6 +42,14 @@ namespace asio = boost::asio;
 namespace halo {
 namespace linux {
 
+uint64_t SampleType = 0;
+uint64_t BranchSampleType = 0;
+
+void saveSamplingType(perf_event_attr const* Attr) {
+  SampleType = Attr->sample_type;
+  BranchSampleType = Attr->branch_sample_type;
+}
+
 void handle_perf_event(MonitorState *MS, perf_event_header *EvtHeader) {
   auto evtType = EvtHeader->type;
   if (evtType == PERF_RECORD_SAMPLE) {
@@ -78,8 +86,15 @@ void handle_perf_event(MonitorState *MS, perf_event_header *EvtHeader) {
     };
 
     SInfo *SI = (SInfo *) EvtHeader;
-    SInfo2 *SI2 = (SInfo2 *) &SI->ips[SI->nr];
-    SInfo3 *SI3 = (SInfo3 *) &SI2->lbr[SI2->bnr];
+    SInfo2 *SI2 = nullptr;
+    SInfo3 *SI3 = nullptr;
+
+    if (SampleType & PERF_SAMPLE_BRANCH_STACK) {
+     SI2 = (SInfo2 *) &SI->ips[SI->nr];
+     if (SampleType & PERF_SAMPLE_WEIGHT)
+      SI3 = (SInfo3 *) &SI2->lbr[SI2->bnr];
+    }
+
 
     pb::RawSample &Sample = MS->newSample();
 
@@ -90,7 +105,9 @@ void handle_perf_event(MonitorState *MS, perf_event_header *EvtHeader) {
     Sample.set_instr_ptr(SI->ip);
     Sample.set_thread_id(SI->tid);
     Sample.set_time(SI->time);
-    Sample.set_weight(SI3->weight);
+
+    if (SampleType & PERF_SAMPLE_WEIGHT)
+      Sample.set_weight(SI3->weight);
 
     // record the call chain.
     uint64_t ChainLen = SI->nr;
@@ -99,18 +116,20 @@ void handle_perf_event(MonitorState *MS, perf_event_header *EvtHeader) {
       Sample.add_call_context(CallChain[i]);
     }
 
-    uint64_t LBRLen = SI2->bnr;
-    perf_branch_entry* LBR = (perf_branch_entry*)&(SI2->lbr);
-    for (uint64_t i = 0; i < LBRLen; ++i) {
-      // look in source code of linux kernel for sizes of these fields.
-      // in particular, everything other than from/to are part of a bitfield
-      // of varying sizes.
-      perf_branch_entry* BR = LBR + i;
-      pb::BranchInfo *BI = Sample.add_branch();
-      BI->set_from(BR->from);
-      BI->set_to(BR->to);
-      BI->set_mispred((bool)BR->mispred);
-      BI->set_predicted((bool)BR->predicted);
+    if (SampleType & PERF_SAMPLE_BRANCH_STACK) {
+      uint64_t LBRLen = SI2->bnr;
+      perf_branch_entry* LBR = (perf_branch_entry*)&(SI2->lbr);
+      for (uint64_t i = 0; i < LBRLen; ++i) {
+        // look in source code of linux kernel for sizes of these fields.
+        // in particular, everything other than from/to are part of a bitfield
+        // of varying sizes.
+        perf_branch_entry* BR = LBR + i;
+        pb::BranchInfo *BI = Sample.add_branch();
+        BI->set_from(BR->from);
+        BI->set_to(BR->to);
+        BI->set_mispred((bool)BR->mispred);
+        BI->set_predicted((bool)BR->predicted);
+      }
     }
 
   } else if (evtType == PERF_RECORD_MMAP) {
@@ -239,6 +258,9 @@ inline int try_perf_event_open(perf_event_attr *attr,
                            pid_t pid, int cpu, int group_fd,
                            unsigned long flags,
                            std::function<int(int, perf_event_attr &)> Callback) {
+
+  // take a snapshot of the flags before making the call, in case it's successful.
+  saveSamplingType(attr);
 
 #ifndef NDEBUG
   // In some scenarios, the attr struct is modified by the system call,
@@ -369,14 +391,21 @@ int get_perf_events_fd(const std::string &Name,
   // back to the original code.
   Attr.mmap = 1;
 
+  // NOTE: some intel PEBS cache info would be available with
+  // PERF_SAMPLE_DATA_SRC | PERF_SAMPLE_WEIGHT, but reading PERF_SAMPLE_DATA_SRC is a TODO
+
   // the period indicates how many events of kind "Name" should happen until
   // a sample is provided.
   Attr.sample_period = EventPeriod;
-  Attr.sample_type = PERF_SAMPLE_IP | PERF_SAMPLE_DATA_SRC | PERF_SAMPLE_WEIGHT |
-                     PERF_SAMPLE_ADDR | PERF_SAMPLE_TIME |
-                     PERF_SAMPLE_TID | PERF_SAMPLE_IDENTIFIER |
-                     PERF_SAMPLE_STREAM_ID | PERF_SAMPLE_BRANCH_STACK |
-                     PERF_SAMPLE_CALLCHAIN;
+  Attr.sample_type = PERF_SAMPLE_IP
+                   | PERF_SAMPLE_ADDR
+                   | PERF_SAMPLE_TIME
+                   | PERF_SAMPLE_TID
+                   | PERF_SAMPLE_IDENTIFIER
+                   | PERF_SAMPLE_STREAM_ID
+                   | PERF_SAMPLE_CALLCHAIN
+                   | PERF_SAMPLE_BRANCH_STACK
+                   ;
 
   // Note: The callchain is collected in kernel space (and must be
   // collected there, as the context might have changed by the time we see
@@ -431,28 +460,44 @@ int get_perf_events_fd(const std::string &Name,
     Attr.branch_sample_type = PERF_SAMPLE_BRANCH_USER
                             | PERF_SAMPLE_BRANCH_ANY;
 
-    return try_perf_event_open(&Attr, TID, CPU, -1, 0, [](int ErrNo, perf_event_attr &Attr) {
+    return try_perf_event_open(&Attr, TID, CPU, -1, 0, [&](int ErrNo, perf_event_attr &Attr) {
 
-      // okay then we give up. print an error and forward the invalid FD
-      clogs(LC_Error) << "Unsuccessful call to perf_event_open: ";
-      switch (ErrNo) {
-        case E2BIG: {clogs(LC_Error) << "E2BIG\n"; break;}
-        case EACCES: {clogs(LC_Error) << "EACCES\n"; break;}
-        case EBADF: {clogs(LC_Error) << "EBADF\n"; break;}
-        case EBUSY: {clogs(LC_Error) << "EBUSY\n"; break;}
-        case EFAULT: {clogs(LC_Error) << "EFAULT\n"; break;}
-        case EINVAL: {clogs(LC_Error) << "EINVAL\n"; break;}
-        case EMFILE: {clogs(LC_Error) << "EMFILE\n"; break;}
-        case ENODEV: {clogs(LC_Error) << "ENODEV\n"; break;}
-        case ENOSPC: {clogs(LC_Error) << "ENOSPC\n"; break;}
-        case ENOSYS: {clogs(LC_Error) << "ENOSYS\n"; break;}
-        case EOPNOTSUPP: {clogs(LC_Error) << "EOPNOTSUPP\n"; break;}
-        case EOVERFLOW: {clogs(LC_Error) << "EOVERFLOW\n"; break;}
-        case EPERM: {clogs(LC_Error) << "EPERM\n"; break;}
-        case ESRCH: {clogs(LC_Error) << "ESRCH\n"; break;}
-        default: {clogs(LC_Error) << "Code = " << ErrNo << " (unknown name)\n"; break;}
-      };
-      return -1;
+      // Try the most basic perf sampling configuration for this hardware
+      Attr.branch_sample_type = 0;
+      Attr.sample_type = PERF_SAMPLE_IP
+                       | PERF_SAMPLE_ADDR
+                       | PERF_SAMPLE_TIME
+                       | PERF_SAMPLE_TID
+                       | PERF_SAMPLE_IDENTIFIER
+                       | PERF_SAMPLE_STREAM_ID
+                       | PERF_SAMPLE_CALLCHAIN
+                       ;
+
+      return try_perf_event_open(&Attr, TID, CPU, -1, 0, [](int ErrNo, perf_event_attr &Attr) {
+
+        // okay then we give up. print an error and forward the invalid FD
+        clogs(LC_Error) << "Unsuccessful call to perf_event_open: ";
+        switch (ErrNo) {
+          case E2BIG: {clogs(LC_Error) << "E2BIG\n"; break;}
+          case EACCES: {clogs(LC_Error) << "EACCES\n"; break;}
+          case EBADF: {clogs(LC_Error) << "EBADF\n"; break;}
+          case EBUSY: {clogs(LC_Error) << "EBUSY\n"; break;}
+          case EFAULT: {clogs(LC_Error) << "EFAULT\n"; break;}
+          case EINVAL: {clogs(LC_Error) << "EINVAL\n"; break;}
+          case EMFILE: {clogs(LC_Error) << "EMFILE\n"; break;}
+          case ENODEV: {clogs(LC_Error) << "ENODEV\n"; break;}
+          case ENOSPC: {clogs(LC_Error) << "ENOSPC\n"; break;}
+          case ENOSYS: {clogs(LC_Error) << "ENOSYS\n"; break;}
+          case EOPNOTSUPP: {clogs(LC_Error) << "EOPNOTSUPP\n"; break;}
+          case EOVERFLOW: {clogs(LC_Error) << "EOVERFLOW\n"; break;}
+          case EPERM: {clogs(LC_Error) << "EPERM\n"; break;}
+          case ESRCH: {clogs(LC_Error) << "ESRCH\n"; break;}
+          default: {clogs(LC_Error) << "Code = " << ErrNo << " (unknown name)\n"; break;}
+        };
+
+        return -1;
+
+      });
     });
   });
 
