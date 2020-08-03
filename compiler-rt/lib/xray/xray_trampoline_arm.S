@@ -102,4 +102,17 @@ FunctionTailExit_restore:
     VPOP {d0-d7}
     POP {r1-r3,pc}
 
+
+    @ Word-aligned function entry point
+    .p2align 2
+    @ Let C/C++ see the symbol
+    .global __xray_FunctionRedirection
+    .hidden __xray_FunctionRedirection
+    .type __xray_FunctionRedirection, %function
+    @ In C++ it is void extern "C" __xray_FunctionRedirection(uint32_t FuncId) with
+    @   FuncId passed in r0 register.
+__xray_FunctionRedirection:
+    @ TODO: for now let's just return because I need to learn ARM syntax
+    MOV PC, LR
+
 NO_EXEC_STACK_DIRECTIVE
