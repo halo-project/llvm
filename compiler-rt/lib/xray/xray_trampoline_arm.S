@@ -124,13 +124,12 @@ __xray_FunctionRedirection:
     ADD r1, r0      @ base <- base + offset
 
     @ load function address
-    LDR ip, [pc, r1]      @ ip = *r1
+    LDR ip, [r1]      @ ip = *r1
 
     @ lightweight profiling
-    ADD r1, #4  @ compute offset of the call count field
-    LDR r2, [pc, r1]
+    LDR r2, [r1, #4]
     ADD r2, #1
-    STR r2, [pc, r1]
+    STR r2, [r1, #4]
 
     @ restore clobbered regs other than r0 & ip
     POP {r1, r2}
