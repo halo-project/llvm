@@ -857,6 +857,12 @@ public:
 
   unsigned getMaxInterleaveFactor() const { return MaxInterleaveFactor; }
 
+  unsigned getCacheLineSize() const override {
+    // FIXME: hardcoding this for my benchmarking of Halo on a Raspberry Pi 3 B+,
+    // which has a Cortex-A53. I want to ensure nothing crashes due to this being 0.
+    return 64;
+  }
+
   unsigned getPartialUpdateClearance() const { return PartialUpdateClearance; }
 
   ARMLdStMultipleTiming getLdStMultipleTiming() const {
