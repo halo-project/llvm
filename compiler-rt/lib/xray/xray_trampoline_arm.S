@@ -112,7 +112,7 @@ FunctionTailExit_restore:
     @ In C++ it is void extern "C" __xray_FunctionRedirection(uint32_t FuncId) with
     @   FuncId passed in r0 register.
 __xray_FunctionRedirection:
-    PUSH {r1-r2}
+    PUSH {r1, r2}
 
     @ load the redirection table base pointer into r1
     MOVW r2, #:lower16:_ZN6__xray17XRayRedirectTableE - (. + 16)
@@ -132,17 +132,19 @@ __xray_FunctionRedirection:
     ADD r2, #1
     STR r2, [pc, r1]
 
+    @ restore clobbered regs other than r0 & ip
+    POP {r1, r2}
+
     @ if the address is zero, return to original
     CMP ip, #0
     BEQ noRedirect
 
-    @ restore all registers AND establish previous link
-    POP {r1-r2, r0, lr}
+    @ restore original function's r0 and lr before jumping
+    POP {r0, lr}
     BX ip
 
 noRedirect:
-    @ return to original
-    POP {r1-r2}
+    @ the sled will restore r0 and lr
     BX lr
 
 NO_EXEC_STACK_DIRECTIVE
