@@ -30,7 +30,10 @@ CodePatcher::CodePatcher() {
     Metadata[i] = {Unpatched, FnAddr};
   }
 
-  __xray_set_redirection_table(RedirectionTable.data());
+  XRayRedirectionEntry *Table = RedirectionTable.data();
+  logs() << "redirection table base = " << (uint64_t) Table << "\n";
+
+  __xray_set_redirection_table(Table);
 }
 
 

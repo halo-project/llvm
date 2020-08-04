@@ -121,10 +121,10 @@ struct XRayRedirectionEntry {
   // the size and alignment of these fields depend on the system-specific assembly
   // for __xray_FunctionRedirection
 #if defined(__x86_64__)
-  alignas(8) uintptr_t Redirection{0}; // the function pointer to redirect calls to
+  alignas(8) uint64_t Redirection{0}; // the function pointer to redirect calls to
   alignas(8) uint64_t CallCount{0};    // profiling data indicating number of calls
 #elif defined(__arm__)
-  alignas(4) uintptr_t Redirection{0};
+  alignas(4) uint32_t Redirection{0};
   alignas(4) uint32_t CallCount{0};
 #endif
 };
