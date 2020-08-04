@@ -112,7 +112,30 @@ FunctionTailExit_restore:
     @ In C++ it is void extern "C" __xray_FunctionRedirection(uint32_t FuncId) with
     @   FuncId passed in r0 register.
 __xray_FunctionRedirection:
-    @ TODO: for now let's just return because I need to learn ARM syntax
+    PUSH {r1-r2}
+
+    @ load the redirection table base pointer into r1
+    MOVW r2, #:lower16:_ZN6__xray17XRayRedirectTableE - (. + 16)
+    MOVT r2, #:upper16:_ZN6__xray17XRayRedirectTableE - (. + 12)
+    LDR r1, [pc, r2]
+
+    @ compute entry offset
+    LSL r0, #3      @ offset <- ID * entrySize == ID * 8
+    ADD r1, r0      @ base <- base + offset
+
+    LDR r0, r1      @ r0 = *r1
+
+    @ if the address is zero, return to original
+    CMP r0, #0
+    BEQ noRedirect
+
+    @ restore other registers and jump
+    POP {r1-r2}
+    B r0
+
+noRedirect:
+    @ return to original
+    POP {r1-r2}
     MOV PC, LR
 
 NO_EXEC_STACK_DIRECTIVE
