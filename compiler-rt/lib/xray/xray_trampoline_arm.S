@@ -123,8 +123,8 @@ __xray_FunctionRedirection:
     LSL r0, #3      @ offset <- ID * entrySize == ID * 8
     ADD r1, r0      @ base <- base + offset
 
-    @ load address
-    LDR r0, [pc, r1]      @ r0 = *r1
+    @ load function address
+    LDR ip, [pc, r1]      @ ip = *r1
 
     @ lightweight profiling
     ADD r1, #4  @ compute offset of the call count field
@@ -133,12 +133,12 @@ __xray_FunctionRedirection:
     STR r2, [pc, r1]
 
     @ if the address is zero, return to original
-    CMP r0, #0
+    CMP ip, #0
     BEQ noRedirect
 
-    @ restore other registers and jump
-    POP {r1-r2}
-    BX r0
+    @ restore all registers AND establish previous link
+    POP {r1-r2, r0, lr}
+    BX ip
 
 noRedirect:
     @ return to original
