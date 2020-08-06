@@ -889,8 +889,8 @@ bool TargetPassConfig::addISelPasses() {
 }
 
 /// -regalloc=... command line option.
-static FunctionPass *useDefaultRegisterAllocator() { return nullptr; }
-static cl::opt<RegisterRegAlloc::FunctionPassCtor, false,
+FunctionPass *useDefaultRegisterAllocator() { return nullptr; }
+cl::opt<RegisterRegAlloc::FunctionPassCtor, false,
                RegisterPassParser<RegisterRegAlloc>>
     RegAlloc("regalloc", cl::Hidden, cl::init(&useDefaultRegisterAllocator),
              cl::desc("Register allocator to use"));
