@@ -379,12 +379,10 @@ bool JumpThreadingPass::runImpl(Function &F, TargetLibraryInfo *TLI_,
 
   // Reduce the number of instructions duplicated when optimizing strictly for
   // size.
-  if (BBDuplicateThreshold.getNumOccurrences())
-    BBDupThreshold = BBDuplicateThreshold;
-  else if (F.hasFnAttribute(Attribute::MinSize))
+  if (F.hasFnAttribute(Attribute::MinSize))
     BBDupThreshold = 3;
   else
-    BBDupThreshold = DefaultBBDupThreshold;
+    BBDupThreshold = BBDuplicateThreshold;
 
   // JumpThreading must not processes blocks unreachable from entry. It's a
   // waste of compute time and can potentially lead to hangs.
