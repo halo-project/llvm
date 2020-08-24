@@ -1179,7 +1179,7 @@ bool TargetPassConfig::addRegAssignmentOptimized() {
 /// Return true if the default global register allocator is in use and
 /// has not be overriden on the command line with '-regalloc=...'
 bool TargetPassConfig::usingDefaultRegAlloc() const {
-  return RegAlloc.getNumOccurrences() == 0;
+  return RegAlloc == &useDefaultRegisterAllocator;
 }
 
 /// Add the minimum set of target-independent passes that are required for
