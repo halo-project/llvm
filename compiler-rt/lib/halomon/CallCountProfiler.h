@@ -27,6 +27,9 @@ public:
   static void Serialize(CodePatcher const& P, pb::CallCountData &CCD) {
     CCD.set_timestamp(getTimeStamp(CLOCK_MONOTONIC_RAW));
 
+    // refresh call counts before we process them.
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+
     auto Map = CCD.mutable_function_counts();
     for (size_t i = 0; i < P.RedirectionTable.size(); i++) {
       auto const& Info = P.Metadata[i];

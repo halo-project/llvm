@@ -36,6 +36,12 @@ CodePatcher::CodePatcher() {
   __xray_set_redirection_table(Table);
 }
 
+/// atomically exchanges the redirection
+XRayRedirectType CodePatcher::swapRedirection(int32_t XRayID, XRayRedirectType newRedirection) {
+  XRayRedirectType *Entry = &(RedirectionTable[XRayID].Redirection);
+  return __atomic_exchange_n(Entry, newRedirection, __ATOMIC_SEQ_CST);
+}
+
 
 uint64_t CodePatcher::getFnPtr(int32_t xrayID) {
   return __xray_function_address(xrayID);
@@ -102,9 +108,7 @@ llvm::Error CodePatcher::unpatch(uint64_t FnPtr) {
   __xray_unpatch_function(XRayID);
   Metadata[XRayID].first = Unpatched;
 
-  // NOTE: I don't think this needs to be an atomic write, since the the unpatch above is atomic.
-  auto PrevRedirect = RedirectionTable[XRayID].Redirection;
-  RedirectionTable[XRayID].Redirection = 0;
+  auto PrevRedirect = swapRedirection(XRayID, 0);
 
   return setSymbolRequired(PrevRedirect, false);
 }
@@ -135,9 +139,7 @@ llvm::Error CodePatcher::redirectTo(uint64_t OldFnPtr,
     NewFnPtr = Symb.getAddress();
   }
 
-  // TODO: might need to become an atomic write!
-  auto PrevRedirect = RedirectionTable[XRayID].Redirection;
-  RedirectionTable[XRayID].Redirection = NewFnPtr;
+  auto PrevRedirect = swapRedirection(XRayID, NewFnPtr);
 
   auto FnStatus = Metadata[XRayID].first;
   if (FnStatus == Unpatched) {

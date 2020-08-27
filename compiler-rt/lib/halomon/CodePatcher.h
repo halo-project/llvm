@@ -48,6 +48,8 @@ bool isPatchable(uint64_t FnPtr) const {
 
 uint64_t getFnPtr(int32_t xrayID);
 
+XRayRedirectType swapRedirection(int32_t xrayID, XRayRedirectType newRedirection);
+
 void garbageCollect();
 
 friend CallCountProfiler;

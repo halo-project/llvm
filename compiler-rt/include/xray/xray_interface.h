@@ -117,15 +117,21 @@ extern uintptr_t __xray_function_address(int32_t FuncId);
 /// encounter errors (when there are no instrumented functions, etc.).
 extern size_t __xray_max_function_id();
 
+#if defined(__x86_64__)
+  typedef uint64_t XRayRedirectType;
+#elif defined(__arm__)
+  typedef uint32_t XRayRedirectType;
+#endif
+
 struct XRayRedirectionEntry {
   // the size and alignment of these fields depend on the system-specific assembly
   // for __xray_FunctionRedirection
 #if defined(__x86_64__)
-  alignas(8) uint64_t Redirection{0}; // the function pointer to redirect calls to
-  alignas(8) uint64_t CallCount{0};    // profiling data indicating number of calls
+  alignas(8) XRayRedirectType Redirection{0}; // the function pointer to redirect calls to
+  alignas(8) XRayRedirectType CallCount{0};    // profiling data indicating number of calls
 #elif defined(__arm__)
-  alignas(4) uint32_t Redirection{0};
-  alignas(4) uint32_t CallCount{0};
+  alignas(4) XRayRedirectType Redirection{0};
+  alignas(4) XRayRedirectType CallCount{0};
 #endif
 };
 
